@@ -8,9 +8,12 @@ void main() {
   runApp(const FlixoraApp());
 }
 
-const Color bg = Color(0xFF090A0F);
-const Color panel = Color(0xFF191B25);
-const Color red = Color(0xFFE50914);
+const Color bg = Color(0xFF080808);
+const Color panel = Color(0xFF191919);
+const Color gold = Color(0xFFD6AD45);
+const Color goldLight = Color(0xFFFFE5A3);
+const Color white = Colors.white;
+
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
 
@@ -22,7 +25,6 @@ class Movie {
   final String poster;
   final String backdrop;
   final double rating;
-  final String genre;
   final String releaseDate;
 
   const Movie({
@@ -33,7 +35,6 @@ class Movie {
     required this.poster,
     required this.backdrop,
     required this.rating,
-    required this.genre,
     required this.releaseDate,
   });
 
@@ -48,7 +49,6 @@ class Movie {
       poster: (json['poster_path'] ?? '').toString(),
       backdrop: (json['backdrop_path'] ?? '').toString(),
       rating: (json['vote_average'] as num?)?.toDouble() ?? 0,
-      genre: 'Movie',
     );
   }
 
@@ -64,14 +64,16 @@ class TmdbService {
 
   static Future<List<Movie>> getMovies(String endpoint) async {
     if (apiKey.isEmpty) {
-      throw Exception('TMDB API Key is missing. Check GitHub Secret and build.yml.');
+      throw Exception('TMDB API Key is missing.');
     }
 
-    final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
-      'api_key': apiKey,
-      'language': 'en-US',
-      'page': '1',
-    });
+    final uri = Uri.parse('$base/$endpoint').replace(
+      queryParameters: {
+        'api_key': apiKey,
+        'language': 'en-US',
+        'page': '1',
+      },
+    );
 
     final response = await http.get(uri).timeout(
       const Duration(seconds: 25),
@@ -91,9 +93,7 @@ class TmdbService {
   }
 
   static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) {
-      throw Exception('TMDB API Key is missing.');
-    }
+    if (apiKey.isEmpty) throw Exception('TMDB API Key is missing.');
 
     final uri = Uri.parse('$base/search/movie').replace(
       queryParameters: {
@@ -149,13 +149,33 @@ class FlixoraApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'FLIXORA',
+      title: 'Flixora',
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: red,
+          seedColor: gold,
           brightness: Brightness.dark,
+          primary: gold,
+          secondary: goldLight,
+          surface: panel,
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: bg,
+          foregroundColor: white,
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: const Color(0xFF111111),
+          indicatorColor: gold.withValues(alpha: 0.18),
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            return TextStyle(
+              color: states.contains(WidgetState.selected)
+                  ? gold
+                  : Colors.white54,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            );
+          }),
         ),
         useMaterial3: true,
       ),
@@ -203,7 +223,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     _timer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!mounted || _tab != 0 || trending.isEmpty) return;
+
       _slide = (_slide + 1) % trending.length;
+
       if (_sliderController.hasClients) {
         _sliderController.animateToPage(
           _slide,
@@ -276,13 +298,16 @@ class _HomeScreenState extends State<HomeScreen> {
     _searchTimer = Timer(const Duration(milliseconds: 600), () async {
       try {
         final results = await TmdbService.search(value.trim());
+
         if (!mounted || _search != value) return;
+
         setState(() {
           searchResults = results;
           _searchLoading = false;
         });
       } catch (e) {
         if (!mounted || _search != value) return;
+
         setState(() {
           _searchError = e.toString();
           _searchLoading = false;
@@ -339,8 +364,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        backgroundColor: panel,
-        indicatorColor: red.withValues(alpha: 0.22),
         selectedIndex: _tab,
         onDestinationSelected: (value) {
           setState(() => _tab = value);
@@ -348,22 +371,22 @@ class _HomeScreenState extends State<HomeScreen> {
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: red),
+            selectedIcon: Icon(Icons.home, color: gold),
             label: 'Home',
           ),
           NavigationDestination(
             icon: Icon(Icons.grid_view_outlined),
-            selectedIcon: Icon(Icons.grid_view, color: red),
+            selectedIcon: Icon(Icons.grid_view, color: gold),
             label: 'All Movies',
           ),
           NavigationDestination(
             icon: Icon(Icons.bookmark_border),
-            selectedIcon: Icon(Icons.bookmark, color: red),
+            selectedIcon: Icon(Icons.bookmark, color: gold),
             label: 'Saved',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: red),
+            selectedIcon: Icon(Icons.person, color: gold),
             label: 'Profile',
           ),
         ],
@@ -376,13 +399,19 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
       child: Row(
         children: [
+          const Icon(
+            Icons.movie_creation_outlined,
+            color: gold,
+            size: 31,
+          ),
+          const SizedBox(width: 9),
           const Text(
-            'FLIXORA',
+            'Flixora',
             style: TextStyle(
-              color: red,
+              color: gold,
               fontSize: 30,
               fontWeight: FontWeight.w900,
-              letterSpacing: 1.5,
+              letterSpacing: 0.5,
             ),
           ),
           const Spacer(),
@@ -394,7 +423,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () => setState(() => _tab = 3),
             icon: const CircleAvatar(
               backgroundColor: panel,
-              child: Icon(Icons.person_outline, color: Colors.white),
+              child: Icon(Icons.person_outline, color: white),
             ),
           ),
         ],
@@ -410,7 +439,7 @@ class _HomeScreenState extends State<HomeScreen> {
         onChanged: searchMovies,
         decoration: InputDecoration(
           hintText: 'Search movies...',
-          prefixIcon: const Icon(Icons.search),
+          prefixIcon: const Icon(Icons.search, color: gold),
           suffixIcon: _search.isNotEmpty
               ? IconButton(
                   onPressed: () {
@@ -423,8 +452,12 @@ class _HomeScreenState extends State<HomeScreen> {
           filled: true,
           fillColor: panel,
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(18),
             borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: gold, width: 1),
           ),
         ),
       ),
@@ -433,7 +466,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _homePage() {
     if (loading) {
-      return const Center(child: CircularProgressIndicator(color: red));
+      return const Center(
+        child: CircularProgressIndicator(color: gold),
+      );
     }
 
     if (homeError != null) {
@@ -453,15 +488,24 @@ class _HomeScreenState extends State<HomeScreen> {
             const SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.all(30),
-                child: Center(child: CircularProgressIndicator(color: red)),
+                child: Center(
+                  child: CircularProgressIndicator(color: gold),
+                ),
               ),
             )
           else if (_searchError != null)
-            SliverToBoxAdapter(child: _errorView(_searchError!, () => searchMovies(_search)))
+            SliverToBoxAdapter(
+              child: _errorView(
+                _searchError!,
+                () => searchMovies(_search),
+              ),
+            )
           else
             _movieGridSliver(searchResults),
         ] else ...[
-          SliverToBoxAdapter(child: _sectionTitle('Featured', 'PREMIUM CINEMA')),
+          SliverToBoxAdapter(
+            child: _sectionTitle('Featured', 'PREMIUM CINEMA'),
+          ),
           SliverToBoxAdapter(child: _heroSlider()),
           SliverToBoxAdapter(child: _movieSection('Trending Now', trending)),
           SliverToBoxAdapter(child: _movieSection('Popular Movies', popular)),
@@ -478,17 +522,23 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
       child: Row(
         children: [
-          Text(title, style: const TextStyle(
-            fontSize: 23,
-            fontWeight: FontWeight.bold,
-          )),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 23,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const Spacer(),
-          Text(subtitle, style: const TextStyle(
-            color: Colors.white54,
-            fontSize: 11,
-            letterSpacing: 1.5,
-            fontWeight: FontWeight.bold,
-          )),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              color: gold,
+              fontSize: 11,
+              letterSpacing: 1.4,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
     );
@@ -505,12 +555,13 @@ class _HomeScreenState extends State<HomeScreen> {
         onPageChanged: (index) => setState(() => _slide = index),
         itemBuilder: (context, index) {
           final movie = trending[index];
+
           return GestureDetector(
             onTap: () => openMovie(movie),
             child: Container(
               margin: const EdgeInsets.symmetric(horizontal: 16),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(23),
                 color: panel,
                 image: movie.backdropUrl.isNotEmpty
                     ? DecorationImage(
@@ -523,11 +574,14 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Container(
                 padding: const EdgeInsets.all(22),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(23),
                   gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xE6000000)],
+                    colors: [
+                      Colors.transparent,
+                      Color(0xE6000000),
+                    ],
                   ),
                 ),
                 child: Column(
@@ -537,25 +591,30 @@ class _HomeScreenState extends State<HomeScreen> {
                     const Text(
                       'TRENDING ON FLIXORA',
                       style: TextStyle(
-                        color: Color(0xFFFF7777),
+                        color: goldLight,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 2,
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                    Text(
+                      movie.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 29,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
                     const SizedBox(height: 8),
-                    Text('${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}'),
+                    Text(
+                      '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
+                    ),
                     const SizedBox(height: 18),
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: red,
-                        foregroundColor: Colors.white,
+                        backgroundColor: gold,
+                        foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 22,
                           vertical: 14,
@@ -563,23 +622,29 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       onPressed: () => openMovie(movie),
                       icon: const Icon(Icons.info_outline),
-                      label: const Text('Explore Movie'),
+                      label: const Text(
+                        'Explore Movie',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(trending.length > 8 ? 8 : trending.length, (i) {
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 250),
-                          margin: const EdgeInsets.symmetric(horizontal: 3),
-                          height: 6,
-                          width: i == _slide % 8 ? 22 : 6,
-                          decoration: BoxDecoration(
-                            color: i == _slide % 8 ? red : Colors.white54,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        );
-                      }),
+                      children: List.generate(
+                        trending.length > 8 ? 8 : trending.length,
+                        (i) {
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 250),
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            height: 6,
+                            width: i == _slide % 8 ? 22 : 6,
+                            decoration: BoxDecoration(
+                              color: i == _slide % 8 ? gold : Colors.white54,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          );
+                        },
+                      ),
                     ),
                   ],
                 ),
@@ -598,14 +663,29 @@ class _HomeScreenState extends State<HomeScreen> {
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
           child: Row(
             children: [
-              Text(title, style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-              )),
+              Container(
+                width: 4,
+                height: 23,
+                decoration: BoxDecoration(
+                  color: gold,
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               const Spacer(),
               TextButton(
                 onPressed: () => setState(() => _tab = 1),
-                child: const Text('View all', style: TextStyle(color: Colors.white70)),
+                child: const Text(
+                  'See All →',
+                  style: TextStyle(color: gold),
+                ),
               ),
             ],
           ),
@@ -634,7 +714,7 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(15),
+              borderRadius: BorderRadius.circular(14),
               child: Stack(
                 children: [
                   movie.posterUrl.isEmpty
@@ -644,7 +724,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           height: 190,
                           width: 145,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _posterFallback(145, 190),
+                          errorBuilder: (_, __, ___) =>
+                              _posterFallback(145, 190),
                         ),
                   Positioned(
                     top: 8,
@@ -653,12 +734,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       onTap: () => toggleFavourite(movie),
                       child: CircleAvatar(
                         radius: 16,
-                        backgroundColor: Colors.black54,
+                        backgroundColor: Colors.black87,
                         child: Icon(
                           _favourites.contains(movie.id)
                               ? Icons.favorite
                               : Icons.favorite_border,
-                          color: red,
+                          color: gold,
                           size: 18,
                         ),
                       ),
@@ -668,13 +749,18 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            Text(movie.title,
+            Text(
+              movie.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-            Text('${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
-              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            Text(
+              '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+              ),
             ),
           ],
         ),
@@ -687,7 +773,11 @@ class _HomeScreenState extends State<HomeScreen> {
       height: height,
       width: width,
       color: panel,
-      child: const Icon(Icons.movie_outlined, size: 45, color: Colors.white38),
+      child: const Icon(
+        Icons.movie_outlined,
+        size: 45,
+        color: gold,
+      ),
     );
   }
 
@@ -718,21 +808,29 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _allPage() {
+  List<Movie> _allMovies() {
     final all = <int, Movie>{};
+
     for (final list in [trending, popular, latest, topRated]) {
       for (final movie in list) {
         all[movie.id] = movie;
       }
     }
-    final list = all.values.toList();
+
+    return all.values.toList();
+  }
+
+  Widget _allPage() {
+    final list = _allMovies();
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
         SliverToBoxAdapter(child: _header()),
         SliverToBoxAdapter(child: _searchBox()),
-        SliverToBoxAdapter(child: _sectionTitle('All Movies', '${list.length} MOVIES')),
+        SliverToBoxAdapter(
+          child: _sectionTitle('All Movies', '${list.length} MOVIES'),
+        ),
         _movieGridSliver(list),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
       ],
@@ -740,31 +838,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _savedPage() {
-    final all = <int, Movie>{};
-    for (final list in [trending, popular, latest, topRated]) {
-      for (final movie in list) {
-        all[movie.id] = movie;
-      }
-    }
-    final list = all.values.where((m) => _saved.contains(m.id)).toList();
+    final list = _allMovies()
+        .where((movie) => _saved.contains(movie.id))
+        .toList();
 
     return CustomScrollView(
       physics: const BouncingScrollPhysics(),
       slivers: [
         SliverToBoxAdapter(child: _header()),
-        SliverToBoxAdapter(child: _sectionTitle('Saved Movies', '${list.length} SAVED')),
+        SliverToBoxAdapter(
+          child: _sectionTitle('Saved Movies', '${list.length} SAVED'),
+        ),
         if (list.isEmpty)
           const SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.all(45),
               child: Column(
                 children: [
-                  Icon(Icons.bookmark_border, size: 65, color: Colors.white38),
+                  Icon(
+                    Icons.bookmark_border,
+                    size: 65,
+                    color: gold,
+                  ),
                   SizedBox(height: 15),
                   Text('No saved movies yet'),
                   SizedBox(height: 6),
-                  Text('Open a movie and tap Save',
-                    style: TextStyle(color: Colors.white54)),
+                  Text(
+                    'Open a movie and tap Save',
+                    style: TextStyle(color: Colors.white54),
+                  ),
                 ],
               ),
             ),
@@ -780,22 +882,40 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const CircleAvatar(
-            radius: 42,
-            backgroundColor: panel,
-            child: Icon(Icons.person, size: 48),
+          Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: gold, width: 2),
+            ),
+            child: const CircleAvatar(
+              radius: 42,
+              backgroundColor: panel,
+              child: Icon(Icons.person, size: 48, color: gold),
+            ),
           ),
           const SizedBox(height: 16),
-          const Text('FLIXORA USER',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const Text(
+            'Flixora User',
+            style: TextStyle(
+              fontSize: 23,
+              fontWeight: FontWeight.bold,
+              color: gold,
+            ),
+          ),
           const SizedBox(height: 8),
-          const Text('Your cinematic experience',
-            style: TextStyle(color: Colors.white54)),
+          const Text(
+            'Your cinematic experience',
+            style: TextStyle(color: Colors.white54),
+          ),
           const SizedBox(height: 25),
           TextButton.icon(
             onPressed: () => _message('Account feature coming soon'),
-            icon: const Icon(Icons.login),
-            label: const Text('Sign in / Register'),
+            icon: const Icon(Icons.login, color: gold),
+            label: const Text(
+              'Sign in / Register',
+              style: TextStyle(color: gold),
+            ),
           ),
           const SizedBox(height: 20),
           const Padding(
@@ -803,7 +923,10 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Text(
               'This product uses the TMDB API but is not endorsed or certified by TMDB.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white38, fontSize: 11),
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+              ),
             ),
           ),
         ],
@@ -818,17 +941,28 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.wifi_off, size: 55, color: Colors.white54),
+            const Icon(Icons.wifi_off, size: 55, color: gold),
             const SizedBox(height: 16),
-            const Text('Could not load movies',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const Text(
+              'Could not load movies',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             const SizedBox(height: 10),
-            Text(error, textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54)),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white54),
+            ),
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: retry,
-              style: ElevatedButton.styleFrom(backgroundColor: red),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: gold,
+                foregroundColor: Colors.black,
+              ),
               child: const Text('Try Again'),
             ),
           ],
@@ -839,7 +973,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _message(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: panel,
+      ),
     );
   }
 }
@@ -867,6 +1004,7 @@ class MovieDetailsScreen extends StatefulWidget {
 class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   late bool favourite;
   late bool saved;
+
   Map<String, dynamic>? extraDetails;
   String? detailsError;
   bool detailsLoading = true;
@@ -882,13 +1020,16 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   Future<void> loadDetails() async {
     try {
       final data = await TmdbService.details(widget.movie.id);
+
       if (!mounted) return;
+
       setState(() {
         extraDetails = data;
         detailsLoading = false;
       });
     } catch (e) {
       if (!mounted) return;
+
       setState(() {
         detailsError = e.toString();
         detailsLoading = false;
@@ -899,9 +1040,10 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     final movie = widget.movie;
+
     final genres = (extraDetails?['genres'] as List? ?? [])
         .map((g) => g['name'].toString())
-        .join(', ');
+        .join(' • ');
 
     return Scaffold(
       body: CustomScrollView(
@@ -911,6 +1053,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             expandedHeight: 300,
             pinned: true,
             backgroundColor: bg,
+            iconTheme: const IconThemeData(color: gold),
             flexibleSpace: FlexibleSpaceBar(
               background: movie.backdropUrl.isEmpty
                   ? Container(color: panel)
@@ -927,28 +1070,43 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(movie.title,
-                    style: const TextStyle(fontSize: 29, fontWeight: FontWeight.w900)),
+                  Text(
+                    movie.title,
+                    style: const TextStyle(
+                      fontSize: 29,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Text(
                     '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
-                    style: const TextStyle(color: Colors.white70),
+                    style: const TextStyle(color: goldLight),
                   ),
                   const SizedBox(height: 12),
                   if (detailsLoading)
-                    const LinearProgressIndicator(color: red)
+                    const LinearProgressIndicator(color: gold)
                   else if (detailsError == null && genres.isNotEmpty)
-                    Text(genres, style: const TextStyle(color: Colors.white54)),
+                    Text(
+                      genres,
+                      style: const TextStyle(color: Colors.white54),
+                    ),
                   const SizedBox(height: 24),
-                  const Text('Overview',
-                    style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Overview',
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 10),
-                  Text(movie.overview,
+                  Text(
+                    movie.overview,
                     style: const TextStyle(
                       color: Colors.white70,
                       height: 1.6,
                       fontSize: 15,
-                    )),
+                    ),
+                  ),
                   if (extraDetails != null) ...[
                     const SizedBox(height: 22),
                     Text(
@@ -966,19 +1124,24 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: red,
-                        foregroundColor: Colors.white,
+                        backgroundColor: gold,
+                        foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(vertical: 15),
                       ),
                       onPressed: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                            content: Text('A licensed video source is needed for playback.'),
+                            content: Text(
+                              'A licensed video source is needed for playback.',
+                            ),
                           ),
                         );
                       },
                       icon: const Icon(Icons.play_arrow),
-                      label: const Text('Watch'),
+                      label: const Text(
+                        'Watch',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -986,42 +1149,63 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: gold,
+                            side: const BorderSide(color: gold),
+                          ),
                           onPressed: () {
                             widget.onFavourite();
                             setState(() => favourite = !favourite);
                           },
-                          icon: Icon(favourite ? Icons.favorite : Icons.favorite_border),
+                          icon: Icon(
+                            favourite
+                                ? Icons.favorite
+                                : Icons.favorite_border,
+                          ),
                           label: Text(favourite ? 'Liked' : 'Favourite'),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: gold,
+                            side: const BorderSide(color: gold),
+                          ),
                           onPressed: () {
                             widget.onSave();
                             setState(() => saved = !saved);
+
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text(saved
-                                    ? 'Added to saved list'
-                                    : 'Removed from saved list'),
+                                content: Text(
+                                  saved
+                                      ? 'Added to saved list'
+                                      : 'Removed from saved list',
+                                ),
                               ),
                             );
                           },
-                          icon: Icon(saved ? Icons.bookmark : Icons.bookmark_border),
+                          icon: Icon(
+                            saved
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                          ),
                           label: Text(saved ? 'Saved' : 'Save'),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 30),
-                  const Text(
-                    'FLIXORA',
-                    style: TextStyle(
-                      color: red,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2,
+                  const Center(
+                    child: Text(
+                      'Flixora',
+                      style: TextStyle(
+                        color: gold,
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 30),
