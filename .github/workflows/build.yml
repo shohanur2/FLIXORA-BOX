@@ -26,6 +26,9 @@ jobs:
         with:
           channel: stable
 
+      - name: Check Flutter
+        run: flutter doctor -v
+
       - name: Generate Android project
         run: flutter create --platforms=android --project-name=flixora --org=com.flixora .
 
@@ -119,10 +122,55 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Fix app_settings compileSdk
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          files = list(Path.home().glob(
+              ".pub-cache/hosted/pub.dev/app_settings-*/android/build.gradle"
+          ))
+          files += list(Path.home().glob(
+              ".pub-cache/hosted/pub.dev/app_settings-*/android/build.gradle.kts"
+          ))
+
+          if not files:
+              raise SystemExit("ERROR: app_settings Gradle file not found")
+
+          updated = False
+
+          for file in files:
+              content = file.read_text()
+
+              new_content, count = re.subn(
+                  r'compileSdkVersion\s+33',
+                  'compileSdkVersion 36',
+                  content
+              )
+
+              if count == 0:
+                  new_content, count = re.subn(
+                      r'compileSdk\s*=\s*33',
+                      'compileSdk = 36',
+                      content
+                  )
+
+              if count > 0:
+                  file.write_text(new_content)
+                  updated = True
+                  print(f"Updated compileSdk to 36: {file}")
+              else:
+                  print(f"No matching API 33 setting found: {file}")
+
+          if not updated:
+              raise SystemExit("ERROR: Could not update app_settings compileSdk")
+          PY
+
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-        run: flutter build apk --release --dart-define=TMDB_API_KEY="$TMDB_API_KEY"
+        run: flutter build apk --release --dart-define=TMDB_API_KEY="$TMDB_API_KEY" --verbose
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
