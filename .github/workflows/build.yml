@@ -1,5 +1,5 @@
-name: Build APK
-env:
+      - name: Build APK
+        env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -7,5 +7,4 @@ env:
           flutter build apk --release \
             --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
-            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-            --verbose
+            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
