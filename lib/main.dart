@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -11,9 +12,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-void main() {
+SupabaseClient? supabaseClient;
+
+const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+const String supabaseAnonKey =
+    String.fromEnvironment('SUPABASE_ANON_KEY');
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
+    try {
+      await Supabase.initialize(
+        url: supabaseUrl,
+        anonKey: supabaseAnonKey,
+      );
+      supabaseClient = Supabase.instance.client;
+    } catch (e) {
+      debugPrint('Supabase initialization failed: $e');
+    }
+  }
+
   runApp(const FlixoraApp());
 }
 
@@ -28,6 +49,8 @@ const String apiKey = String.fromEnvironment('TMDB_API_KEY');
 
 class Movie {
   final int id;
+  final int sourceId;
+  final String source;
   final String title;
   final String year;
   final String overview;
@@ -35,9 +58,15 @@ class Movie {
   final String backdrop;
   final double rating;
   final String releaseDate;
+  final List<String> genres;
+  final double? runtime;
+  final String videoUrl;
+  final String downloadUrl;
 
   const Movie({
     required this.id,
+    this.sourceId = 0,
+    this.source = 'tmdb',
     required this.title,
     required this.year,
     required this.overview,
@@ -45,7 +74,13 @@ class Movie {
     required this.backdrop,
     required this.rating,
     required this.releaseDate,
+    this.genres = const [],
+    this.runtime,
+    this.videoUrl = '',
+    this.downloadUrl = '',
   });
+
+  bool get isFlixora => source == 'flixora';
 
   factory Movie.fromJson(Map<String, dynamic> json) {
     final date = (json['release_date'] ?? '').toString();
@@ -62,9 +97,38 @@ class Movie {
     );
   }
 
+  factory Movie.fromSupabase(Map<String, dynamic> json) {
+    final dbId = (json['id'] as num?)?.toInt() ?? 0;
+    final date = (json['release_date'] ?? '').toString();
+    final rawGenres = json['genre'];
+
+    final genreList = rawGenres is List
+        ? rawGenres.map((item) => item.toString()).toList()
+        : <String>[];
+
+    return Movie(
+      id: -dbId.abs(),
+      sourceId: dbId,
+      source: 'flixora',
+      title: (json['title'] ?? 'Unknown Movie').toString(),
+      year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
+      releaseDate: date,
+      overview: (json['description'] ?? 'No description available.').toString(),
+      poster: (json['poster_url'] ?? '').toString(),
+      backdrop: (json['backdrop_url'] ?? '').toString(),
+      rating: (json['rating'] as num?)?.toDouble() ?? 0,
+      genres: genreList,
+      runtime: (json['runtime'] as num?)?.toDouble(),
+      videoUrl: (json['video_url'] ?? '').toString(),
+      downloadUrl: (json['download_url'] ?? '').toString(),
+    );
+  }
+
   factory Movie.fromCache(Map<String, dynamic> json) {
     return Movie(
       id: (json['id'] as num?)?.toInt() ?? 0,
+      sourceId: (json['sourceId'] as num?)?.toInt() ?? 0,
+      source: (json['source'] ?? 'tmdb').toString(),
       title: (json['title'] ?? 'Unknown Movie').toString(),
       year: (json['year'] ?? 'N/A').toString(),
       overview: (json['overview'] ?? '').toString(),
@@ -72,11 +136,20 @@ class Movie {
       backdrop: (json['backdrop'] ?? '').toString(),
       rating: (json['rating'] as num?)?.toDouble() ?? 0,
       releaseDate: (json['releaseDate'] ?? '').toString(),
+      genres: (json['genres'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const [],
+      runtime: (json['runtime'] as num?)?.toDouble(),
+      videoUrl: (json['videoUrl'] ?? '').toString(),
+      downloadUrl: (json['downloadUrl'] ?? '').toString(),
     );
   }
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'sourceId': sourceId,
+        'source': source,
         'title': title,
         'year': year,
         'overview': overview,
@@ -84,13 +157,30 @@ class Movie {
         'backdrop': backdrop,
         'rating': rating,
         'releaseDate': releaseDate,
+        'genres': genres,
+        'runtime': runtime,
+        'videoUrl': videoUrl,
+        'downloadUrl': downloadUrl,
       };
 
-  String get posterUrl =>
-      poster.isEmpty ? '' : '$imageBase/w500$poster';
+  bool _isFullUrl(String value) {
+    final uri = Uri.tryParse(value);
+    return uri != null &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty;
+  }
 
-  String get backdropUrl =>
-      backdrop.isEmpty ? posterUrl : '$imageBase/w1280$backdrop';
+  String get posterUrl {
+    if (poster.isEmpty) return '';
+    if (_isFullUrl(poster)) return poster;
+    return '${imageBase}w500$poster';
+  }
+
+  String get backdropUrl {
+    if (backdrop.isEmpty) return posterUrl;
+    if (_isFullUrl(backdrop)) return backdrop;
+    return '${imageBase}w1280$backdrop';
+  }
 }
 
 class InternetService {
@@ -119,6 +209,7 @@ class MovieCache {
   static const String popularKey = 'flixora_popular';
   static const String latestKey = 'flixora_latest';
   static const String topRatedKey = 'flixora_top_rated';
+  static const String flixoraKey = 'flixora_published';
 
   static const String favouritesKey = 'flixora_favourites';
   static const String savedKey = 'flixora_saved';
@@ -129,11 +220,9 @@ class MovieCache {
   ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-
       final encoded = jsonEncode(
         movies.map((movie) => movie.toJson()).toList(),
       );
-
       await prefs.setString(key, encoded);
     } catch (_) {}
   }
@@ -173,7 +262,6 @@ class MovieCache {
     return getList(key);
   }
 
-  // Favourite IDs permanently save
   static Future<Set<int>> getFavourites() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -195,7 +283,6 @@ class MovieCache {
     } catch (_) {}
   }
 
-  // Saved movie IDs permanently save
   static Future<Set<int>> getSaved() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -223,7 +310,7 @@ class TmdbService {
 
   static Future<List<Movie>> getMovies(String endpoint) async {
     if (apiKey.isEmpty) {
-      throw Exception('TMDB API Key is missing.');
+      throw Exception('Movie service is not configured.');
     }
 
     final uri = Uri.parse('$base/$endpoint').replace(
@@ -239,7 +326,7 @@ class TmdbService {
         .timeout(const Duration(seconds: 20));
 
     if (response.statusCode != 200) {
-      throw Exception('TMDB error: ${response.statusCode}');
+      throw Exception('Could not load movies.');
     }
 
     final data = jsonDecode(response.body);
@@ -257,7 +344,7 @@ class TmdbService {
 
   static Future<List<Movie>> search(String query) async {
     if (apiKey.isEmpty) {
-      throw Exception('TMDB API Key is missing.');
+      throw Exception('Movie service is not configured.');
     }
 
     final uri = Uri.parse('$base/search/movie').replace(
@@ -275,7 +362,7 @@ class TmdbService {
         .timeout(const Duration(seconds: 20));
 
     if (response.statusCode != 200) {
-      throw Exception('Search failed: ${response.statusCode}');
+      throw Exception('Search failed.');
     }
 
     final data = jsonDecode(response.body);
@@ -293,7 +380,7 @@ class TmdbService {
 
   static Future<Map<String, dynamic>> details(int id) async {
     if (apiKey.isEmpty) {
-      throw Exception('TMDB API Key is missing.');
+      throw Exception('Movie service is not configured.');
     }
 
     final uri = Uri.parse('$base/movie/$id').replace(
@@ -312,6 +399,62 @@ class TmdbService {
     }
 
     return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+}
+
+class FlixoraMovieService {
+  static Future<List<Movie>> getPublishedMovies() async {
+    final client = supabaseClient;
+    if (client == null) return [];
+
+    try {
+      final response = await client
+          .from('movies')
+          .select()
+          .eq('is_published', true)
+          .order('created_at', ascending: false);
+
+      return (response as List)
+          .whereType<Map>()
+          .map(
+            (row) => Movie.fromSupabase(
+              Map<String, dynamic>.from(row),
+            ),
+          )
+          .where((movie) => movie.sourceId > 0)
+          .toList();
+    } catch (e) {
+      debugPrint('Could not load published movies: $e');
+      return [];
+    }
+  }
+
+  static Future<List<Movie>> searchPublishedMovies(
+    String query,
+  ) async {
+    final client = supabaseClient;
+    if (client == null || query.trim().isEmpty) return [];
+
+    try {
+      final response = await client
+          .from('movies')
+          .select()
+          .eq('is_published', true)
+          .ilike('title', '%${query.trim()}%')
+          .order('created_at', ascending: false);
+
+      return (response as List)
+          .whereType<Map>()
+          .map(
+            (row) => Movie.fromSupabase(
+              Map<String, dynamic>.from(row),
+            ),
+          )
+          .toList();
+    } catch (e) {
+      debugPrint('Movie search failed: $e');
+      return [];
+    }
   }
 }
 
@@ -357,9 +500,7 @@ class DownloadManager {
         url,
         path,
         onReceiveProgress: (received, total) {
-          if (total > 0) {
-            onProgress(received / total);
-          }
+          if (total > 0) onProgress(received / total);
         },
       );
 
@@ -417,6 +558,7 @@ class FlixoraApp extends StatelessWidget {
     );
   }
 }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -452,6 +594,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Movie> popular = [];
   List<Movie> latest = [];
   List<Movie> topRated = [];
+  List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
 
   final Set<int> _favourites = {};
@@ -503,9 +646,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       setState(() {
         loading = false;
-        if (_allMovies().isEmpty) {
-          homeError = 'offline';
-        }
+        if (_allMovies().isEmpty) homeError = 'offline';
       });
     }
   }
@@ -535,6 +676,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MovieCache.getList(MovieCache.popularKey),
       MovieCache.getList(MovieCache.latestKey),
       MovieCache.getList(MovieCache.topRatedKey),
+      MovieCache.getList(MovieCache.flixoraKey),
     ]);
 
     if (!mounted) return;
@@ -544,6 +686,7 @@ class _HomeScreenState extends State<HomeScreen> {
       popular = results[1];
       latest = results[2];
       topRated = results[3];
+      flixoraMovies = results[4];
       loading = false;
       homeError = null;
     });
@@ -562,12 +705,8 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() {
             _online = false;
             _connectionKnown = true;
-
-            if (_allMovies().isEmpty) {
-              homeError = 'offline';
-            }
+            if (_allMovies().isEmpty) homeError = 'offline';
           });
-
           return;
         }
 
@@ -584,10 +723,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         if (online && wasOffline) {
           await loadHome();
-
-          if (_search.trim().isNotEmpty) {
-            searchMovies(_search);
-          }
+          if (_search.trim().isNotEmpty) searchMovies(_search);
         }
       },
     );
@@ -617,12 +753,8 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _online = false;
           loading = false;
-
-          if (_allMovies().isEmpty) {
-            homeError = 'offline';
-          }
+          if (_allMovies().isEmpty) homeError = 'offline';
         });
-
         return;
       }
 
@@ -638,6 +770,7 @@ class _HomeScreenState extends State<HomeScreen> {
         TmdbService.getMovies('movie/popular'),
         TmdbService.getMovies('movie/now_playing'),
         TmdbService.getMovies('movie/top_rated'),
+        FlixoraMovieService.getPublishedMovies(),
       ]);
 
       if (!mounted) return;
@@ -647,6 +780,7 @@ class _HomeScreenState extends State<HomeScreen> {
         popular = results[1];
         latest = results[2];
         topRated = results[3];
+        flixoraMovies = results[4];
         loading = false;
         homeError = null;
       });
@@ -656,643 +790,686 @@ class _HomeScreenState extends State<HomeScreen> {
         MovieCache.saveList(MovieCache.popularKey, popular),
         MovieCache.saveList(MovieCache.latestKey, latest),
         MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
       ]);
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
         loading = false;
-
-        if (_allMovies().isEmpty) {
-          homeError = e.toString();
-        }
+        if (_allMovies().isEmpty) homeError = e.toString();
       });
     } finally {
       _refreshing = false;
     }
   }
 
-  void searchMovies(String value) {
-    _search = value;
-    _searchTimer?.cancel();
+  List<Movie> _allMovies() {
+    final combined = <Movie>[
+      ...flixoraMovies,
+      ...trending,
+      ...popular,
+      ...latest,
+      ...topRated,
+    ];
 
-    if (value.trim().isEmpty) {
+    final seen = <int>{};
+    return combined.where((movie) => seen.add(movie.id)).toList();
+  }
+
+  Future<void> searchMovies(String query) async {
+    final text = query.trim();
+
+    if (text.isEmpty) {
+      if (!mounted) return;
       setState(() {
+        _search = '';
         searchResults = [];
         _searchError = null;
         _searchLoading = false;
       });
-
       return;
     }
 
     setState(() {
+      _search = text;
       _searchLoading = true;
       _searchError = null;
     });
 
+    final results = await Future.wait([
+      TmdbService.search(text).catchError((_) => <Movie>[]),
+      FlixoraMovieService.searchPublishedMovies(text)
+          .catchError((_) => <Movie>[]),
+    ]);
+
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
+    final combined = <Movie>[
+      ...results[1],
+      ...results[0],
+    ];
+
+    final seen = <int>{};
+    final unique = combined.where((movie) => seen.add(movie.id)).toList();
+
+    setState(() {
+      searchResults = unique;
+      _searchLoading = false;
+      if (unique.isEmpty) {
+        _searchError = 'No movies found.';
+      }
+    });
+
+    await MovieCache.saveSearch(text, unique);
+  }
+
+  void _onSearchChanged(String value) {
+    _searchTimer?.cancel();
+
+    if (value.trim().isEmpty) {
+      setState(() {
+        _search = '';
+        searchResults = [];
+        _searchError = null;
+        _searchLoading = false;
+      });
+      return;
+    }
+
     _searchTimer = Timer(
-      const Duration(milliseconds: 600),
-      () async {
-        final query = value.trim();
-
-        final online = await InternetService.isOnline();
-
-        if (!mounted || _search != value) return;
-
-        if (!online) {
-          final cached = await MovieCache.getSearch(query);
-
-          if (!mounted || _search != value) return;
-
-          setState(() {
-            _online = false;
-            searchResults = cached;
-            _searchLoading = false;
-            _searchError = cached.isEmpty ? 'offline' : null;
-          });
-
-          return;
-        }
-
-        try {
-          final results = await TmdbService.search(query);
-
-          if (!mounted || _search != value) return;
-
-          setState(() {
-            _online = true;
-            searchResults = results;
-            _searchLoading = false;
-            _searchError = null;
-          });
-
-          await MovieCache.saveSearch(query, results);
-        } catch (e) {
-          final cached = await MovieCache.getSearch(query);
-
-          if (!mounted || _search != value) return;
-
-          setState(() {
-            searchResults = cached;
-            _searchLoading = false;
-            _searchError = cached.isEmpty ? e.toString() : null;
-          });
-        }
-      },
+      const Duration(milliseconds: 500),
+      () => searchMovies(value),
     );
   }
 
-  Future<void> toggleFavourite(Movie movie) async {
+  Future<void> _toggleFavourite(Movie movie) async {
     setState(() {
-      if (!_favourites.add(movie.id)) {
+      if (_favourites.contains(movie.id)) {
         _favourites.remove(movie.id);
+      } else {
+        _favourites.add(movie.id);
       }
     });
 
     await MovieCache.saveFavourites(_favourites);
   }
 
-  Future<void> toggleSaved(Movie movie) async {
+  Future<void> _toggleSaved(Movie movie) async {
     setState(() {
-      if (!_saved.add(movie.id)) {
+      if (_saved.contains(movie.id)) {
         _saved.remove(movie.id);
+      } else {
+        _saved.add(movie.id);
       }
     });
 
     await MovieCache.saveSaved(_saved);
   }
 
-  Future<void> openMovie(Movie movie) async {
-    final online = await InternetService.isOnline();
-
-    if (!mounted) return;
-
-    setState(() {
-      _online = online;
-      _connectionKnown = true;
-    });
-
-    if (!online) {
-      await Navigator.push<bool>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => NoInternetScreen(
-            onRetry: () async {
-              final connected = await InternetService.isOnline();
-
-              if (!mounted) return false;
-
-              setState(() {
-                _online = connected;
-                _connectionKnown = true;
-              });
-
-              if (connected) {
-                await loadHome();
-              }
-
-              return connected;
-            },
-          ),
-        ),
-      ).then((connected) async {
-        if (!mounted) return;
-
-        if (connected == true) {
-          await _openMovieDetails(movie);
-        }
-      });
-
+  Future<void> addDownload(Movie movie) async {
+    if (movie.downloadUrl.trim().isEmpty) {
+      _showMessage('Download is not available for this movie.');
       return;
     }
 
-    await _openMovieDetails(movie);
+    if (_downloads.any(
+      (task) =>
+          task.movieId == movie.id &&
+          (task.status == 'Downloading' || task.status == 'Completed'),
+    )) {
+      _showMessage('This movie is already downloading or downloaded.');
+      return;
+    }
+
+    final task = DownloadTask(
+      movieId: movie.id,
+      title: movie.title,
+      poster: movie.posterUrl,
+      status: 'Downloading',
+    );
+
+    setState(() => _downloads.insert(0, task));
+
+    await DownloadManager.download(
+      url: movie.downloadUrl,
+      fileName: '${movie.id}_${movie.title}',
+      onProgress: (value) {
+        if (!mounted) return;
+        setState(() {
+          task.progress = value;
+          task.status = 'Downloading';
+        });
+      },
+      onComplete: (path) {
+        if (!mounted) return;
+        setState(() {
+          task.progress = 1;
+          task.status = 'Completed';
+          task.filePath = path;
+        });
+        _showMessage('Download completed: ${movie.title}');
+      },
+      onError: (message) {
+        if (!mounted) return;
+        setState(() {
+          task.status = 'Failed';
+        });
+        _showMessage(message);
+      },
+    );
   }
 
-  Future<void> _openMovieDetails(Movie movie) async {
+  void _showMessage(String message) {
     if (!mounted) return;
 
-    await Navigator.push(
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: panel,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  void _openMovie(Movie movie) {
+    Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MovieDetailsScreen(
           movie: movie,
           isFavourite: _favourites.contains(movie.id),
           isSaved: _saved.contains(movie.id),
-          onFavourite: () => toggleFavourite(movie),
-          onSave: () => toggleSaved(movie),
+          onFavourite: () => _toggleFavourite(movie),
+          onSave: () => _toggleSaved(movie),
           onDownload: () => addDownload(movie),
         ),
       ),
     );
-
-    if (mounted) setState(() {});
   }
 
-  void addDownload(Movie movie) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'A licensed downloadable video source is not connected yet.',
-        ),
-      ),
-    );
+  List<Movie> _moviesForIds(Set<int> ids) {
+    final all = _allMovies();
+    return all.where((movie) => ids.contains(movie.id)).toList();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: IndexedStack(
-          index: _tab,
-          children: [
-            _homePage(),
-            _allPage(),
-            DownloadsScreen(downloads: _downloads),
-            _savedPage(),
-            _profilePage(),
-          ],
-        ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (value) {
-          setState(() => _tab = value);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home, color: gold),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.grid_view_outlined),
-            selectedIcon: Icon(Icons.grid_view, color: gold),
-            label: 'All Movies',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.download_outlined),
-            selectedIcon: Icon(Icons.download, color: gold),
-            label: 'Downloads',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bookmark_border),
-            selectedIcon: Icon(Icons.bookmark, color: gold),
-            label: 'Saved',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: gold),
-            label: 'Profile',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _header() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.movie_creation_outlined,
-            color: gold,
-            size: 31,
-          ),
-          const SizedBox(width: 9),
-          const Text(
-            'Flixora',
-            style: TextStyle(
-              color: gold,
-              fontSize: 30,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const Spacer(),
-          IconButton(
-            onPressed: () => _message('No new notifications'),
-            icon: const Icon(Icons.notifications_none, size: 27),
-          ),
-          IconButton(
-            onPressed: () => setState(() => _tab = 4),
-            icon: const CircleAvatar(
-              backgroundColor: panel,
-              child: Icon(Icons.person_outline, color: white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _searchBox() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: TextField(
-        controller: _searchController,
-        onChanged: searchMovies,
-        decoration: InputDecoration(
-          hintText: 'Search movies...',
-          prefixIcon: const Icon(Icons.search, color: gold),
-          suffixIcon: _search.isNotEmpty
-              ? IconButton(
-                  onPressed: () {
-                    _searchController.clear();
-                    searchMovies('');
-                  },
-                  icon: const Icon(Icons.close),
-                )
-              : null,
-          filled: true,
-          fillColor: panel,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: const BorderSide(color: gold, width: 1),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _homePage() {
-    if (loading && _allMovies().isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(color: gold),
-      );
-    }
-
-    if (homeError == 'offline' && _allMovies().isEmpty) {
-      return NoInternetScreen(
-        onRetry: () async {
-          final connected = await InternetService.isOnline();
-
-          if (!mounted) return false;
-
-          setState(() {
-            _online = connected;
-            _connectionKnown = true;
-          });
-
-          if (connected) {
-            await loadHome();
-          }
-
-          return connected;
-        },
-        inline: true,
-      );
-    }
-
-    if (homeError != null && _allMovies().isEmpty) {
-      return _errorView(homeError!, loadHome);
-    }
-
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverToBoxAdapter(child: _header()),
-        SliverToBoxAdapter(child: _searchBox()),
-        if (_search.isNotEmpty) ...[
-          SliverToBoxAdapter(
-            child: _sectionTitle('Search Results', 'TMDB'),
-          ),
-          if (_searchLoading)
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.all(30),
-                child: Center(
-                  child: CircularProgressIndicator(color: gold),
-                ),
-              ),
-            )
-          else if (_searchError != null)
-            SliverToBoxAdapter(
-              child: _errorView(
-                _searchError!,
-                () => searchMovies(_search),
-              ),
-            )
-          else
-            _movieGridSliver(searchResults),
-        ] else ...[
-          SliverToBoxAdapter(
-            child: _sectionTitle('Featured', 'PREMIUM CINEMA'),
-          ),
-          SliverToBoxAdapter(child: _heroSlider()),
-          SliverToBoxAdapter(
-            child: _movieSection('Trending Now', trending),
-          ),
-          SliverToBoxAdapter(
-            child: _movieSection('Popular Movies', popular),
-          ),
-          SliverToBoxAdapter(
-            child: _movieSection('Now Playing', latest),
-          ),
-          SliverToBoxAdapter(
-            child: _movieSection('Top Rated', topRated),
-          ),
-        ],
-        const SliverToBoxAdapter(child: SizedBox(height: 25)),
-      ],
-    );
-  }
-
-  Widget _sectionTitle(String title, String subtitle) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 23,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const Spacer(),
-          Text(
-            subtitle,
-            style: const TextStyle(
-              color: gold,
-              fontSize: 11,
-              letterSpacing: 1.4,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _heroSlider() {
-    if (trending.isEmpty) return const SizedBox.shrink();
-
-    return SizedBox(
-      height: 390,
-      child: PageView.builder(
-        controller: _sliderController,
-        itemCount: trending.length,
-        onPageChanged: (index) {
-          setState(() => _slide = index);
-        },
-        itemBuilder: (context, index) {
-          final movie = trending[index];
-
-          return GestureDetector(
-            onTap: () => openMovie(movie),
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(23),
-                color: panel,
-                image: movie.backdropUrl.isNotEmpty
-                    ? DecorationImage(
-                        image: CachedNetworkImageProvider(
-                          movie.backdropUrl,
-                        ),
-                        fit: BoxFit.cover,
-                      )
-                    : null,
-              ),
-              child: Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(23),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Color(0xE6000000),
-                    ],
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    const Text(
-                      'TRENDING ON FLIXORA',
-                      style: TextStyle(
-                        color: goldLight,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      movie.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 29,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
-                    ),
-                    const SizedBox(height: 18),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: gold,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 22,
-                          vertical: 14,
-                        ),
-                      ),
-                      onPressed: () => openMovie(movie),
-                      icon: const Icon(Icons.info_outline),
-                      label: const Text(
-                        'Explore Movie',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(
-                        trending.length > 8 ? 8 : trending.length,
-                        (i) => AnimatedContainer(
-                          duration: const Duration(milliseconds: 250),
-                          margin: const EdgeInsets.symmetric(horizontal: 3),
-                          height: 6,
-                          width: i == _slide % 8 ? 22 : 6,
-                          decoration: BoxDecoration(
-                            color: i == _slide % 8
-                                ? gold
-                                : Colors.white54,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _movieSection(String title, List<Movie> list) {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
-          child: Row(
-            children: [
-              Container(
-                width: 4,
-                height: 23,
-                decoration: BoxDecoration(
-                  color: gold,
-                  borderRadius: BorderRadius.circular(5),
-                ),
-              ),
-              const SizedBox(width: 9),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: () => setState(() => _tab = 1),
-                child: const Text(
-                  'See All →',
-                  style: TextStyle(color: gold),
-                ),
-              ),
-            ],
-          ),
-        ),
-        SizedBox(
-          height: 250,
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            scrollDirection: Axis.horizontal,
-            physics: const BouncingScrollPhysics(),
-            itemCount: list.length,
-            itemBuilder: (context, index) {
-              return _movieCard(list[index]);
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _movieCard(Movie movie) {
+  Widget _poster(Movie movie, {double width = 125}) {
     return GestureDetector(
-      onTap: () => openMovie(movie),
-      child: Container(
-        width: 145,
-        margin: const EdgeInsets.symmetric(horizontal: 6),
+      onTap: () => _openMovie(movie),
+      child: SizedBox(
+        width: width,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Stack(
-                children: [
-                  movie.posterUrl.isEmpty
-                      ? _posterFallback(145, 190)
-                      : CachedNetworkImage(
-                          imageUrl: movie.posterUrl,
-                          height: 190,
-                          width: 145,
-                          fit: BoxFit.cover,
-                          placeholder: (_, __) =>
-                              _posterFallback(145, 190),
-                          errorWidget: (_, __, ___) =>
-                              _posterFallback(145, 190),
-                        ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: GestureDetector(
-                      onTap: () => toggleFavourite(movie),
-                      child: CircleAvatar(
-                        radius: 16,
-                        backgroundColor: Colors.black87,
-                        child: Icon(
-                          _favourites.contains(movie.id)
-                              ? Icons.favorite
-                              : Icons.favorite_border,
-                          color: gold,
-                          size: 18,
-                        ),
+              borderRadius: BorderRadius.circular(12),
+              child: AspectRatio(
+                aspectRatio: 2 / 3,
+                child: movie.posterUrl.isEmpty
+                    ? _posterPlaceholder()
+                    : CachedNetworkImage(
+                        imageUrl: movie.posterUrl,
+                        fit: BoxFit.cover,
+                        placeholder: (_, __) => _posterPlaceholder(),
+                        errorWidget: (_, __, ___) =>
+                            _posterPlaceholder(),
                       ),
-                    ),
-                  ),
-                ],
               ),
             ),
             const SizedBox(height: 8),
             Text(
               movie.title,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                color: white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
+            const SizedBox(height: 3),
             Text(
-              '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
+              movie.year,
               style: const TextStyle(
                 color: Colors.white54,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _posterPlaceholder() {
+    return Container(
+      color: panel,
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.movie_outlined,
+        color: gold,
+        size: 35,
+      ),
+    );
+  }
+
+  Widget _sectionTitle(
+    String title, {
+    String? subtitle,
+    VoidCallback? onSeeAll,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 24, 18, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (onSeeAll != null)
+            TextButton(
+              onPressed: onSeeAll,
+              child: const Text(
+                'See all',
+                style: TextStyle(color: gold),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _movieRow(List<Movie> movies) {
+    if (movies.isEmpty) {
+      return const SizedBox(height: 5);
+    }
+
+    return SizedBox(
+      height: 225,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        scrollDirection: Axis.horizontal,
+        itemCount: movies.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 13),
+        itemBuilder: (_, index) => _poster(movies[index]),
+      ),
+    );
+  }
+
+  Widget _featuredSlider() {
+    if (trending.isEmpty) return const SizedBox.shrink();
+
+    final slides = trending.take(5).toList();
+
+    return SizedBox(
+      height: 420,
+      child: Stack(
+        children: [
+          PageView.builder(
+            controller: _sliderController,
+            itemCount: slides.length,
+            onPageChanged: (index) {
+              setState(() => _slide = index);
+            },
+            itemBuilder: (_, index) {
+              final movie = slides[index];
+
+              return GestureDetector(
+                onTap: () => _openMovie(movie),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    movie.backdropUrl.isEmpty
+                        ? _posterPlaceholder()
+                        : CachedNetworkImage(
+                            imageUrl: movie.backdropUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => _posterPlaceholder(),
+                            errorWidget: (_, __, ___) =>
+                                _posterPlaceholder(),
+                          ),
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Color(0x33000000),
+                            bg,
+                          ],
+                          stops: [0.05, 0.45, 1],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 20,
+                      right: 20,
+                      bottom: 35,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'FEATURED',
+                            style: TextStyle(
+                              color: gold,
+                              fontSize: 12,
+                              letterSpacing: 2,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            movie.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 27,
+                              color: white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 7),
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.star,
+                                color: gold,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                movie.rating.toStringAsFixed(1),
+                                style: const TextStyle(color: white),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                movie.year,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 13),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: gold,
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: () => _openMovie(movie),
+                            icon: const Icon(Icons.info_outline),
+                            label: const Text('View Details'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          Positioned(
+            top: 15,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 6,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'FLIXORA',
+                style: TextStyle(
+                  color: goldLight,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 15,
+            right: 20,
+            child: Row(
+              children: List.generate(
+                slides.length,
+                (index) => Container(
+                  margin: const EdgeInsets.only(left: 5),
+                  width: _slide == index ? 19 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: _slide == index ? gold : Colors.white54,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _homeContent() {
+    return RefreshIndicator(
+      color: gold,
+      backgroundColor: panel,
+      onRefresh: loadHome,
+      child: ListView(
+        children: [
+          _featuredSlider(),
+
+          if (flixoraMovies.isNotEmpty) ...[
+            _sectionTitle(
+              'Flixora Originals',
+              subtitle: 'Movies published by Flixora',
+            ),
+            _movieRow(flixoraMovies),
+          ],
+
+          _sectionTitle('Trending This Week'),
+          _movieRow(trending),
+
+          _sectionTitle('Popular Movies'),
+          _movieRow(popular),
+
+          _sectionTitle('Now Playing'),
+          _movieRow(latest),
+
+          _sectionTitle('Top Rated'),
+          _movieRow(topRated),
+
+          const SizedBox(height: 30),
+        ],
+      ),
+    );
+  }
+
+  Widget _searchContent() {
+    if (_searchLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: gold),
+      );
+    }
+
+    if (searchResults.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(25),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.search,
+                size: 55,
+                color: Colors.white30,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _searchError ?? 'Search movies by title',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white54),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.53,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 15,
+      ),
+      itemCount: searchResults.length,
+      itemBuilder: (_, index) => _poster(
+        searchResults[index],
+        width: double.infinity,
+      ),
+    );
+  }
+
+  Widget _collectionContent(String title, List<Movie> movies) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(18),
+          child: Text(
+            title,
+            style: const TextStyle(
+              color: white,
+              fontSize: 23,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        Expanded(
+          child: movies.isEmpty
+              ? const Center(
+                  child: Text(
+                    'Nothing here yet.',
+                    style: TextStyle(color: Colors.white54),
+                  ),
+                )
+              : GridView.builder(
+                  padding: const EdgeInsets.all(16),
+                  gridDelegate:
+                      const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.53,
+                    crossAxisSpacing: 12,
+                    mainAxisSpacing: 15,
+                  ),
+                  itemCount: movies.length,
+                  itemBuilder: (_, index) => _poster(
+                    movies[index],
+                    width: double.infinity,
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _downloadsContent() {
+    return DownloadsScreen(tasks: _downloads);
+  }
+
+  Widget _profileContent() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            Container(
+              width: 90,
+              height: 90,
+              decoration: BoxDecoration(
+                color: gold.withValues(alpha: 0.13),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.person_outline,
+                color: gold,
+                size: 48,
+              ),
+            ),
+            const SizedBox(height: 15),
+            const Text(
+              'FLIXORA',
+              style: TextStyle(
+                color: gold,
+                fontSize: 25,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 3,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Your movie destination',
+              style: TextStyle(color: Colors.white54),
+            ),
+            const SizedBox(height: 30),
+            _profileTile(
+              Icons.favorite_outline,
+              'My Favourites',
+              () => setState(() => _tab = 3),
+            ),
+            _profileTile(
+              Icons.bookmark_outline,
+              'Saved Movies',
+              () => setState(() => _tab = 4),
+            ),
+            _profileTile(
+              Icons.download_outlined,
+              'Downloads',
+              () => setState(() => _tab = 5),
+            ),
+            _profileTile(
+              Icons.refresh,
+              'Refresh Movies',
+              loadHome,
+            ),
+            const SizedBox(height: 25),
+            const Text(
+              'Flixora — Movies, made simple.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white38,
                 fontSize: 12,
               ),
             ),
@@ -1302,504 +1479,442 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _posterFallback(double width, double height) {
-    return Container(
-      height: height,
-      width: width,
+  Widget _profileTile(
+    IconData icon,
+    String title,
+    VoidCallback onTap,
+  ) {
+    return Card(
       color: panel,
-      child: const Icon(
-        Icons.movie_outlined,
-        size: 45,
-        color: gold,
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        leading: Icon(icon, color: gold),
+        title: Text(title, style: const TextStyle(color: white)),
+        trailing: const Icon(
+          Icons.chevron_right,
+          color: Colors.white54,
+        ),
+        onTap: onTap,
       ),
     );
   }
 
-  Widget _movieGridSliver(List<Movie> list) {
-    if (list.isEmpty) {
-      return const SliverToBoxAdapter(
-        child: Padding(
-          padding: EdgeInsets.all(40),
-          child: Center(child: Text('No movies found')),
-        ),
-      );
-    }
+  Widget _currentPage() {
+    if (_search.isNotEmpty) return _searchContent();
 
-    return SliverPadding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      sliver: SliverGrid(
-        delegate: SliverChildBuilderDelegate(
-          (context, index) => _movieCard(list[index]),
-          childCount: list.length,
-        ),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.64,
-          crossAxisSpacing: 4,
-          mainAxisSpacing: 10,
-        ),
-      ),
-    );
-  }
+    switch (_tab) {
+      case 0:
+        if (loading && _allMovies().isEmpty) {
+          return const Center(
+            child: CircularProgressIndicator(color: gold),
+          );
+        }
 
-  List<Movie> _allMovies() {
-    final all = <int, Movie>{};
-
-    for (final list in [
-      trending,
-      popular,
-      latest,
-      topRated,
-    ]) {
-      for (final movie in list) {
-        all[movie.id] = movie;
-      }
-    }
-
-    return all.values.toList();
-  }
-
-  Widget _allPage() {
-    final list = _allMovies();
-
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverToBoxAdapter(child: _header()),
-        SliverToBoxAdapter(child: _searchBox()),
-        SliverToBoxAdapter(
-          child: _sectionTitle(
-            'All Movies',
-            '${list.length} MOVIES',
-          ),
-        ),
-        _movieGridSliver(list),
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
-      ],
-    );
-  }
-
-  Widget _savedPage() {
-    final list = _allMovies()
-        .where((movie) => _saved.contains(movie.id))
-        .toList();
-
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        SliverToBoxAdapter(child: _header()),
-        SliverToBoxAdapter(
-          child: _sectionTitle(
-            'Saved Movies',
-            '${list.length} SAVED',
-          ),
-        ),
-        if (list.isEmpty)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(45),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.bookmark_border,
-                    size: 65,
-                    color: gold,
-                  ),
-                  SizedBox(height: 15),
-                  Text('No saved movies yet'),
-                  SizedBox(height: 6),
-                  Text(
-                    'Open a movie and tap Save',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                ],
-              ),
+        if (homeError != null && _allMovies().isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.wifi_off,
+                  color: gold,
+                  size: 45,
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Unable to load movies.',
+                  style: TextStyle(color: white),
+                ),
+                const SizedBox(height: 10),
+                FilledButton(
+                  onPressed: loadHome,
+                  child: const Text('Try Again'),
+                ),
+              ],
             ),
-          )
-        else
-          _movieGridSliver(list),
-      ],
-    );
-  }
+          );
+        }
 
-  Widget _profilePage() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: gold, width: 2),
-            ),
-            child: const CircleAvatar(
-              radius: 42,
-              backgroundColor: panel,
-              child: Icon(
-                Icons.person,
-                size: 48,
-                color: gold,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Flixora User',
-            style: TextStyle(
-              fontSize: 23,
-              fontWeight: FontWeight.bold,
-              color: gold,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Your cinematic experience',
-            style: TextStyle(color: Colors.white54),
-          ),
-          const SizedBox(height: 25),
-          TextButton.icon(
-            onPressed: () => _message('Account feature coming soon'),
-            icon: const Icon(Icons.login, color: gold),
-            label: const Text(
-              'Sign in / Register',
-              style: TextStyle(color: gold),
-            ),
-          ),
-          const SizedBox(height: 20),
-          const Padding(
-            padding: EdgeInsets.all(20),
+        if (_allMovies().isEmpty) {
+          return const Center(
             child: Text(
-              'This product uses the TMDB API but is not endorsed or certified by TMDB.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white38,
-                fontSize: 11,
+              'No movies available yet.',
+              style: TextStyle(color: Colors.white54),
+            ),
+          );
+        }
+
+        return _homeContent();
+
+      case 1:
+        return _collectionContent('All Movies', _allMovies());
+
+      case 2:
+        return _collectionContent('Flixora Originals', flixoraMovies);
+
+      case 3:
+        return _collectionContent(
+          'My Favourites',
+          _moviesForIds(_favourites),
+        );
+
+      case 4:
+        return _collectionContent(
+          'Saved Movies',
+          _moviesForIds(_saved),
+        );
+
+      case 5:
+        return _downloadsContent();
+
+      case 6:
+        return _profileContent();
+
+      default:
+        return _homeContent();
+    }
+  }
+
+  String _pageTitle() {
+    if (_search.isNotEmpty) return 'Search Results';
+
+    switch (_tab) {
+      case 0:
+        return 'FLIXORA';
+      case 1:
+        return 'All Movies';
+      case 2:
+        return 'Flixora Originals';
+      case 3:
+        return 'Favourites';
+      case 4:
+        return 'Saved';
+      case 5:
+        return 'Downloads';
+      case 6:
+        return 'Profile';
+      default:
+        return 'FLIXORA';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          _pageTitle(),
+          style: const TextStyle(
+            color: gold,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
+        ),
+        actions: [
+          if (_tab == 0 || _tab == 1 || _tab == 2)
+            IconButton(
+              onPressed: () {
+                setState(() {
+                  _tab = 0;
+                  _search = '';
+                  _searchController.clear();
+                });
+                FocusScope.of(context).unfocus();
+              },
+              icon: const Icon(Icons.home_outlined),
+            ),
+          if (_connectionKnown)
+            Padding(
+              padding: const EdgeInsets.only(right: 15),
+              child: Icon(
+                _online ? Icons.wifi : Icons.wifi_off,
+                color: _online ? Colors.green : Colors.redAccent,
+                size: 19,
               ),
             ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 5, 16, 12),
+            child: TextField(
+              controller: _searchController,
+              onChanged: _onSearchChanged,
+              style: const TextStyle(color: white),
+              decoration: InputDecoration(
+                hintText: 'Search movies...',
+                hintStyle: const TextStyle(color: Colors.white38),
+                prefixIcon: const Icon(
+                  Icons.search,
+                  color: gold,
+                ),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                          FocusScope.of(context).unfocus();
+                        },
+                        icon: const Icon(
+                          Icons.close,
+                          color: Colors.white54,
+                        ),
+                      )
+                    : null,
+                filled: true,
+                fillColor: panel,
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: _currentPage()),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (index) {
+          FocusScope.of(context).unfocus();
+          _searchController.clear();
+
+          setState(() {
+            _search = '';
+            searchResults = [];
+            _tab = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.movie_outlined),
+            selectedIcon: Icon(Icons.movie),
+            label: 'Movies',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.stars_outlined),
+            selectedIcon: Icon(Icons.stars),
+            label: 'Originals',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.favorite_outline),
+            selectedIcon: Icon(Icons.favorite),
+            label: 'Likes',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bookmark_outline),
+            selectedIcon: Icon(Icons.bookmark),
+            label: 'Saved',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.download_outlined),
+            selectedIcon: Icon(Icons.download),
+            label: 'Downloads',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
           ),
         ],
       ),
     );
   }
-
-  Widget _errorView(String error, VoidCallback retry) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(25),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.wifi_off, size: 55, color: gold),
-            const SizedBox(height: 16),
-            const Text(
-              'Could not load movies',
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              error,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: retry,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: gold,
-                foregroundColor: Colors.black,
-              ),
-              child: const Text('Try Again'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _message(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: panel,
-      ),
-    );
-  }
 }
 
-class NoInternetScreen extends StatefulWidget {
-  final Future<bool> Function()? onRetry;
-  final bool inline;
-
-  const NoInternetScreen({
-    super.key,
-    this.onRetry,
-    this.inline = false,
-  });
-
-  @override
-  State<NoInternetScreen> createState() => _NoInternetScreenState();
-}
-
-class _NoInternetScreenState extends State<NoInternetScreen> {
-  bool checking = false;
-
-  Future<void> retry() async {
-    setState(() => checking = true);
-
-    bool connected = false;
-
-    try {
-      connected = widget.onRetry != null
-          ? await widget.onRetry!()
-          : await InternetService.isOnline();
-    } catch (_) {
-      connected = false;
-    }
-
-    if (!mounted) return;
-
-    setState(() => checking = false);
-
-    if (connected) {
-      if (!widget.inline) {
-        Navigator.pop(context, true);
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Still offline. Please check your connection.',
-          ),
-          backgroundColor: panel,
-        ),
-      );
-    }
-  }
+class NoInternetScreen extends StatelessWidget {
+  const NoInternetScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bg,
-      body: SafeArea(
-        child: Center(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(25),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.wifi_off,
+                color: gold,
+                size: 70,
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'No Internet Connection',
+                style: TextStyle(
+                  color: white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Please check your internet connection and try again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54),
+              ),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: () => AppSettings.openAppSettings(
+                  type: AppSettingsType.wifi,
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: gold,
+                  foregroundColor: Colors.black,
+                ),
+                child: const Text('Open Wi-Fi Settings'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class DownloadsScreen extends StatelessWidget {
+  final List<DownloadTask> tasks;
+
+  const DownloadsScreen({
+    super.key,
+    required this.tasks,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (tasks.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.download_outlined,
+              color: Colors.white30,
+              size: 60,
+            ),
+            SizedBox(height: 15),
+            Text(
+              'No downloads yet',
+              style: TextStyle(
+                color: white,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            SizedBox(height: 7),
+            Text(
+              'Your downloaded movies will appear here.',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: tasks.length,
+      itemBuilder: (context, index) {
+        final task = tasks[index];
+
+        return Card(
+          color: panel,
+          margin: const EdgeInsets.only(bottom: 12),
           child: Padding(
-            padding: const EdgeInsets.all(28),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            padding: const EdgeInsets.all(10),
+            child: Row(
               children: [
-                const Icon(
-                  Icons.wifi_off_rounded,
-                  color: gold,
-                  size: 85,
-                ),
-                const SizedBox(height: 28),
-                const Text(
-                  'Connect to the internet',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 25,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 22),
-                const Text(
-                  'When your internet connection is restored:',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 15,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'Explore various movies, TV series and more',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 16,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'HD',
-                  style: TextStyle(
-                    color: gold,
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'All free download with less data but good quality',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                  ),
-                ),
-                const SizedBox(height: 35),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: checking ? null : retry,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: gold,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 15,
-                      ),
-                    ),
-                    child: checking
-                        ? const SizedBox(
-                            height: 22,
-                            width: 22,
-                            child: CircularProgressIndicator(
-                              color: Colors.black,
-                              strokeWidth: 2,
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 65,
+                    height: 90,
+                    child: task.poster.isEmpty
+                        ? Container(
+                            color: Colors.black26,
+                            child: const Icon(
+                              Icons.movie,
+                              color: gold,
                             ),
                           )
-                        : const Text(
-                            'Retry',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                        : CachedNetworkImage(
+                            imageUrl: task.poster,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) =>
+                                const Icon(
+                              Icons.movie,
+                              color: gold,
                             ),
                           ),
                   ),
                 ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      AppSettings.openAppSettings(
-                        type: AppSettingsType.wifi,
-                      );
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: gold,
-                      side: const BorderSide(color: gold),
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 15,
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        task.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: white,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    child: const Text(
-                      'Go to Settings',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
+                      const SizedBox(height: 9),
+                      Text(
+                        task.status,
+                        style: TextStyle(
+                          color: task.status == 'Completed'
+                              ? Colors.greenAccent
+                              : task.status == 'Failed'
+                                  ? Colors.redAccent
+                                  : gold,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      LinearProgressIndicator(
+                        value: task.progress,
+                        backgroundColor: Colors.white12,
+                        color: gold,
+                        minHeight: 5,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      const SizedBox(height: 5),
+                      Text(
+                        '${(task.progress * 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                      if (task.filePath != null)
+                        const Text(
+                          'Saved on this device',
+                          style: TextStyle(
+                            color: Colors.greenAccent,
+                            fontSize: 11,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-} 
-class DownloadsScreen extends StatelessWidget {
-  final List<DownloadTask> downloads;
-
-  const DownloadsScreen({
-    super.key,
-    required this.downloads,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: bg,
-      appBar: AppBar(
-        title: const Text(
-          'Downloads',
-          style: TextStyle(
-            color: gold,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      body: downloads.isEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(30),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(
-                      Icons.download_for_offline_outlined,
-                      size: 75,
-                      color: gold,
-                    ),
-                    const SizedBox(height: 18),
-                    const Text(
-                      'No downloads yet',
-                      style: TextStyle(
-                        fontSize: 21,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Movies you download will appear here.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white54),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'A permitted video source is required.',
-                      style: TextStyle(
-                        color: goldLight.withValues(alpha: 0.8),
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
-              itemCount: downloads.length,
-              itemBuilder: (context, index) {
-                final item = downloads[index];
-
-                return Card(
-                  color: panel,
-                  child: ListTile(
-                    leading: item.poster.isEmpty
-                        ? const Icon(Icons.movie, color: gold)
-                        : CachedNetworkImage(
-                            imageUrl: item.poster,
-                            width: 48,
-                            fit: BoxFit.cover,
-                          ),
-                    title: Text(item.title),
-                    subtitle: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(
-                          value: item.progress,
-                          color: gold,
-                          backgroundColor: Colors.white12,
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          '${(item.progress * 100).toStringAsFixed(0)}% • ${item.status}',
-                          style: const TextStyle(
-                            color: Colors.white54,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+        );
+      },
     );
   }
 }
@@ -1828,65 +1943,91 @@ class MovieDetailsScreen extends StatefulWidget {
 }
 
 class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
-  late bool favourite;
-  late bool saved;
-
   Map<String, dynamic>? extraDetails;
-  String? detailsError;
-  bool detailsLoading = true;
+  bool loading = false;
+  String? error;
 
   @override
   void initState() {
     super.initState();
-
-    favourite = widget.isFavourite;
-    saved = widget.isSaved;
-
     loadDetails();
   }
 
   Future<void> loadDetails() async {
-    final online = await InternetService.isOnline();
-
-    if (!mounted) return;
-
-    if (!online) {
+    if (widget.movie.isFlixora) {
       setState(() {
-        detailsLoading = false;
-        detailsError =
-            'Connect to the internet to load movie details.';
+        extraDetails = {
+          'runtime': widget.movie.runtime,
+          'genres': widget.movie.genres
+              .map((name) => {'name': name})
+              .toList(),
+          'overview': widget.movie.overview,
+        };
+        loading = false;
       });
-
       return;
     }
 
+    setState(() {
+      loading = true;
+      error = null;
+    });
+
     try {
-      final data = await TmdbService.details(widget.movie.id);
+      final result = await TmdbService.details(widget.movie.id);
 
       if (!mounted) return;
 
       setState(() {
-        extraDetails = data;
-        detailsLoading = false;
-        detailsError = null;
+        extraDetails = result;
+        loading = false;
       });
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
-        detailsError = e.toString();
-        detailsLoading = false;
+        loading = false;
+        error = 'Could not load additional details.';
       });
     }
   }
 
-  void showSourceMessage(String action) {
+  void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'No licensed video source is connected for $action yet.',
-        ),
+        content: Text(message),
         backgroundColor: panel,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _watchMovie() {
+    final url = widget.movie.videoUrl.trim();
+
+    if (url.isEmpty) {
+      _showMessage(
+        'Video is not available for this movie yet.',
+      );
+      return;
+    }
+
+    final uri = Uri.tryParse(url);
+
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty) {
+      _showMessage('Invalid video URL.');
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MoviePlayerScreen(
+          videoUrl: url,
+          title: widget.movie.title,
+        ),
       ),
     );
   }
@@ -1895,117 +2036,245 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   Widget build(BuildContext context) {
     final movie = widget.movie;
 
-    final genres = (extraDetails?['genres'] as List? ?? [])
-        .map((g) => g['name'].toString())
-        .join(' • ');
+    final genres = extraDetails?['genres'] is List
+        ? (extraDetails!['genres'] as List)
+            .map((genre) {
+              if (genre is Map) {
+                return genre['name']?.toString() ?? '';
+              }
+              return genre.toString();
+            })
+            .where((genre) => genre.isNotEmpty)
+            .toList()
+        : movie.genres;
+
+    final runtime = extraDetails?['runtime'];
 
     return Scaffold(
+      backgroundColor: bg,
       body: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
         slivers: [
           SliverAppBar(
-            expandedHeight: 300,
+            expandedHeight: 350,
             pinned: true,
             backgroundColor: bg,
-            iconTheme: const IconThemeData(color: gold),
+            foregroundColor: white,
             flexibleSpace: FlexibleSpaceBar(
-              background: movie.backdropUrl.isEmpty
-                  ? Container(color: panel)
-                  : CachedNetworkImage(
-                      imageUrl: movie.backdropUrl,
-                      fit: BoxFit.cover,
-                      placeholder: (_, __) =>
-                          Container(color: panel),
-                      errorWidget: (_, __, ___) =>
-                          Container(color: panel),
+              background: Stack(
+                fit: StackFit.expand,
+                children: [
+                  movie.backdropUrl.isEmpty
+                      ? Container(color: panel)
+                      : CachedNetworkImage(
+                          imageUrl: movie.backdropUrl,
+                          fit: BoxFit.cover,
+                          placeholder: (_, __) =>
+                              Container(color: panel),
+                          errorWidget: (_, __, ___) =>
+                              Container(color: panel),
+                        ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Color(0x99000000),
+                          bg,
+                        ],
+                        stops: [0.1, 0.7, 1],
+                      ),
                     ),
+                  ),
+                  Positioned(
+                    left: 20,
+                    right: 20,
+                    bottom: 25,
+                    child: Text(
+                      movie.title,
+                      style: const TextStyle(
+                        color: white,
+                        fontSize: 27,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              IconButton(
+                onPressed: widget.onFavourite,
+                icon: Icon(
+                  widget.isFavourite
+                      ? Icons.favorite
+                      : Icons.favorite_border,
+                  color: widget.isFavourite ? Colors.red : white,
+                ),
+              ),
+              IconButton(
+                onPressed: widget.onSave,
+                icon: Icon(
+                  widget.isSaved
+                      ? Icons.bookmark
+                      : Icons.bookmark_border,
+                  color: widget.isSaved ? gold : white,
+                ),
+              ),
+            ],
           ),
+
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 30),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    movie.title,
-                    style: const TextStyle(
-                      fontSize: 29,
-                      fontWeight: FontWeight.w900,
-                    ),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.star,
+                        color: gold,
+                        size: 19,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        movie.rating.toStringAsFixed(1),
+                        style: const TextStyle(
+                          color: goldLight,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(width: 15),
+                      Text(
+                        movie.year,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                        ),
+                      ),
+                      if (runtime != null) ...[
+                        const SizedBox(width: 15),
+                        const Icon(
+                          Icons.schedule,
+                          color: Colors.white54,
+                          size: 15,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          '${runtime.toString()} min',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '${movie.year}  •  ⭐ ${movie.rating.toStringAsFixed(1)}',
-                    style: const TextStyle(color: goldLight),
-                  ),
-                  const SizedBox(height: 12),
-                  if (detailsLoading)
-                    const LinearProgressIndicator(color: gold)
-                  else if (detailsError == null && genres.isNotEmpty)
-                    Text(
-                      genres,
-                      style: const TextStyle(color: Colors.white54),
-                    )
-                  else if (detailsError != null)
-                    Text(
-                      detailsError!,
-                      style: const TextStyle(color: Colors.white54),
+
+                  if (genres.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: genres.map<Widget>((genre) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: panel,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: gold.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Text(
+                            genre.toString(),
+                            style: const TextStyle(
+                              color: goldLight,
+                              fontSize: 12,
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
-                  const SizedBox(height: 24),
+                  ],
+
+                  const SizedBox(height: 25),
                   const Text(
                     'Overview',
                     style: TextStyle(
-                      fontSize: 21,
+                      color: white,
+                      fontSize: 19,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    movie.overview,
+                    movie.overview.isEmpty
+                        ? 'No description available.'
+                        : movie.overview,
                     style: const TextStyle(
                       color: Colors.white70,
                       height: 1.6,
-                      fontSize: 15,
+                      fontSize: 14,
                     ),
                   ),
-                  if (extraDetails != null) ...[
-                    const SizedBox(height: 22),
-                    Text(
-                      'Runtime: ${extraDetails!['runtime'] ?? 'N/A'} minutes',
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Release date: ${movie.releaseDate.isEmpty ? 'N/A' : movie.releaseDate}',
-                      style: const TextStyle(color: Colors.white70),
+
+                  if (loading) ...[
+                    const SizedBox(height: 20),
+                    const Center(
+                      child: CircularProgressIndicator(color: gold),
                     ),
                   ],
-                  const SizedBox(height: 28),
+
+                  if (error != null) ...[
+                    const SizedBox(height: 15),
+                    Text(
+                      error!,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: loadDetails,
+                      child: const Text(
+                        'Try Again',
+                        style: TextStyle(color: gold),
+                      ),
+                    ),
+                  ],
+
+                  const SizedBox(height: 30),
+
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
+                    child: FilledButton.icon(
+                      onPressed: _watchMovie,
+                      style: FilledButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(
                           vertical: 15,
                         ),
                       ),
-                      onPressed: () => showSourceMessage('playback'),
                       icon: const Icon(Icons.play_arrow),
                       label: const Text(
-                        'Watch',
+                        'Watch Now',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
                   ),
+
                   const SizedBox(height: 12),
+
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
+                      onPressed: widget.onDownload,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: gold,
                         side: const BorderSide(color: gold),
@@ -2013,89 +2282,12 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                           vertical: 14,
                         ),
                       ),
-                      onPressed: widget.onDownload,
                       icon: const Icon(Icons.download),
-                      label: const Text(
-                        'Download',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      label: const Text('Download'),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: gold,
-                            side: const BorderSide(color: gold),
-                          ),
-                          onPressed: () {
-                            widget.onFavourite();
 
-                            setState(() {
-                              favourite = !favourite;
-                            });
-                          },
-                          icon: Icon(
-                            favourite
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                          ),
-                          label: Text(
-                            favourite ? 'Liked' : 'Favourite',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: gold,
-                            side: const BorderSide(color: gold),
-                          ),
-                          onPressed: () {
-                            widget.onSave();
-
-                            setState(() {
-                              saved = !saved;
-                            });
-
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  saved
-                                      ? 'Added to saved list'
-                                      : 'Removed from saved list',
-                                ),
-                              ),
-                            );
-                          },
-                          icon: Icon(
-                            saved
-                                ? Icons.bookmark
-                                : Icons.bookmark_border,
-                          ),
-                          label: Text(saved ? 'Saved' : 'Save'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 30),
-                  const Center(
-                    child: Text(
-                      'FLIXORA',
-                      style: TextStyle(
-                        color: gold,
-                        fontSize: 25,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 2,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 30),
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
@@ -2122,310 +2314,279 @@ class MoviePlayerScreen extends StatefulWidget {
 }
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
-  late VideoPlayerController controller;
+  VideoPlayerController? _controller;
 
-  bool ready = false;
-  bool controlsVisible = true;
-
-  double volume = 1;
-  double speed = 1;
-
-  Timer? hideTimer;
+  bool loading = true;
+  String? error;
+  bool _showControls = true;
 
   @override
   void initState() {
     super.initState();
+    _initializePlayer();
+  }
 
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.immersiveSticky,
-    );
+  Future<void> _initializePlayer() async {
+    try {
+      final uri = Uri.parse(widget.videoUrl);
 
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
+      if ((uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty) {
+        throw Exception('Invalid video URL.');
+      }
 
-    controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.videoUrl),
-    );
+      final controller = VideoPlayerController.networkUrl(uri);
 
-    controller.initialize().then((_) {
+      _controller = controller;
+
+      await controller.initialize();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      controller.addListener(_playerListener);
+
+      await controller.play();
+
       if (!mounted) return;
 
-      setState(() => ready = true);
+      setState(() {
+        loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
 
-      controller.play();
-      resetHideTimer();
-    }).catchError((_) {
-      if (mounted) {
-        setState(() => ready = false);
-      }
-    });
-  }
-
-  void resetHideTimer() {
-    hideTimer?.cancel();
-
-    hideTimer = Timer(
-      const Duration(seconds: 4),
-      () {
-        if (mounted && controller.value.isPlaying) {
-          setState(() => controlsVisible = false);
-        }
-      },
-    );
-  }
-
-  void toggleControls() {
-    setState(() {
-      controlsVisible = !controlsVisible;
-    });
-
-    if (controlsVisible) {
-      resetHideTimer();
+      setState(() {
+        loading = false;
+        error = 'Unable to play this video.';
+      });
     }
   }
 
-  String formatTime(Duration duration) {
-    final minutes =
-        duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-
-    final seconds =
-        duration.inSeconds.remainder(60).toString().padLeft(2, '0');
-
-    final hours = duration.inHours;
-
-    return hours > 0
-        ? '$hours:$minutes:$seconds'
-        : '$minutes:$seconds';
+  void _playerListener() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
   void dispose() {
-    hideTimer?.cancel();
-    controller.dispose();
-
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.edgeToEdge,
-    );
-
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
-
+    _controller?.removeListener(_playerListener);
+    _controller?.dispose();
     super.dispose();
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return '${twoDigits(hours)}:${twoDigits(minutes)}:${twoDigits(seconds)}';
+    }
+
+    return '${twoDigits(minutes)}:${twoDigits(seconds)}';
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller;
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: toggleControls,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            if (ready)
-              Center(
-                child: AspectRatio(
-                  aspectRatio: controller.value.aspectRatio,
-                  child: VideoPlayer(controller),
-                ),
-              )
-            else
-              const Center(
-                child: CircularProgressIndicator(color: gold),
-              ),
-            if (controlsVisible && ready)
-              Positioned.fill(
-                child: Container(
-                  color: Colors.black.withValues(alpha: 0.35),
-                  child: Column(
-                    children: [
-                      SafeArea(
-                        child: Row(
-                          children: [
-                            IconButton(
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(
-                                Icons.arrow_back,
-                                color: white,
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                widget.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Spacer(),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            iconSize: 38,
-                            onPressed: () {
-                              final position = controller.value.position;
-
-                              controller.seekTo(
-                                position -
-                                    const Duration(seconds: 10),
-                              );
-                            },
-                            icon: const Icon(
-                              Icons.replay_10,
-                              color: white,
-                            ),
-                          ),
-                          const SizedBox(width: 25),
-                          IconButton(
-                            iconSize: 55,
-                            onPressed: () {
-                              setState(() {
-                                controller.value.isPlaying
-                                    ? controller.pause()
-                                    : controller.play();
-                              });
-
-                              resetHideTimer();
-                            },
-                            icon: Icon(
-                              controller.value.isPlaying
-                                  ? Icons.pause_circle_filled
-                                  : Icons.play_circle_fill,
-                              color: gold,
-                            ),
-                          ),
-                          const SizedBox(width: 25),
-                          IconButton(
-                            iconSize: 38,
-                            onPressed: () {
-                              final position = controller.value.position;
-                              final duration = controller.value.duration;
-
-                              final next = position +
-                                  const Duration(seconds: 10);
-
-                              controller.seekTo(
-                                next > duration ? duration : next,
-                              );
-                            },
-                            icon: const Icon(
-                              Icons.forward_10,
-                              color: white,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const Spacer(),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          18,
-                          0,
-                          18,
-                          15,
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  formatTime(controller.value.position),
-                                  style: const TextStyle(color: white),
-                                ),
-                                Expanded(
-                                  child: VideoProgressIndicator(
-                                    controller,
-                                    allowScrubbing: true,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
-                                    colors: const VideoProgressColors(
-                                      playedColor: gold,
-                                      bufferedColor: Colors.white38,
-                                      backgroundColor: Colors.white24,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  formatTime(controller.value.duration),
-                                  style: const TextStyle(color: white),
-                                ),
-                              ],
-                            ),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.volume_up,
-                                  color: white,
-                                  size: 19,
-                                ),
-                                Expanded(
-                                  child: Slider(
-                                    value: volume,
-                                    min: 0,
-                                    max: 1,
-                                    activeColor: gold,
-                                    onChanged: (value) {
-                                      setState(() => volume = value);
-                                      controller.setVolume(value);
-                                    },
-                                  ),
-                                ),
-                                PopupMenuButton<double>(
-                                  initialValue: speed,
-                                  color: panel,
-                                  onSelected: (value) {
-                                    setState(() => speed = value);
-                                    controller.setPlaybackSpeed(value);
-                                  },
-                                  itemBuilder: (_) => [
-                                    for (final value in [
-                                      0.5,
-                                      0.75,
-                                      1.0,
-                                      1.25,
-                                      1.5,
-                                      2.0,
-                                    ])
-                                      PopupMenuItem(
-                                        value: value,
-                                        child: Text('${value}x'),
-                                      ),
-                                  ],
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(8),
-                                    child: Text(
-                                      '${speed}x',
-                                      style: const TextStyle(
-                                        color: white,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: white,
+        title: Text(
+          widget.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
+      ),
+      body: Center(
+        child: loading
+            ? const CircularProgressIndicator(color: gold)
+            : error != null
+                ? Padding(
+                    padding: const EdgeInsets.all(25),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          color: gold,
+                          size: 55,
+                        ),
+                        const SizedBox(height: 15),
+                        Text(
+                          error!,
+                          style: const TextStyle(color: white),
+                        ),
+                        const SizedBox(height: 15),
+                        FilledButton(
+                          onPressed: _initializePlayer,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  )
+                : controller == null ||
+                        !controller.value.isInitialized
+                    ? const Text(
+                        'Player unavailable',
+                        style: TextStyle(color: white),
+                      )
+                    : AspectRatio(
+                        aspectRatio: controller.value.aspectRatio,
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _showControls = !_showControls;
+                            });
+                          },
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              VideoPlayer(controller),
+
+                              if (_showControls)
+                                Container(
+                                  color: Colors.black26,
+                                  child: Column(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Spacer(),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          IconButton(
+                                            onPressed: () {
+                                              final current = controller
+                                                  .value.position;
+
+                                              controller.seekTo(
+                                                current -
+                                                    const Duration(
+                                                  seconds: 10,
+                                                ),
+                                              );
+                                            },
+                                            icon: const Icon(
+                                              Icons.replay_10,
+                                              color: white,
+                                              size: 38,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 25),
+                                          IconButton(
+                                            onPressed: () {
+                                              if (controller
+                                                  .value.isPlaying) {
+                                                controller.pause();
+                                              } else {
+                                                controller.play();
+                                              }
+                                            },
+                                            icon: Icon(
+                                              controller.value.isPlaying
+                                                  ? Icons.pause_circle
+                                                  : Icons.play_circle,
+                                              color: gold,
+                                              size: 60,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 25),
+                                          IconButton(
+                                            onPressed: () {
+                                              final current = controller
+                                                  .value.position;
+
+                                              final duration = controller
+                                                  .value.duration;
+
+                                              final next = current +
+                                                  const Duration(
+                                                seconds: 10,
+                                              );
+
+                                              controller.seekTo(
+                                                next > duration
+                                                    ? duration
+                                                    : next,
+                                              );
+                                            },
+                                            icon: const Icon(
+                                              Icons.forward_10,
+                                              color: white,
+                                              size: 38,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const Spacer(),
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        child: Column(
+                                          children: [
+                                            VideoProgressIndicator(
+                                              controller,
+                                              allowScrubbing: true,
+                                              colors:
+                                                  const VideoProgressColors(
+                                                playedColor: gold,
+                                                bufferedColor:
+                                                    Colors.white38,
+                                                backgroundColor:
+                                                    Colors.white12,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 7),
+                                            Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
+                                              children: [
+                                                Text(
+                                                  _formatDuration(
+                                                    controller.value
+                                                        .position,
+                                                  ),
+                                                  style: const TextStyle(
+                                                    color: white,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  _formatDuration(
+                                                    controller.value
+                                                        .duration,
+                                                  ),
+                                                  style: const TextStyle(
+                                                    color: white,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
       ),
     );
   }
