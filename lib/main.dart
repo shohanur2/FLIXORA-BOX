@@ -1,8 +1,8 @@
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'archive_screen.dart';
 
 void main() {
   runApp(const FlixoraApp());
@@ -358,6 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             _homePage(),
             _allPage(),
+            const ArchiveScreen(),
             _savedPage(),
             _profilePage(),
           ],
@@ -378,6 +379,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.grid_view_outlined),
             selectedIcon: Icon(Icons.grid_view, color: gold),
             label: 'All Movies',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.movie_outlined),
+            selectedIcon: Icon(Icons.movie, color: gold),
+            label: 'Free Movies',
           ),
           NavigationDestination(
             icon: Icon(Icons.bookmark_border),
@@ -420,7 +426,7 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.notifications_none, size: 27),
           ),
           IconButton(
-            onPressed: () => setState(() => _tab = 3),
+            onPressed: () => setState(() => _tab = 4),
             icon: const CircleAvatar(
               backgroundColor: panel,
               child: Icon(Icons.person_outline, color: white),
