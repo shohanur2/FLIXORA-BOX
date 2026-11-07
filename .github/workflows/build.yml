@@ -29,18 +29,91 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --project-name=flixora --org=com.flixora .
 
-      - name: Ensure Internet permission
+      - name: Set Flixora App Name and Premium Icon
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          p = Path("android/app/src/main/AndroidManifest.xml")
-          s = p.read_text()
-          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          content = manifest.read_text()
 
-          if permission not in s:
-              s = s.replace('<application', f'    {permission}\n    <application', 1)
-              p.write_text(s)
+          content = re.sub(
+              r'android:label="[^"]*"',
+              'android:label="Flixora"',
+              content,
+              count=1
+          )
+
+          if 'android:icon=' in content:
+              content = re.sub(
+                  r'android:icon="[^"]*"',
+                  'android:icon="@mipmap/ic_launcher"',
+                  content,
+                  count=1
+              )
+          else:
+              content = content.replace(
+                  '<application',
+                  '<application android:icon="@mipmap/ic_launcher"',
+                  1
+              )
+
+          permission = 'android.permission.INTERNET'
+          if permission not in content:
+              content = content.replace(
+                  '<application',
+                  '<uses-permission android:name="android.permission.INTERNET"/>\n    <application',
+                  1
+              )
+
+          manifest.write_text(content)
+
+          res = Path("android/app/src/main/res")
+
+          drawable = res / "drawable"
+          adaptive = res / "mipmap-anydpi-v26"
+
+          drawable.mkdir(parents=True, exist_ok=True)
+          adaptive.mkdir(parents=True, exist_ok=True)
+
+          (drawable / "ic_launcher_background.xml").write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="#080808"/>
+          </shape>
+          """)
+
+          (drawable / "ic_launcher_foreground.xml").write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+
+              <path
+                  android:fillColor="#080808"
+                  android:pathData="M0,0h108v108h-108z"/>
+
+              <path
+                  android:fillColor="#00000000"
+                  android:strokeColor="#D6AD45"
+                  android:strokeWidth="2.5"
+                  android:pathData="M54,12 A42,42 0,1 1,53.9 12"/>
+
+              <path
+                  android:fillColor="#D6AD45"
+                  android:pathData="M31,24 H78 V36 H44 V47 H70 V59 H44 V84 H31 Z"/>
+          </vector>
+          """)
+
+          (adaptive / "ic_launcher.xml").write_text("""<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@drawable/ic_launcher_background"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          """)
+
+          print("Flixora branding and launcher icon configured.")
           PY
 
       - name: Install dependencies
