@@ -1,14 +1,19 @@
-
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:app_settings/app_settings.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const FlixoraApp());
 }
 
@@ -44,8 +49,9 @@ class Movie {
 
   factory Movie.fromJson(Map<String, dynamic> json) {
     final date = (json['release_date'] ?? '').toString();
+
     return Movie(
-      id: json['id'] ?? 0,
+      id: (json['id'] as num?)?.toInt() ?? 0,
       title: (json['title'] ?? json['name'] ?? 'Unknown Movie').toString(),
       year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
       releaseDate: date,
@@ -56,6 +62,30 @@ class Movie {
     );
   }
 
+  factory Movie.fromCache(Map<String, dynamic> json) {
+    return Movie(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      title: (json['title'] ?? 'Unknown Movie').toString(),
+      year: (json['year'] ?? 'N/A').toString(),
+      overview: (json['overview'] ?? '').toString(),
+      poster: (json['poster'] ?? '').toString(),
+      backdrop: (json['backdrop'] ?? '').toString(),
+      rating: (json['rating'] as num?)?.toDouble() ?? 0,
+      releaseDate: (json['releaseDate'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'year': year,
+        'overview': overview,
+        'poster': poster,
+        'backdrop': backdrop,
+        'rating': rating,
+        'releaseDate': releaseDate,
+      };
+
   String get posterUrl =>
       poster.isEmpty ? '' : '$imageBase/w500$poster';
 
@@ -63,11 +93,89 @@ class Movie {
       backdrop.isEmpty ? posterUrl : '$imageBase/w1280$backdrop';
 }
 
+class InternetService {
+  static Future<bool> isOnline() async {
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+
+      if (connectivity.contains(ConnectivityResult.none)) {
+        return false;
+      }
+
+      final response = await http
+          .get(Uri.parse('https://www.google.com/generate_204'))
+          .timeout(const Duration(seconds: 6));
+
+      return response.statusCode == 204 ||
+          response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
+class MovieCache {
+  static const String trendingKey = 'flixora_trending';
+  static const String popularKey = 'flixora_popular';
+  static const String latestKey = 'flixora_latest';
+  static const String topRatedKey = 'flixora_top_rated';
+
+  static Future<void> saveList(
+    String key,
+    List<Movie> movies,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(
+        movies.map((movie) => movie.toJson()).toList(),
+      );
+      await prefs.setString(key, encoded);
+    } catch (_) {}
+  }
+
+  static Future<List<Movie>> getList(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getString(key);
+
+      if (value == null || value.isEmpty) return [];
+
+      final decoded = jsonDecode(value) as List;
+
+      return decoded
+          .whereType<Map>()
+          .map(
+            (item) => Movie.fromCache(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> saveSearch(
+    String query,
+    List<Movie> movies,
+  ) async {
+    final key = 'flixora_search_${query.trim().toLowerCase()}';
+    await saveList(key, movies);
+  }
+
+  static Future<List<Movie>> getSearch(String query) async {
+    final key = 'flixora_search_${query.trim().toLowerCase()}';
+    return getList(key);
+  }
+}
+
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
 
   static Future<List<Movie>> getMovies(String endpoint) async {
-    if (apiKey.isEmpty) throw Exception('TMDB API Key is missing.');
+    if (apiKey.isEmpty) {
+      throw Exception('TMDB API Key is missing.');
+    }
 
     final uri = Uri.parse('$base/$endpoint').replace(
       queryParameters: {
@@ -77,9 +185,9 @@ class TmdbService {
       },
     );
 
-    final response = await http.get(uri).timeout(
-      const Duration(seconds: 25),
-    );
+    final response = await http
+        .get(uri)
+        .timeout(const Duration(seconds: 20));
 
     if (response.statusCode != 200) {
       throw Exception('TMDB error: ${response.statusCode}');
@@ -89,13 +197,17 @@ class TmdbService {
     final results = data['results'] as List? ?? [];
 
     return results
-        .whereType<Map<String, dynamic>>()
-        .map(Movie.fromJson)
+        .whereType<Map>()
+        .map((item) => Movie.fromJson(
+              Map<String, dynamic>.from(item),
+            ))
         .toList();
   }
 
   static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) throw Exception('TMDB API Key is missing.');
+    if (apiKey.isEmpty) {
+      throw Exception('TMDB API Key is missing.');
+    }
 
     final uri = Uri.parse('$base/search/movie').replace(
       queryParameters: {
@@ -107,9 +219,9 @@ class TmdbService {
       },
     );
 
-    final response = await http.get(uri).timeout(
-      const Duration(seconds: 25),
-    );
+    final response = await http
+        .get(uri)
+        .timeout(const Duration(seconds: 20));
 
     if (response.statusCode != 200) {
       throw Exception('Search failed: ${response.statusCode}');
@@ -119,13 +231,17 @@ class TmdbService {
     final results = data['results'] as List? ?? [];
 
     return results
-        .whereType<Map<String, dynamic>>()
-        .map(Movie.fromJson)
+        .whereType<Map>()
+        .map((item) => Movie.fromJson(
+              Map<String, dynamic>.from(item),
+            ))
         .toList();
   }
 
   static Future<Map<String, dynamic>> details(int id) async {
-    if (apiKey.isEmpty) throw Exception('TMDB API Key is missing.');
+    if (apiKey.isEmpty) {
+      throw Exception('TMDB API Key is missing.');
+    }
 
     final uri = Uri.parse('$base/movie/$id').replace(
       queryParameters: {
@@ -134,9 +250,9 @@ class TmdbService {
       },
     );
 
-    final response = await http.get(uri).timeout(
-      const Duration(seconds: 25),
-    );
+    final response = await http
+        .get(uri)
+        .timeout(const Duration(seconds: 20));
 
     if (response.statusCode != 200) {
       throw Exception('Could not load movie details.');
@@ -166,7 +282,6 @@ class DownloadTask {
 
 class DownloadManager {
   static final Dio _dio = Dio();
-  static final Map<int, CancelToken> _tokens = {};
 
   static Future<void> download({
     required String url,
@@ -175,22 +290,23 @@ class DownloadManager {
     required Function(String) onComplete,
     required Function(String) onError,
   }) async {
-    final token = CancelToken();
-
     try {
       final directory = await getApplicationDocumentsDirectory();
+
       final safeName = fileName.replaceAll(
         RegExp(r'[^a-zA-Z0-9_-]'),
         '_',
       );
+
       final path = '${directory.path}/$safeName.mp4';
 
       await _dio.download(
         url,
         path,
-        cancelToken: token,
         onReceiveProgress: (received, total) {
-          if (total > 0) onProgress(received / total);
+          if (total > 0) {
+            onProgress(received / total);
+          }
         },
       );
 
@@ -248,7 +364,6 @@ class FlixoraApp extends StatelessWidget {
     );
   }
 }
-
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -262,21 +377,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Timer? _timer;
   Timer? _searchTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   int _slide = 0;
   int _tab = 0;
+
   String _search = '';
   bool _searchLoading = false;
   String? _searchError;
+
+  bool loading = true;
+  bool _online = false;
+  bool _connectionKnown = false;
+  String? homeError;
 
   List<Movie> trending = [];
   List<Movie> popular = [];
   List<Movie> latest = [];
   List<Movie> topRated = [];
   List<Movie> searchResults = [];
-
-  bool loading = true;
-  String? homeError;
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -285,7 +404,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    loadHome();
+    _initializeApp();
+    _listenToConnectivity();
 
     _timer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (!mounted || _tab != 0 || trending.isEmpty) return;
@@ -302,18 +422,117 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _initializeApp() async {
+    await _loadCachedMovies();
+
+    if (!mounted) return;
+
+    final online = await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+
+    if (online) {
+      await loadHome();
+    } else {
+      setState(() {
+        loading = false;
+        if (_allMovies().isEmpty) {
+          homeError = 'offline';
+        }
+      });
+    }
+  }
+
+  Future<void> _loadCachedMovies() async {
+    final results = await Future.wait([
+      MovieCache.getList(MovieCache.trendingKey),
+      MovieCache.getList(MovieCache.popularKey),
+      MovieCache.getList(MovieCache.latestKey),
+      MovieCache.getList(MovieCache.topRatedKey),
+    ]);
+
+    if (!mounted) return;
+
+    setState(() {
+      trending = results[0];
+      popular = results[1];
+      latest = results[2];
+      topRated = results[3];
+      loading = false;
+      homeError = null;
+    });
+  }
+
+  void _listenToConnectivity() {
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((results) async {
+      final hasNetwork = !results.contains(ConnectivityResult.none);
+
+      if (!hasNetwork) {
+        if (!mounted) return;
+
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
+
+        return;
+      }
+
+      final online = await InternetService.isOnline();
+
+      if (!mounted) return;
+
+      final wasOffline = !_online;
+
+      setState(() {
+        _online = online;
+        _connectionKnown = true;
+      });
+
+      if (online && wasOffline) {
+        await loadHome();
+
+        if (_search.trim().isNotEmpty) {
+          searchMovies(_search);
+        }
+      }
+    });
+  }
+
   @override
   void dispose() {
     _timer?.cancel();
     _searchTimer?.cancel();
+    _connectivitySubscription?.cancel();
     _sliderController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> loadHome() async {
+    final online = await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    if (!online) {
+      setState(() {
+        _online = false;
+        loading = false;
+        if (_allMovies().isEmpty) homeError = 'offline';
+      });
+      return;
+    }
+
     setState(() {
-      loading = true;
+      _online = true;
+      _connectionKnown = true;
+      loading = _allMovies().isEmpty;
       homeError = null;
     });
 
@@ -333,12 +552,23 @@ class _HomeScreenState extends State<HomeScreen> {
         latest = results[2];
         topRated = results[3];
         loading = false;
+        homeError = null;
       });
+
+      await Future.wait([
+        MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.popularKey, popular),
+        MovieCache.saveList(MovieCache.latestKey, latest),
+        MovieCache.saveList(MovieCache.topRatedKey, topRated),
+      ]);
     } catch (e) {
       if (!mounted) return;
+
       setState(() {
         loading = false;
-        homeError = e.toString();
+        if (_allMovies().isEmpty) {
+          homeError = e.toString();
+        }
       });
     }
   }
@@ -361,25 +591,60 @@ class _HomeScreenState extends State<HomeScreen> {
       _searchError = null;
     });
 
-    _searchTimer = Timer(const Duration(milliseconds: 600), () async {
-      try {
-        final results = await TmdbService.search(value.trim());
+    _searchTimer = Timer(
+      const Duration(milliseconds: 600),
+      () async {
+        final query = value.trim();
+
+        final online = await InternetService.isOnline();
 
         if (!mounted || _search != value) return;
 
-        setState(() {
-          searchResults = results;
-          _searchLoading = false;
-        });
-      } catch (e) {
-        if (!mounted || _search != value) return;
+        if (!online) {
+          final cached = await MovieCache.getSearch(query);
 
-        setState(() {
-          _searchError = e.toString();
-          _searchLoading = false;
-        });
-      }
-    });
+          if (!mounted || _search != value) return;
+
+          setState(() {
+            _online = false;
+            searchResults = cached;
+            _searchLoading = false;
+            _searchError = cached.isEmpty
+                ? 'offline'
+                : null;
+          });
+
+          return;
+        }
+
+        try {
+          final results = await TmdbService.search(query);
+
+          if (!mounted || _search != value) return;
+
+          setState(() {
+            _online = true;
+            searchResults = results;
+            _searchLoading = false;
+            _searchError = null;
+          });
+
+          await MovieCache.saveSearch(query, results);
+        } catch (e) {
+          if (!mounted || _search != value) return;
+
+          final cached = await MovieCache.getSearch(query);
+
+          if (!mounted || _search != value) return;
+
+          setState(() {
+            searchResults = cached;
+            _searchLoading = false;
+            _searchError = cached.isEmpty ? e.toString() : null;
+          });
+        }
+      },
+    );
   }
 
   void toggleFavourite(Movie movie) {
@@ -398,8 +663,57 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  void openMovie(Movie movie) {
-    Navigator.push(
+  Future<void> openMovie(Movie movie) async {
+    final online = await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+
+    if (!online) {
+      await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NoInternetScreen(
+            onRetry: () async {
+              final connected = await InternetService.isOnline();
+
+              if (!mounted) return false;
+
+              setState(() {
+                _online = connected;
+                _connectionKnown = true;
+              });
+
+              if (connected) {
+                await loadHome();
+              }
+
+              return connected;
+            },
+          ),
+        ),
+      ).then((connected) async {
+        if (!mounted) return;
+
+        if (connected == true) {
+          await _openMovieDetails(movie);
+        }
+      });
+
+      return;
+    }
+
+    await _openMovieDetails(movie);
+  }
+
+  Future<void> _openMovieDetails(Movie movie) async {
+    if (!mounted) return;
+
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MovieDetailsScreen(
@@ -411,9 +725,9 @@ class _HomeScreenState extends State<HomeScreen> {
           onDownload: () => addDownload(movie),
         ),
       ),
-    ).then((_) {
-      if (mounted) setState(() {});
-    });
+    );
+
+    if (mounted) setState(() {});
   }
 
   void addDownload(Movie movie) {
@@ -544,13 +858,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _homePage() {
-    if (loading) {
+    if (loading && _allMovies().isEmpty) {
       return const Center(
         child: CircularProgressIndicator(color: gold),
       );
     }
 
-    if (homeError != null) {
+    if (homeError == 'offline' && _allMovies().isEmpty) {
+      return const NoInternetScreen();
+    }
+
+    if (homeError != null && _allMovies().isEmpty) {
       return _errorView(homeError!, loadHome);
     }
 
@@ -644,9 +962,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: panel,
                 image: movie.backdropUrl.isNotEmpty
                     ? DecorationImage(
-                        image: NetworkImage(movie.backdropUrl),
+                        image: CachedNetworkImageProvider(movie.backdropUrl),
                         fit: BoxFit.cover,
-                        onError: (_, __) {},
                       )
                     : null,
               ),
@@ -793,12 +1110,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   movie.posterUrl.isEmpty
                       ? _posterFallback(145, 190)
-                      : Image.network(
-                          movie.posterUrl,
+                      : CachedNetworkImage(
+                          imageUrl: movie.posterUrl,
                           height: 190,
                           width: 145,
                           fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
+                          placeholder: (_, __) =>
+                              _posterFallback(145, 190),
+                          errorWidget: (_, __, ___) =>
                               _posterFallback(145, 190),
                         ),
                   Positioned(
@@ -1038,6 +1357,169 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+class NoInternetScreen extends StatefulWidget {
+  final Future<bool> Function()? onRetry;
+
+  const NoInternetScreen({
+    super.key,
+    this.onRetry,
+  });
+
+  @override
+  State<NoInternetScreen> createState() => _NoInternetScreenState();
+}
+
+class _NoInternetScreenState extends State<NoInternetScreen> {
+  bool checking = false;
+
+  Future<void> retry() async {
+    setState(() => checking = true);
+
+    final connected = widget.onRetry != null
+        ? await widget.onRetry!()
+        : await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    setState(() => checking = false);
+
+    if (connected) {
+      if (widget.onRetry != null) {
+        Navigator.pop(context, true);
+      } else {
+        Navigator.pop(context);
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Still offline. Please check your connection.',
+          ),
+          backgroundColor: panel,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: bg,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.wifi_off_rounded,
+                  color: gold,
+                  size: 85,
+                ),
+                const SizedBox(height: 28),
+                const Text(
+                  'Connect to the internet',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 25,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                const Text(
+                  'When your internet connection is restored:',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Explore various movies, TV series and more',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'HD',
+                  style: TextStyle(
+                    color: gold,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'All free download with less data but good quality',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 35),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: checking ? null : retry,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: gold,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                    ),
+                    child: checking
+                        ? const SizedBox(
+                            height: 22,
+                            width: 22,
+                            child: CircularProgressIndicator(
+                              color: Colors.black,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Retry',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      AppSettings.openAppSettings(
+                        type: AppSettingsType.wifi,
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: gold,
+                      side: const BorderSide(color: gold),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                    ),
+                    child: const Text(
+                      'Go to Settings',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> downloads;
 
@@ -1105,8 +1587,8 @@ class DownloadsScreen extends StatelessWidget {
                   child: ListTile(
                     leading: item.poster.isEmpty
                         ? const Icon(Icons.movie, color: gold)
-                        : Image.network(
-                            item.poster,
+                        : CachedNetworkImage(
+                            imageUrl: item.poster,
                             width: 48,
                             fit: BoxFit.cover,
                           ),
@@ -1174,6 +1656,18 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   }
 
   Future<void> loadDetails() async {
+    final online = await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    if (!online) {
+      setState(() {
+        detailsLoading = false;
+        detailsError = 'Connect to the internet to load movie details.';
+      });
+      return;
+    }
+
     try {
       final data = await TmdbService.details(widget.movie.id);
 
@@ -1182,6 +1676,7 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
       setState(() {
         extraDetails = data;
         detailsLoading = false;
+        detailsError = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -1224,10 +1719,12 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
             flexibleSpace: FlexibleSpaceBar(
               background: movie.backdropUrl.isEmpty
                   ? Container(color: panel)
-                  : Image.network(
-                      movie.backdropUrl,
+                  : CachedNetworkImage(
+                      imageUrl: movie.backdropUrl,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(color: panel),
+                      placeholder: (_, __) => Container(color: panel),
+                      errorWidget: (_, __, ___) =>
+                          Container(color: panel),
                     ),
             ),
           ),
@@ -1255,6 +1752,11 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                   else if (detailsError == null && genres.isNotEmpty)
                     Text(
                       genres,
+                      style: const TextStyle(color: Colors.white54),
+                    )
+                  else if (detailsError != null)
+                    Text(
+                      detailsError!,
                       style: const TextStyle(color: Colors.white54),
                     ),
                   const SizedBox(height: 24),
@@ -1287,8 +1789,6 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     ),
                   ],
                   const SizedBox(height: 28),
-
-                  // Watch button
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -1306,8 +1806,6 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-
-                  // Download button
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -1325,7 +1823,6 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-
                   Row(
                     children: [
                       Expanded(
@@ -1416,16 +1913,22 @@ class MoviePlayerScreen extends StatefulWidget {
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   late VideoPlayerController controller;
+
   bool ready = false;
   bool controlsVisible = true;
   double volume = 1;
   double speed = 1;
+
   Timer? hideTimer;
 
   @override
   void initState() {
     super.initState();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.immersiveSticky,
+    );
+
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
@@ -1437,6 +1940,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     controller.initialize().then((_) {
       if (!mounted) return;
+
       setState(() => ready = true);
       controller.play();
       resetHideTimer();
@@ -1447,6 +1951,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void resetHideTimer() {
     hideTimer?.cancel();
+
     hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && controller.value.isPlaying) {
         setState(() => controlsVisible = false);
@@ -1456,12 +1961,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void toggleControls() {
     setState(() => controlsVisible = !controlsVisible);
+
     if (controlsVisible) resetHideTimer();
   }
 
   String formatTime(Duration duration) {
-    final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    final minutes =
+        duration.inMinutes.remainder(60).toString().padLeft(2, '0');
+
+    final seconds =
+        duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+
     final hours = duration.inHours;
 
     return hours > 0
@@ -1473,11 +1983,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void dispose() {
     hideTimer?.cancel();
     controller.dispose();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.edgeToEdge,
+    );
+
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+
     super.dispose();
   }
 
@@ -1513,7 +2028,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           children: [
                             IconButton(
                               onPressed: () => Navigator.pop(context),
-                              icon: const Icon(Icons.arrow_back, color: white),
+                              icon: const Icon(
+                                Icons.arrow_back,
+                                color: white,
+                              ),
                             ),
                             Expanded(
                               child: Text(
@@ -1537,6 +2055,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                             iconSize: 38,
                             onPressed: () {
                               final position = controller.value.position;
+
                               controller.seekTo(
                                 position - const Duration(seconds: 10),
                               );
@@ -1555,6 +2074,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                     ? controller.pause()
                                     : controller.play();
                               });
+
                               resetHideTimer();
                             },
                             icon: Icon(
@@ -1570,7 +2090,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                             onPressed: () {
                               final position = controller.value.position;
                               final duration = controller.value.duration;
-                              final next = position + const Duration(seconds: 10);
+
+                              final next = position +
+                                  const Duration(seconds: 10);
+
                               controller.seekTo(
                                 next > duration ? duration : next,
                               );
@@ -1616,7 +2139,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                             ),
                             Row(
                               children: [
-                                const Icon(Icons.volume_up, color: white, size: 19),
+                                const Icon(
+                                  Icons.volume_up,
+                                  color: white,
+                                  size: 19,
+                                ),
                                 Expanded(
                                   child: Slider(
                                     value: volume,
@@ -1638,7 +2165,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   },
                                   itemBuilder: (_) => [
                                     for (final value in [
-                                      0.5, 0.75, 1.0, 1.25, 1.5, 2.0
+                                      0.5,
+                                      0.75,
+                                      1.0,
+                                      1.25,
+                                      1.5,
+                                      2.0,
                                     ])
                                       PopupMenuItem(
                                         value: value,
