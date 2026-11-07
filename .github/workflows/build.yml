@@ -1,3 +1,4 @@
+
 name: Build FLIXORA APK
 
 on:
@@ -27,6 +28,20 @@ jobs:
 
       - name: Generate Android project
         run: flutter create --platforms=android --project-name=flixora --org=com.flixora .
+
+      - name: Ensure Internet permission
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
+
+          if permission not in s:
+              s = s.replace('<application', f'    {permission}\n    <application', 1)
+              p.write_text(s)
+          PY
 
       - name: Install dependencies
         run: flutter pub get
