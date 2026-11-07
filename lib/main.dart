@@ -120,15 +120,20 @@ class MovieCache {
   static const String latestKey = 'flixora_latest';
   static const String topRatedKey = 'flixora_top_rated';
 
+  static const String favouritesKey = 'flixora_favourites';
+  static const String savedKey = 'flixora_saved';
+
   static Future<void> saveList(
     String key,
     List<Movie> movies,
   ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
+
       final encoded = jsonEncode(
         movies.map((movie) => movie.toJson()).toList(),
       );
+
       await prefs.setString(key, encoded);
     } catch (_) {}
   }
@@ -167,6 +172,50 @@ class MovieCache {
     final key = 'flixora_search_${query.trim().toLowerCase()}';
     return getList(key);
   }
+
+  // Favourite IDs permanently save
+  static Future<Set<int>> getFavourites() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return (prefs.getStringList(favouritesKey) ?? [])
+          .map(int.parse)
+          .toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> saveFavourites(Set<int> ids) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        favouritesKey,
+        ids.map((id) => id.toString()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  // Saved movie IDs permanently save
+  static Future<Set<int>> getSaved() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return (prefs.getStringList(savedKey) ?? [])
+          .map(int.parse)
+          .toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> saveSaved(Set<int> ids) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        savedKey,
+        ids.map((id) => id.toString()).toList(),
+      );
+    } catch (_) {}
+  }
 }
 
 class TmdbService {
@@ -198,9 +247,11 @@ class TmdbService {
 
     return results
         .whereType<Map>()
-        .map((item) => Movie.fromJson(
-              Map<String, dynamic>.from(item),
-            ))
+        .map(
+          (item) => Movie.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
         .toList();
   }
 
@@ -232,9 +283,11 @@ class TmdbService {
 
     return results
         .whereType<Map>()
-        .map((item) => Movie.fromJson(
-              Map<String, dynamic>.from(item),
-            ))
+        .map(
+          (item) => Movie.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
         .toList();
   }
 
@@ -313,7 +366,7 @@ class DownloadManager {
       onComplete(path);
     } on DioException catch (e) {
       onError(
-        CancelToken.isCancel(e)
+        e.type == DioExceptionType.cancel
             ? 'Download cancelled'
             : 'Download failed',
       );
@@ -377,7 +430,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Timer? _timer;
   Timer? _searchTimer;
-  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+
+  StreamSubscription<List<ConnectivityResult>>?
+      _connectivitySubscription;
 
   int _slide = 0;
   int _tab = 0;
@@ -389,6 +444,8 @@ class _HomeScreenState extends State<HomeScreen> {
   bool loading = true;
   bool _online = false;
   bool _connectionKnown = false;
+  bool _refreshing = false;
+
   String? homeError;
 
   List<Movie> trending = [];
@@ -404,26 +461,31 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+
     _initializeApp();
     _listenToConnectivity();
 
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!mounted || _tab != 0 || trending.isEmpty) return;
+    _timer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) {
+        if (!mounted || _tab != 0 || trending.isEmpty) return;
 
-      _slide = (_slide + 1) % trending.length;
+        _slide = (_slide + 1) % trending.length;
 
-      if (_sliderController.hasClients) {
-        _sliderController.animateToPage(
-          _slide,
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeInOut,
-        );
-      }
-    });
+        if (_sliderController.hasClients) {
+          _sliderController.animateToPage(
+            _slide,
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeInOut,
+          );
+        }
+      },
+    );
   }
 
   Future<void> _initializeApp() async {
     await _loadCachedMovies();
+    await _loadSavedPreferences();
 
     if (!mounted) return;
 
@@ -448,6 +510,25 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _loadSavedPreferences() async {
+    final results = await Future.wait([
+      MovieCache.getFavourites(),
+      MovieCache.getSaved(),
+    ]);
+
+    if (!mounted) return;
+
+    setState(() {
+      _favourites
+        ..clear()
+        ..addAll(results[0]);
+
+      _saved
+        ..clear()
+        ..addAll(results[1]);
+    });
+  }
+
   Future<void> _loadCachedMovies() async {
     final results = await Future.wait([
       MovieCache.getList(MovieCache.trendingKey),
@@ -470,39 +551,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _listenToConnectivity() {
     _connectivitySubscription =
-        Connectivity().onConnectivityChanged.listen((results) async {
-      final hasNetwork = !results.contains(ConnectivityResult.none);
+        Connectivity().onConnectivityChanged.listen(
+      (results) async {
+        final hasNetwork =
+            !results.contains(ConnectivityResult.none);
 
-      if (!hasNetwork) {
+        if (!hasNetwork) {
+          if (!mounted) return;
+
+          setState(() {
+            _online = false;
+            _connectionKnown = true;
+
+            if (_allMovies().isEmpty) {
+              homeError = 'offline';
+            }
+          });
+
+          return;
+        }
+
+        final online = await InternetService.isOnline();
+
         if (!mounted) return;
 
+        final wasOffline = !_online;
+
         setState(() {
-          _online = false;
+          _online = online;
           _connectionKnown = true;
         });
 
-        return;
-      }
+        if (online && wasOffline) {
+          await loadHome();
 
-      final online = await InternetService.isOnline();
-
-      if (!mounted) return;
-
-      final wasOffline = !_online;
-
-      setState(() {
-        _online = online;
-        _connectionKnown = true;
-      });
-
-      if (online && wasOffline) {
-        await loadHome();
-
-        if (_search.trim().isNotEmpty) {
-          searchMovies(_search);
+          if (_search.trim().isNotEmpty) {
+            searchMovies(_search);
+          }
         }
-      }
-    });
+      },
+    );
   }
 
   @override
@@ -516,27 +604,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> loadHome() async {
-    final online = await InternetService.isOnline();
+    if (_refreshing) return;
 
-    if (!mounted) return;
-
-    if (!online) {
-      setState(() {
-        _online = false;
-        loading = false;
-        if (_allMovies().isEmpty) homeError = 'offline';
-      });
-      return;
-    }
-
-    setState(() {
-      _online = true;
-      _connectionKnown = true;
-      loading = _allMovies().isEmpty;
-      homeError = null;
-    });
+    _refreshing = true;
 
     try {
+      final online = await InternetService.isOnline();
+
+      if (!mounted) return;
+
+      if (!online) {
+        setState(() {
+          _online = false;
+          loading = false;
+
+          if (_allMovies().isEmpty) {
+            homeError = 'offline';
+          }
+        });
+
+        return;
+      }
+
+      setState(() {
+        _online = true;
+        _connectionKnown = true;
+        loading = _allMovies().isEmpty;
+        homeError = null;
+      });
+
       final results = await Future.wait([
         TmdbService.getMovies('trending/movie/week'),
         TmdbService.getMovies('movie/popular'),
@@ -566,10 +662,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         loading = false;
+
         if (_allMovies().isEmpty) {
           homeError = e.toString();
         }
       });
+    } finally {
+      _refreshing = false;
     }
   }
 
@@ -583,6 +682,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _searchError = null;
         _searchLoading = false;
       });
+
       return;
     }
 
@@ -609,9 +709,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _online = false;
             searchResults = cached;
             _searchLoading = false;
-            _searchError = cached.isEmpty
-                ? 'offline'
-                : null;
+            _searchError = cached.isEmpty ? 'offline' : null;
           });
 
           return;
@@ -631,8 +729,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
           await MovieCache.saveSearch(query, results);
         } catch (e) {
-          if (!mounted || _search != value) return;
-
           final cached = await MovieCache.getSearch(query);
 
           if (!mounted || _search != value) return;
@@ -647,20 +743,24 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void toggleFavourite(Movie movie) {
+  Future<void> toggleFavourite(Movie movie) async {
     setState(() {
       if (!_favourites.add(movie.id)) {
         _favourites.remove(movie.id);
       }
     });
+
+    await MovieCache.saveFavourites(_favourites);
   }
 
-  void toggleSaved(Movie movie) {
+  Future<void> toggleSaved(Movie movie) async {
     setState(() {
       if (!_saved.add(movie.id)) {
         _saved.remove(movie.id);
       }
     });
+
+    await MovieCache.saveSaved(_saved);
   }
 
   Future<void> openMovie(Movie movie) async {
@@ -796,7 +896,11 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
       child: Row(
         children: [
-          const Icon(Icons.movie_creation_outlined, color: gold, size: 31),
+          const Icon(
+            Icons.movie_creation_outlined,
+            color: gold,
+            size: 31,
+          ),
           const SizedBox(width: 9),
           const Text(
             'Flixora',
@@ -865,7 +969,25 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (homeError == 'offline' && _allMovies().isEmpty) {
-      return const NoInternetScreen();
+      return NoInternetScreen(
+        onRetry: () async {
+          final connected = await InternetService.isOnline();
+
+          if (!mounted) return false;
+
+          setState(() {
+            _online = connected;
+            _connectionKnown = true;
+          });
+
+          if (connected) {
+            await loadHome();
+          }
+
+          return connected;
+        },
+        inline: true,
+      );
     }
 
     if (homeError != null && _allMovies().isEmpty) {
@@ -904,10 +1026,18 @@ class _HomeScreenState extends State<HomeScreen> {
             child: _sectionTitle('Featured', 'PREMIUM CINEMA'),
           ),
           SliverToBoxAdapter(child: _heroSlider()),
-          SliverToBoxAdapter(child: _movieSection('Trending Now', trending)),
-          SliverToBoxAdapter(child: _movieSection('Popular Movies', popular)),
-          SliverToBoxAdapter(child: _movieSection('Now Playing', latest)),
-          SliverToBoxAdapter(child: _movieSection('Top Rated', topRated)),
+          SliverToBoxAdapter(
+            child: _movieSection('Trending Now', trending),
+          ),
+          SliverToBoxAdapter(
+            child: _movieSection('Popular Movies', popular),
+          ),
+          SliverToBoxAdapter(
+            child: _movieSection('Now Playing', latest),
+          ),
+          SliverToBoxAdapter(
+            child: _movieSection('Top Rated', topRated),
+          ),
         ],
         const SliverToBoxAdapter(child: SizedBox(height: 25)),
       ],
@@ -949,7 +1079,9 @@ class _HomeScreenState extends State<HomeScreen> {
       child: PageView.builder(
         controller: _sliderController,
         itemCount: trending.length,
-        onPageChanged: (index) => setState(() => _slide = index),
+        onPageChanged: (index) {
+          setState(() => _slide = index);
+        },
         itemBuilder: (context, index) {
           final movie = trending[index];
 
@@ -962,7 +1094,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: panel,
                 image: movie.backdropUrl.isNotEmpty
                     ? DecorationImage(
-                        image: CachedNetworkImageProvider(movie.backdropUrl),
+                        image: CachedNetworkImageProvider(
+                          movie.backdropUrl,
+                        ),
                         fit: BoxFit.cover,
                       )
                     : null,
@@ -974,7 +1108,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Colors.transparent, Color(0xE6000000)],
+                    colors: [
+                      Colors.transparent,
+                      Color(0xE6000000),
+                    ],
                   ),
                 ),
                 child: Column(
@@ -1031,7 +1168,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           height: 6,
                           width: i == _slide % 8 ? 22 : 6,
                           decoration: BoxDecoration(
-                            color: i == _slide % 8 ? gold : Colors.white54,
+                            color: i == _slide % 8
+                                ? gold
+                                : Colors.white54,
                             borderRadius: BorderRadius.circular(10),
                           ),
                         ),
@@ -1088,7 +1227,9 @@ class _HomeScreenState extends State<HomeScreen> {
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
             itemCount: list.length,
-            itemBuilder: (context, index) => _movieCard(list[index]),
+            itemBuilder: (context, index) {
+              return _movieCard(list[index]);
+            },
           ),
         ),
       ],
@@ -1166,7 +1307,11 @@ class _HomeScreenState extends State<HomeScreen> {
       height: height,
       width: width,
       color: panel,
-      child: const Icon(Icons.movie_outlined, size: 45, color: gold),
+      child: const Icon(
+        Icons.movie_outlined,
+        size: 45,
+        color: gold,
+      ),
     );
   }
 
@@ -1200,7 +1345,12 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Movie> _allMovies() {
     final all = <int, Movie>{};
 
-    for (final list in [trending, popular, latest, topRated]) {
+    for (final list in [
+      trending,
+      popular,
+      latest,
+      topRated,
+    ]) {
       for (final movie in list) {
         all[movie.id] = movie;
       }
@@ -1218,7 +1368,10 @@ class _HomeScreenState extends State<HomeScreen> {
         SliverToBoxAdapter(child: _header()),
         SliverToBoxAdapter(child: _searchBox()),
         SliverToBoxAdapter(
-          child: _sectionTitle('All Movies', '${list.length} MOVIES'),
+          child: _sectionTitle(
+            'All Movies',
+            '${list.length} MOVIES',
+          ),
         ),
         _movieGridSliver(list),
         const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -1236,7 +1389,10 @@ class _HomeScreenState extends State<HomeScreen> {
       slivers: [
         SliverToBoxAdapter(child: _header()),
         SliverToBoxAdapter(
-          child: _sectionTitle('Saved Movies', '${list.length} SAVED'),
+          child: _sectionTitle(
+            'Saved Movies',
+            '${list.length} SAVED',
+          ),
         ),
         if (list.isEmpty)
           const SliverToBoxAdapter(
@@ -1244,7 +1400,11 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: EdgeInsets.all(45),
               child: Column(
                 children: [
-                  Icon(Icons.bookmark_border, size: 65, color: gold),
+                  Icon(
+                    Icons.bookmark_border,
+                    size: 65,
+                    color: gold,
+                  ),
                   SizedBox(height: 15),
                   Text('No saved movies yet'),
                   SizedBox(height: 6),
@@ -1276,7 +1436,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const CircleAvatar(
               radius: 42,
               backgroundColor: panel,
-              child: Icon(Icons.person, size: 48, color: gold),
+              child: Icon(
+                Icons.person,
+                size: 48,
+                color: gold,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -1308,7 +1472,10 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Text(
               'This product uses the TMDB API but is not endorsed or certified by TMDB.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white38, fontSize: 11),
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 11,
+              ),
             ),
           ),
         ],
@@ -1327,7 +1494,10 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
             const Text(
               'Could not load movies',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 10),
             Text(
@@ -1352,17 +1522,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _message(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: panel),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: panel,
+      ),
     );
   }
 }
 
 class NoInternetScreen extends StatefulWidget {
   final Future<bool> Function()? onRetry;
+  final bool inline;
 
   const NoInternetScreen({
     super.key,
     this.onRetry,
+    this.inline = false,
   });
 
   @override
@@ -1375,19 +1550,23 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
   Future<void> retry() async {
     setState(() => checking = true);
 
-    final connected = widget.onRetry != null
-        ? await widget.onRetry!()
-        : await InternetService.isOnline();
+    bool connected = false;
+
+    try {
+      connected = widget.onRetry != null
+          ? await widget.onRetry!()
+          : await InternetService.isOnline();
+    } catch (_) {
+      connected = false;
+    }
 
     if (!mounted) return;
 
     setState(() => checking = false);
 
     if (connected) {
-      if (widget.onRetry != null) {
+      if (!widget.inline) {
         Navigator.pop(context, true);
-      } else {
-        Navigator.pop(context);
       }
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1471,7 +1650,9 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: gold,
                       foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 15,
+                      ),
                     ),
                     child: checking
                         ? const SizedBox(
@@ -1503,7 +1684,9 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: gold,
                       side: const BorderSide(color: gold),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 15,
+                      ),
                     ),
                     child: const Text(
                       'Go to Settings',
@@ -1518,8 +1701,7 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
       ),
     );
   }
-}
-
+} 
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> downloads;
 
@@ -1535,7 +1717,10 @@ class DownloadsScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text(
           'Downloads',
-          style: TextStyle(color: gold, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: gold,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
       body: downloads.isEmpty
@@ -1605,7 +1790,9 @@ class DownloadsScreen extends StatelessWidget {
                         const SizedBox(height: 5),
                         Text(
                           '${(item.progress * 100).toStringAsFixed(0)}% • ${item.status}',
-                          style: const TextStyle(color: Colors.white54),
+                          style: const TextStyle(
+                            color: Colors.white54,
+                          ),
                         ),
                       ],
                     ),
@@ -1636,7 +1823,8 @@ class MovieDetailsScreen extends StatefulWidget {
   });
 
   @override
-  State<MovieDetailsScreen> createState() => _MovieDetailsScreenState();
+  State<MovieDetailsScreen> createState() =>
+      _MovieDetailsScreenState();
 }
 
 class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
@@ -1650,8 +1838,10 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
   @override
   void initState() {
     super.initState();
+
     favourite = widget.isFavourite;
     saved = widget.isSaved;
+
     loadDetails();
   }
 
@@ -1663,8 +1853,10 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
     if (!online) {
       setState(() {
         detailsLoading = false;
-        detailsError = 'Connect to the internet to load movie details.';
+        detailsError =
+            'Connect to the internet to load movie details.';
       });
+
       return;
     }
 
@@ -1722,7 +1914,8 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                   : CachedNetworkImage(
                       imageUrl: movie.backdropUrl,
                       fit: BoxFit.cover,
-                      placeholder: (_, __) => Container(color: panel),
+                      placeholder: (_, __) =>
+                          Container(color: panel),
                       errorWidget: (_, __, ___) =>
                           Container(color: panel),
                     ),
@@ -1795,13 +1988,17 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: gold,
                         foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 15,
+                        ),
                       ),
                       onPressed: () => showSourceMessage('playback'),
                       icon: const Icon(Icons.play_arrow),
                       label: const Text(
                         'Watch',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ),
@@ -1812,13 +2009,17 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: gold,
                         side: const BorderSide(color: gold),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                        ),
                       ),
                       onPressed: widget.onDownload,
                       icon: const Icon(Icons.download),
                       label: const Text(
                         'Download',
-                        style: TextStyle(fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                   ),
@@ -1833,14 +2034,19 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                           ),
                           onPressed: () {
                             widget.onFavourite();
-                            setState(() => favourite = !favourite);
+
+                            setState(() {
+                              favourite = !favourite;
+                            });
                           },
                           icon: Icon(
                             favourite
                                 ? Icons.favorite
                                 : Icons.favorite_border,
                           ),
-                          label: Text(favourite ? 'Liked' : 'Favourite'),
+                          label: Text(
+                            favourite ? 'Liked' : 'Favourite',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -1852,7 +2058,10 @@ class _MovieDetailsScreenState extends State<MovieDetailsScreen> {
                           ),
                           onPressed: () {
                             widget.onSave();
-                            setState(() => saved = !saved);
+
+                            setState(() {
+                              saved = !saved;
+                            });
 
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -1908,7 +2117,8 @@ class MoviePlayerScreen extends StatefulWidget {
   });
 
   @override
-  State<MoviePlayerScreen> createState() => _MoviePlayerScreenState();
+  State<MoviePlayerScreen> createState() =>
+      _MoviePlayerScreenState();
 }
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
@@ -1916,6 +2126,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   bool ready = false;
   bool controlsVisible = true;
+
   double volume = 1;
   double speed = 1;
 
@@ -1942,27 +2153,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (!mounted) return;
 
       setState(() => ready = true);
+
       controller.play();
       resetHideTimer();
     }).catchError((_) {
-      if (mounted) setState(() => ready = false);
+      if (mounted) {
+        setState(() => ready = false);
+      }
     });
   }
 
   void resetHideTimer() {
     hideTimer?.cancel();
 
-    hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && controller.value.isPlaying) {
-        setState(() => controlsVisible = false);
-      }
-    });
+    hideTimer = Timer(
+      const Duration(seconds: 4),
+      () {
+        if (mounted && controller.value.isPlaying) {
+          setState(() => controlsVisible = false);
+        }
+      },
+    );
   }
 
   void toggleControls() {
-    setState(() => controlsVisible = !controlsVisible);
+    setState(() {
+      controlsVisible = !controlsVisible;
+    });
 
-    if (controlsVisible) resetHideTimer();
+    if (controlsVisible) {
+      resetHideTimer();
+    }
   }
 
   String formatTime(Duration duration) {
@@ -2057,7 +2278,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               final position = controller.value.position;
 
                               controller.seekTo(
-                                position - const Duration(seconds: 10),
+                                position -
+                                    const Duration(seconds: 10),
                               );
                             },
                             icon: const Icon(
@@ -2107,7 +2329,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       ),
                       const Spacer(),
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 15),
+                        padding: const EdgeInsets.fromLTRB(
+                          18,
+                          0,
+                          18,
+                          15,
+                        ),
                         child: Column(
                           children: [
                             Row(
