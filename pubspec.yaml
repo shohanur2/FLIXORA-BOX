@@ -1,4 +1,3 @@
-
 name: flixora
 description: Flixora - Premium Cinematic Movie App
 publish_to: 'none'
@@ -21,6 +20,7 @@ dependencies:
 
   # Images and Fonts
   cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.1
   google_fonts: ^6.2.1
 
   # Storage and Downloads
@@ -28,7 +28,7 @@ dependencies:
   path_provider: ^2.1.4
 
   # Backend
-  supabase_flutter: ^2.8.0
+  supabase_flutter: ^2.13.0
 
   # Video Player
   media_kit: ^1.2.6
