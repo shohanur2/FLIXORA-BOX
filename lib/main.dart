@@ -536,469 +536,6 @@ class DownloadManager {
     }
   }
 }
-class FlixoraApp extends StatelessWidget {
-  const FlixoraApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Flixora',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: bg,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: gold,
-          brightness: Brightness.dark,
-          primary: gold,
-          secondary: goldLight,
-          surface: panel,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: bg,
-          foregroundColor: white,
-        ),
-        navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFF111111),
-          indicatorColor: gold.withValues(alpha: 0.18),
-          labelTextStyle: WidgetStateProperty.resolveWith((states) {
-            return TextStyle(
-              color: states.contains(WidgetState.selected)
-                  ? gold
-                  : Colors.white54,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            );
-          }),
-        ),
-        useMaterial3: true,
-      ),
-      home: const HomeScreen(),
-    );
-  }
-}
-
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends State<HomeScreen> {
-  final PageController _sliderController = PageController();
-  final TextEditingController _searchController = TextEditingController();
-
-  Timer? _timer;
-  Timer? _searchTimer;
-
-  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
-
-  int _slide = 0;
-  int _tab = 0;
-
-  String _search = '';
-  bool _searchLoading = false;
-  String? _searchError;
-
-  bool loading = true;
-  bool _online = false;
-  bool _connectionKnown = false;
-  bool _refreshing = false;
-
-  String? homeError;
-
-  List<Movie> trending = [];
-  List<Movie> popular = [];
-  List<Movie> latest = [];
-  List<Movie> topRated = [];
-  List<Movie> flixoraMovies = [];
-  List<Movie> searchResults = [];
-
-  final Set<int> _favourites = {};
-  final Set<int> _saved = {};
-  final List<DownloadTask> _downloads = [];
-
-  Set<int> get _flixoraTmdbIds {
-    return flixoraMovies
-        .map((movie) => movie.tmdbId)
-        .where((id) => id > 0)
-        .toSet();
-  }
-
-  List<Movie> _withoutFlixoraDuplicates(List<Movie> movies) {
-    final adminIds = _flixoraTmdbIds;
-
-    return movies.where((movie) {
-      if (movie.tmdbId <= 0) return true;
-      return !adminIds.contains(movie.tmdbId);
-    }).toList();
-  }
-
-  List<Movie> _deduplicateMovies(List<Movie> movies) {
-    final seenTmdbIds = <int>{};
-    final seenFallbackIds = <String>{};
-
-    return movies.where((movie) {
-      if (movie.tmdbId > 0) {
-        return seenTmdbIds.add(movie.tmdbId);
-      }
-
-      final fallbackKey = '${movie.source}:${movie.id}';
-      return seenFallbackIds.add(fallbackKey);
-    }).toList();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-
-    _initializeApp();
-    _listenToConnectivity();
-
-    _timer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) {
-        if (!mounted || _tab != 0) return;
-
-        final slideCount = _withoutFlixoraDuplicates(trending).length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
-
-        if (visibleCount == 0) return;
-
-        _slide = (_slide + 1) % visibleCount;
-
-        if (_sliderController.hasClients) {
-          _sliderController.animateToPage(
-            _slide,
-            duration: const Duration(milliseconds: 600),
-            curve: Curves.easeInOut,
-          );
-        }
-      },
-    );
-  }
-
-  Future<void> _initializeApp() async {
-    await _loadCachedMovies();
-    await _loadSavedPreferences();
-
-    if (!mounted) return;
-
-    final online = await InternetService.isOnline();
-
-    if (!mounted) return;
-
-    setState(() {
-      _online = online;
-      _connectionKnown = true;
-    });
-
-    if (online) {
-      await loadHome();
-    } else {
-      setState(() {
-        loading = false;
-        if (_allMovies().isEmpty) homeError = 'offline';
-      });
-    }
-  }
-
-  Future<void> _loadSavedPreferences() async {
-    final results = await Future.wait<Set<int>>([
-      MovieCache.getFavourites(),
-      MovieCache.getSaved(),
-    ]);
-
-    if (!mounted) return;
-
-    setState(() {
-      _favourites
-        ..clear()
-        ..addAll(results[0]);
-
-      _saved
-        ..clear()
-        ..addAll(results[1]);
-    });
-  }
-
-  Future<void> _loadCachedMovies() async {
-    final results = await Future.wait<List<Movie>>([
-      MovieCache.getList(MovieCache.trendingKey),
-      MovieCache.getList(MovieCache.popularKey),
-      MovieCache.getList(MovieCache.latestKey),
-      MovieCache.getList(MovieCache.topRatedKey),
-      MovieCache.getList(MovieCache.flixoraKey),
-    ]);
-
-    if (!mounted) return;
-
-    setState(() {
-      trending = results[0];
-      popular = results[1];
-      latest = results[2];
-      topRated = results[3];
-      flixoraMovies = results[4];
-      loading = false;
-      homeError = null;
-    });
-  }
-
-  void _listenToConnectivity() {
-    _connectivitySubscription =
-        Connectivity().onConnectivityChanged.listen(
-      (results) async {
-        final hasNetwork = !results.contains(ConnectivityResult.none);
-
-        if (!hasNetwork) {
-          if (!mounted) return;
-
-          setState(() {
-            _online = false;
-            _connectionKnown = true;
-            if (_allMovies().isEmpty) homeError = 'offline';
-          });
-          return;
-        }
-
-        final online = await InternetService.isOnline();
-
-        if (!mounted) return;
-
-        final wasOffline = !_online;
-
-        setState(() {
-          _online = online;
-          _connectionKnown = true;
-        });
-
-        if (online && wasOffline) {
-          await loadHome();
-
-          if (_search.trim().isNotEmpty) {
-            searchMovies(_search);
-          }
-        }
-      },
-    );
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _searchTimer?.cancel();
-    _connectivitySubscription?.cancel();
-    _sliderController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  Future<void> loadHome() async {
-    if (_refreshing) return;
-
-    _refreshing = true;
-
-    try {
-      final online = await InternetService.isOnline();
-
-      if (!mounted) return;
-
-      if (!online) {
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-          loading = false;
-          if (_allMovies().isEmpty) homeError = 'offline';
-        });
-        return;
-      }
-
-      setState(() {
-        _online = true;
-        _connectionKnown = true;
-        loading = _allMovies().isEmpty;
-        homeError = null;
-      });
-
-      final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/popular')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/now_playing')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/top_rated')
-            .catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies()
-            .catchError((_) => <Movie>[]),
-      ]);
-
-      if (!mounted) return;
-
-      setState(() {
-        trending = results[0];
-        popular = results[1];
-        latest = results[2];
-        topRated = results[3];
-        flixoraMovies = results[4];
-        loading = false;
-
-        if (_allMovies().isEmpty) {
-          homeError = 'Unable to load movies.';
-        } else {
-          homeError = null;
-        }
-
-        final slideCount =
-            _withoutFlixoraDuplicates(trending).length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
-
-        if (visibleCount == 0) {
-          _slide = 0;
-        } else if (_slide >= visibleCount) {
-          _slide = 0;
-        }
-      });
-
-      await Future.wait([
-        MovieCache.saveList(MovieCache.trendingKey, trending),
-        MovieCache.saveList(MovieCache.popularKey, popular),
-        MovieCache.saveList(MovieCache.latestKey, latest),
-        MovieCache.saveList(MovieCache.topRatedKey, topRated),
-        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
-      ]);
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        loading = false;
-        if (_allMovies().isEmpty) homeError = e.toString();
-      });
-    } finally {
-      _refreshing = false;
-    }
-  }
-
-  List<Movie> _allMovies() {
-    final combined = <Movie>[
-      ...flixoraMovies,
-      ...trending,
-      ...popular,
-      ...latest,
-      ...topRated,
-    ];
-
-    return _deduplicateMovies(combined);
-  }
-
-  Future<void> searchMovies(String query) async {
-    final text = query.trim();
-
-    if (text.isEmpty) {
-      if (!mounted) return;
-
-      setState(() {
-        _search = '';
-        searchResults = [];
-        _searchError = null;
-        _searchLoading = false;
-      });
-      return;
-    }
-
-    if (!mounted) return;
-
-    setState(() {
-      _search = text;
-      _searchLoading = true;
-      _searchError = null;
-    });
-
-    final results = await Future.wait<List<Movie>>([
-      TmdbService.search(text).catchError((_) => <Movie>[]),
-      FlixoraMovieService.searchPublishedMovies(text)
-          .catchError((_) => <Movie>[]),
-    ]);
-
-    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
-      return;
-    }
-
-    final combined = <Movie>[
-      ...results[1],
-      ...results[0],
-    ];
-
-    final unique = _deduplicateMovies(combined);
-
-    setState(() {
-      searchResults = unique;
-      _searchLoading = false;
-      _searchError = unique.isEmpty ? 'No movies found.' : null;
-    });
-
-    await MovieCache.saveSearch(text, unique);
-  }
-
-  void _onSearchChanged(String value) {
-    _searchTimer?.cancel();
-
-    if (value.trim().isEmpty) {
-      setState(() {
-        _search = '';
-        searchResults = [];
-        _searchError = null;
-        _searchLoading = false;
-      });
-      return;
-    }
-
-    _searchTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => searchMovies(value),
-    );
-  }
-
-  Future<void> _toggleFavourite(Movie movie) async {
-    setState(() {
-      if (_favourites.contains(movie.id)) {
-        _favourites.remove(movie.id);
-      } else {
-        _favourites.add(movie.id);
-      }
-    });
-
-    await MovieCache.saveFavourites(_favourites);
-  }
-
-  Future<void> _toggleSaved(Movie movie) async {
-    setState(() {
-      if (_saved.contains(movie.id)) {
-        _saved.remove(movie.id);
-      } else {
-        _saved.add(movie.id);
-      }
-    });
-
-    await MovieCache.saveSaved(_saved);
-  }
-
-  Future<void> addDownload(Movie movie) async {
-    if (movie.downloadUrl.trim().isEmpty) {
-      _showMessage('Download is not available for this movie.');
-      return;
-    }
-
-    if (_downloads.any(
-      (task) =>
-          task.movieId == movie.id &&
-          (task.status == 'Downloading' || task.status == 'Completed'),
-    )) {
-      _showMessage('This movie is already downloading or downloaded.');
-      return;
-    }
-
     final task = DownloadTask(
       movieId: movie.id,
       title: movie.title,
@@ -1010,26 +547,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await DownloadManager.download(
       url: movie.downloadUrl,
-      fileName: '${movie.id}_${movie.title}',
-      onProgress: (value) {
+      fileName: movie.title,
+      onProgress: (progress) {
         if (!mounted) return;
-        setState(() {
-          task.progress = value;
-          task.status = 'Downloading';
-        });
+        setState(() => task.progress = progress);
       },
       onComplete: (path) {
         if (!mounted) return;
         setState(() {
-          task.progress = 1;
-          task.status = 'Completed';
-          task.filePath = path;
+          task
+            ..progress = 1
+            ..status = 'Completed'
+            ..filePath = path;
         });
-        _showMessage('Download completed: ${movie.title}');
+        _showMessage('${movie.title} downloaded successfully.');
       },
       onError: (message) {
         if (!mounted) return;
-        setState(() => task.status = 'Failed');
+        setState(() => task.status = message);
         _showMessage(message);
       },
     );
@@ -1044,9 +579,14 @@ class _HomeScreenState extends State<HomeScreen> {
         SnackBar(
           content: Text(message),
           backgroundColor: panel,
-          behavior: SnackBarBehavior.floating,
         ),
       );
+  }
+
+  List<Movie> _moviesForIds(Set<int> ids) {
+    return _allMovies()
+        .where((movie) => ids.contains(movie.id))
+        .toList();
   }
 
   void _openMovie(Movie movie) {
@@ -1065,141 +605,148 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  List<Movie> _moviesForIds(Set<int> ids) {
-    final all = _allMovies();
-    return all.where((movie) => ids.contains(movie.id)).toList();
-  }
-
-  Widget _poster(Movie movie, {double width = 125}) {
-    return GestureDetector(
-      onTap: () => _openMovie(movie),
-      child: SizedBox(
-        width: width,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: AspectRatio(
-                aspectRatio: 2 / 3,
-                child: movie.posterUrl.isEmpty
-                    ? _posterPlaceholder()
-                    : CachedNetworkImage(
-                        imageUrl: movie.posterUrl,
-                        fit: BoxFit.cover,
-                        placeholder: (_, __) => _posterPlaceholder(),
-                        errorWidget: (_, __, ___) => _posterPlaceholder(),
-                      ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              movie.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: white,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              movie.year,
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 11,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _posterPlaceholder() {
-    return Container(
-      color: panel,
-      alignment: Alignment.center,
-      child: const Icon(
-        Icons.movie_outlined,
-        color: gold,
-        size: 35,
-      ),
-    );
-  }
-
   Widget _sectionTitle(
     String title, {
     String? subtitle,
-    VoidCallback? onSeeAll,
   }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 24, 18, 12),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 22, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ],
+          Text(
+            title,
+            style: const TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
             ),
           ),
-          if (onSeeAll != null)
-            TextButton(
-              onPressed: onSeeAll,
-              child: const Text(
-                'See all',
-                style: TextStyle(color: gold),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
               ),
             ),
+          ],
         ],
       ),
     );
   }
 
   Widget _movieRow(List<Movie> movies) {
-    if (movies.isEmpty) return const SizedBox(height: 5);
+    if (movies.isEmpty) {
+      return const SizedBox(height: 8);
+    }
 
     return SizedBox(
-      height: 225,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 18),
+      height: 220,
+      child: ListView.builder(
         scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         itemCount: movies.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 13),
-        itemBuilder: (_, index) => _poster(movies[index]),
+        itemBuilder: (context, index) {
+          final movie = movies[index];
+
+          return GestureDetector(
+            onTap: () => _openMovie(movie),
+            child: Container(
+              width: 125,
+              margin: const EdgeInsets.symmetric(horizontal: 5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(
+                                  Icons.movie,
+                                  color: gold,
+                                  size: 35,
+                                ),
+                              )
+                            : CachedNetworkImage(
+                                imageUrl: movie.posterUrl,
+                                fit: BoxFit.cover,
+                                placeholder: (_, __) => Container(
+                                  color: panel,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(
+                                      color: gold,
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                ),
+                                errorWidget: (_, __, ___) => Container(
+                                  color: panel,
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: gold,
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    movie.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(Icons.star, color: gold, size: 13),
+                      const SizedBox(width: 3),
+                      Text(
+                        movie.rating.toStringAsFixed(1),
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      Text(
+                        movie.year,
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
   Widget _featuredSlider() {
-    final slides = _withoutFlixoraDuplicates(trending)
-        .take(5)
-        .toList();
+    final slides = _withoutFlixoraDuplicates(trending).take(5).toList();
 
-    if (slides.isEmpty) return const SizedBox.shrink();
+    if (slides.isEmpty) {
+      return const SizedBox(height: 12);
+    }
 
     return SizedBox(
-      height: 420,
+      height: 390,
       child: Stack(
         children: [
           PageView.builder(
@@ -1208,94 +755,98 @@ class _HomeScreenState extends State<HomeScreen> {
             onPageChanged: (index) {
               setState(() => _slide = index);
             },
-            itemBuilder: (_, index) {
+            itemBuilder: (context, index) {
               final movie = slides[index];
 
-              return GestureDetector(
-                onTap: () => _openMovie(movie),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    movie.backdropUrl.isEmpty
-                        ? _posterPlaceholder()
-                        : CachedNetworkImage(
-                            imageUrl: movie.backdropUrl,
-                            fit: BoxFit.cover,
-                            placeholder: (_, __) => _posterPlaceholder(),
-                            errorWidget: (_, __, ___) => _posterPlaceholder(),
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  movie.backdropUrl.isEmpty
+                      ? Container(color: panel)
+                      : CachedNetworkImage(
+                          imageUrl: movie.backdropUrl,
+                          fit: BoxFit.cover,
+                          errorWidget: (_, __, ___) => Container(
+                            color: panel,
                           ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Color(0x33000000),
-                            bg,
-                          ],
-                          stops: [0.05, 0.45, 1],
                         ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 20,
-                      right: 20,
-                      bottom: 35,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'FEATURED',
-                            style: TextStyle(
-                              color: gold,
-                              fontSize: 12,
-                              letterSpacing: 2,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            movie.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 27,
-                              color: white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 7),
-                          Row(
-                            children: [
-                              const Icon(Icons.star, color: gold, size: 16),
-                              const SizedBox(width: 5),
-                              Text(
-                                movie.rating.toStringAsFixed(1),
-                                style: const TextStyle(color: white),
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                movie.year,
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 13),
-                          FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: gold,
-                              foregroundColor: Colors.black,
-                            ),
-                            onPressed: () => _openMovie(movie),
-                            icon: const Icon(Icons.info_outline),
-                            label: const Text('View Details'),
-                          ),
+                  Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Color(0xDD080808),
+                          bg,
                         ],
+                        stops: [0.1, 0.65, 1],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  Positioned(
+                    left: 20,
+                    right: 20,
+                    bottom: 38,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'FEATURED',
+                          style: TextStyle(
+                            color: gold,
+                            fontSize: 12,
+                            letterSpacing: 2,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          movie.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 27,
+                            color: white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.star,
+                              color: gold,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              movie.rating.toStringAsFixed(1),
+                              style: const TextStyle(color: white),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              movie.year,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 13),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: gold,
+                            foregroundColor: Colors.black,
+                          ),
+                          onPressed: () => _openMovie(movie),
+                          icon: const Icon(Icons.info_outline),
+                          label: const Text('View Details'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -1368,9 +919,88 @@ class _HomeScreenState extends State<HomeScreen> {
           _movieRow(_withoutFlixoraDuplicates(latest)),
           _sectionTitle('Top Rated'),
           _movieRow(_withoutFlixoraDuplicates(topRated)),
-          const SizedBox(height: 30),
+          const SizedBox(height: 25),
         ],
       ),
+    );
+  }
+
+  Widget _collectionContent(String title, List<Movie> movies) {
+    if (movies.isEmpty) {
+      return Center(
+        child: Text(
+          'No $title available.',
+          style: const TextStyle(color: Colors.white54),
+        ),
+      );
+    }
+
+    return GridView.builder(
+      padding: const EdgeInsets.all(12),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        childAspectRatio: 0.53,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 14,
+      ),
+      itemCount: movies.length,
+      itemBuilder: (context, index) {
+        final movie = movies[index];
+
+        return GestureDetector(
+          onTap: () => _openMovie(movie),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: movie.posterUrl.isEmpty
+                        ? Container(
+                            color: panel,
+                            child: const Icon(
+                              Icons.movie,
+                              color: gold,
+                            ),
+                          )
+                        : CachedNetworkImage(
+                            imageUrl: movie.posterUrl,
+                            fit: BoxFit.cover,
+                            errorWidget: (_, __, ___) => Container(
+                              color: panel,
+                              child: const Icon(
+                                Icons.movie,
+                                color: gold,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                movie.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 11,
+                ),
+              ),
+              Text(
+                movie.year,
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1383,145 +1013,74 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (searchResults.isEmpty) {
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(25),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.search, size: 55, color: Colors.white30),
-              const SizedBox(height: 12),
-              Text(
-                _searchError ?? 'Search movies by title',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ],
-          ),
+        child: Text(
+          _searchError ?? 'Search for a movie.',
+          style: const TextStyle(color: Colors.white54),
         ),
       );
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.53,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 15,
-      ),
-      itemCount: searchResults.length,
-      itemBuilder: (_, index) => _poster(
-        searchResults[index],
-        width: double.infinity,
-      ),
-    );
+    return _collectionContent('Search Results', searchResults);
   }
 
-  Widget _collectionContent(String title, List<Movie> movies) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _downloadsContent() {
+    return DownloadsScreen(tasks: _downloads);
+  }
+
+  Widget _profileContent() {
+    return ListView(
+      padding: const EdgeInsets.all(18),
       children: [
-        Padding(
-          padding: const EdgeInsets.all(18),
+        const SizedBox(height: 15),
+        const CircleAvatar(
+          radius: 42,
+          backgroundColor: panel,
+          child: Icon(
+            Icons.movie_creation_outlined,
+            color: gold,
+            size: 42,
+          ),
+        ),
+        const SizedBox(height: 15),
+        const Center(
           child: Text(
-            title,
-            style: const TextStyle(
-              color: white,
-              fontSize: 23,
+            'FLIXORA',
+            style: TextStyle(
+              color: gold,
+              fontSize: 22,
               fontWeight: FontWeight.bold,
+              letterSpacing: 3,
             ),
           ),
         ),
-        Expanded(
-          child: movies.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Nothing here yet.',
-                    style: TextStyle(color: Colors.white54),
-                  ),
-                )
-              : GridView.builder(
-                  padding: const EdgeInsets.all(16),
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    childAspectRatio: 0.53,
-                    crossAxisSpacing: 12,
-                    mainAxisSpacing: 15,
-                  ),
-                  itemCount: movies.length,
-                  itemBuilder: (_, index) => _poster(
-                    movies[index],
-                    width: double.infinity,
-                  ),
-                ),
+        const SizedBox(height: 25),
+        _profileTile(
+          Icons.favorite_outline,
+          'My Favourites',
+          () => setState(() => _tab = 3),
+        ),
+        _profileTile(
+          Icons.bookmark_outline,
+          'Saved Movies',
+          () => setState(() => _tab = 4),
+        ),
+        _profileTile(
+          Icons.download_outlined,
+          'Downloads',
+          () => setState(() => _tab = 5),
+        ),
+        _profileTile(
+          Icons.refresh,
+          'Refresh Movies',
+          loadHome,
+        ),
+        const SizedBox(height: 25),
+        const Text(
+          'Flixora — Movies, made simple.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white38, fontSize: 12),
         ),
       ],
-    );
-  }
-
-  Widget _downloadsContent() => DownloadsScreen(tasks: _downloads);
-
-  Widget _profileContent() {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            Container(
-              width: 90,
-              height: 90,
-              decoration: BoxDecoration(
-                color: gold.withValues(alpha: 0.13),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.person_outline,
-                color: gold,
-                size: 48,
-              ),
-            ),
-            const SizedBox(height: 15),
-            const Text(
-              'FLIXORA',
-              style: TextStyle(
-                color: gold,
-                fontSize: 25,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 3,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Your movie destination',
-              style: TextStyle(color: Colors.white54),
-            ),
-            const SizedBox(height: 30),
-            _profileTile(
-              Icons.favorite_outline,
-              'My Favourites',
-              () => setState(() => _tab = 3),
-            ),
-            _profileTile(
-              Icons.bookmark_outline,
-              'Saved Movies',
-              () => setState(() => _tab = 4),
-            ),
-            _profileTile(
-              Icons.download_outlined,
-              'Downloads',
-              () => setState(() => _tab = 5),
-            ),
-            _profileTile(Icons.refresh, 'Refresh Movies', loadHome),
-            const SizedBox(height: 25),
-            const Text(
-              'Flixora — Movies, made simple.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white38, fontSize: 12),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -1536,7 +1095,10 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ListTile(
         leading: Icon(icon, color: gold),
         title: Text(title, style: const TextStyle(color: white)),
-        trailing: const Icon(Icons.chevron_right, color: Colors.white54),
+        trailing: const Icon(
+          Icons.chevron_right,
+          color: Colors.white54,
+        ),
         onTap: onTap,
       ),
     );
@@ -1656,21 +1218,15 @@ class _HomeScreenState extends State<HomeScreen> {
               },
               icon: const Icon(Icons.home_outlined),
             ),
-          if (_connectionKnown)
-            Padding(
-              padding: const EdgeInsets.only(right: 15),
-              child: Icon(
-                _online ? Icons.wifi : Icons.wifi_off,
-                color: _online ? Colors.green : Colors.redAccent,
-                size: 19,
-              ),
-            ),
+          IconButton(
+            onPressed: loadHome,
+            icon: const Icon(Icons.refresh),
+          ),
         ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 5, 16, 12),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(58),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(15, 0, 15, 10),
             child: TextField(
               controller: _searchController,
               onChanged: _onSearchChanged,
@@ -1678,23 +1234,25 @@ class _HomeScreenState extends State<HomeScreen> {
               decoration: InputDecoration(
                 hintText: 'Search movies...',
                 hintStyle: const TextStyle(color: Colors.white38),
-                prefixIcon: const Icon(Icons.search, color: gold),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
+                prefixIcon: const Icon(
+                  Icons.search,
+                  color: gold,
+                ),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
                         onPressed: () {
                           _searchController.clear();
                           _onSearchChanged('');
-                          FocusScope.of(context).unfocus();
                         },
                         icon: const Icon(
                           Icons.close,
                           color: Colors.white54,
                         ),
-                      )
-                    : null,
+                      ),
                 filled: true,
                 fillColor: panel,
-                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                   borderSide: BorderSide.none,
@@ -1702,19 +1260,22 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          Expanded(child: _currentPage()),
-        ],
+        ),
       ),
+      body: !_connectionKnown
+          ? const Center(
+              child: CircularProgressIndicator(color: gold),
+            )
+          : (!_online && _allMovies().isEmpty)
+              ? const NoInternetScreen()
+              : _currentPage(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (index) {
           FocusScope.of(context).unfocus();
-          _searchController.clear();
-
           setState(() {
             _search = '';
-            searchResults = [];
-            _searchError = null;
+            _searchController.clear();
             _searchLoading = false;
             _tab = index;
           });
@@ -1736,12 +1297,12 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Originals',
           ),
           NavigationDestination(
-            icon: Icon(Icons.favorite_outline),
+            icon: Icon(Icons.favorite_border),
             selectedIcon: Icon(Icons.favorite),
-            label: 'Likes',
+            label: 'Liked',
           ),
           NavigationDestination(
-            icon: Icon(Icons.bookmark_outline),
+            icon: Icon(Icons.bookmark_border),
             selectedIcon: Icon(Icons.bookmark),
             label: 'Saved',
           ),
@@ -1932,52 +1493,34 @@ class DownloadsScreen extends StatelessWidget {
                       style: const TextStyle(
                         color: white,
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       task.status,
-                      style: TextStyle(
-                        color: task.status == 'Completed'
-                            ? Colors.greenAccent
-                            : task.status == 'Failed'
-                                ? Colors.redAccent
-                                : gold,
+                      style: const TextStyle(
+                        color: Colors.white54,
                         fontSize: 12,
                       ),
                     ),
-                    const SizedBox(height: 9),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: LinearProgressIndicator(
-                        value: task.progress.clamp(0.0, 1.0),
-                        minHeight: 5,
-                        backgroundColor: Colors.white12,
-                        valueColor:
-                            const AlwaysStoppedAnimation<Color>(gold),
-                      ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: task.progress,
+                      backgroundColor: Colors.white12,
+                      color: gold,
                     ),
-                    const SizedBox(height: 5),
-                    Text(
-                      '${(task.progress * 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                      ),
-                    ),
-                    if (task.status == 'Completed' &&
-                        task.filePath != null)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 5),
-                        child: Text(
-                          'Saved on this device',
-                          style: TextStyle(
-                            color: Colors.greenAccent,
-                            fontSize: 11,
-                          ),
+                    if (task.filePath != null) ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        task.filePath!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white38,
+                          fontSize: 10,
                         ),
                       ),
+                    ],
                   ],
                 ),
               ),
@@ -2106,7 +1649,8 @@ class MovieDetailsScreen extends StatelessWidget {
                                 ),
                               ],
                             ),
-                            if (movie.runtime > 0) ...[
+                            if (movie.runtime != null &&
+                                movie.runtime! > 0) ...[
                               const SizedBox(height: 8),
                               Text(
                                 '${movie.runtime} min',
@@ -2179,7 +1723,10 @@ class MovieDetailsScreen extends StatelessWidget {
                             ),
                           );
                         },
-                        icon: const Icon(Icons.play_arrow_rounded, size: 27),
+                        icon: const Icon(
+                          Icons.play_arrow_rounded,
+                          size: 27,
+                        ),
                         label: const Text(
                           'WATCH NOW',
                           style: TextStyle(
@@ -2285,6 +1832,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isFullscreen = false;
   bool _isDisposed = false;
   bool _initialized = false;
+  bool _isOpening = false;
 
   String? _errorMessage;
 
@@ -2322,10 +1870,71 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _player = Player();
     _videoController = VideoController(_player);
 
+    _attachPlayerListeners();
     _initializePlayer();
   }
 
+  // Listeners are attached once. Retrying playback will not create
+  // duplicate stream subscriptions.
+  void _attachPlayerListeners() {
+    _positionSubscription = _player.stream.position.listen((value) {
+      if (!mounted || _isDisposed) return;
+
+      setState(() => _position = value);
+
+      if (_duration.inSeconds > 0) {
+        _saveResumePosition(value);
+      }
+    });
+
+    _durationSubscription = _player.stream.duration.listen((value) {
+      if (!mounted || _isDisposed) return;
+      setState(() => _duration = value);
+    });
+
+    _playingSubscription = _player.stream.playing.listen((value) {
+      if (!mounted || _isDisposed) return;
+
+      setState(() => _isPlaying = value);
+
+      if (value) {
+        _startHideTimer();
+      } else {
+        _cancelHideTimer();
+        setState(() => _showControls = true);
+      }
+    });
+
+    _bufferingSubscription = _player.stream.buffering.listen((value) {
+      if (!mounted || _isDisposed) return;
+      setState(() => _isBuffering = value);
+    });
+
+    _errorSubscription = _player.stream.error.listen((value) {
+      if (!mounted || _isDisposed) return;
+      setState(() => _errorMessage = value);
+    });
+
+    _tracksSubscription = _player.stream.tracks.listen((value) {
+      if (!mounted || _isDisposed) return;
+      setState(() => _tracks = value);
+    });
+
+    _completedSubscription = _player.stream.completed.listen((completed) {
+      if (!completed || !mounted || _isDisposed) return;
+
+      setState(() {
+        _isPlaying = false;
+        _showControls = true;
+      });
+
+      _clearResumePosition();
+    });
+  }
+
   Future<void> _initializePlayer() async {
+    if (_isOpening || _isDisposed) return;
+
     if (!_validVideoUrl) {
       if (mounted) {
         setState(() {
@@ -2335,60 +1944,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return;
     }
 
+    _isOpening = true;
+
     try {
-      _positionSubscription = _player.stream.position.listen((value) {
-        if (!mounted || _isDisposed) return;
-
-        setState(() => _position = value);
-
-        if (_duration.inSeconds > 0) {
-          _saveResumePosition(value);
-        }
-      });
-
-      _durationSubscription = _player.stream.duration.listen((value) {
-        if (!mounted || _isDisposed) return;
-        setState(() => _duration = value);
-      });
-
-      _playingSubscription = _player.stream.playing.listen((value) {
-        if (!mounted || _isDisposed) return;
-
-        setState(() => _isPlaying = value);
-
-        if (value) {
-          _startHideTimer();
-        } else {
-          _cancelHideTimer();
-          setState(() => _showControls = true);
-        }
-      });
-
-      _bufferingSubscription = _player.stream.buffering.listen((value) {
-        if (!mounted || _isDisposed) return;
-        setState(() => _isBuffering = value);
-      });
-
-      _errorSubscription = _player.stream.error.listen((value) {
-        if (!mounted || _isDisposed) return;
-        setState(() => _errorMessage = value);
-      });
-
-      _tracksSubscription = _player.stream.tracks.listen((value) {
-        if (!mounted || _isDisposed) return;
-        setState(() => _tracks = value);
-      });
-
-      _completedSubscription = _player.stream.completed.listen((completed) {
-        if (!completed || !mounted || _isDisposed) return;
-
+      if (mounted) {
         setState(() {
-          _isPlaying = false;
-          _showControls = true;
+          _errorMessage = null;
+          _initialized = false;
         });
-
-        _clearResumePosition();
-      });
+      }
 
       await _player.open(
         Media(widget.movie.videoUrl.trim()),
@@ -2404,8 +1968,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (!mounted || _isDisposed) return;
 
       setState(() {
-        _errorMessage = 'Unable to play this video. Please try again.';
+        _errorMessage =
+            'Unable to play this video. Please check the video link and try again.';
       });
+    } finally {
+      _isOpening = false;
     }
   }
 
@@ -2434,7 +2001,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _saveResumePosition(Duration position) async {
     if (_isDisposed || _duration.inSeconds <= 0) return;
-
     if (position.inSeconds < 5) return;
 
     try {
@@ -2457,7 +2023,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _hideTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted || _isDisposed) return;
-
       setState(() => _showControls = false);
     });
   }
@@ -2504,7 +2069,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     await _player.seek(clamped);
 
-    if (mounted) {
+    if (mounted && !_isDisposed) {
       setState(() => _position = clamped);
     }
 
@@ -2512,13 +2077,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _seekTo(double value) async {
-    final target = Duration(
-      milliseconds: value.round(),
-    );
+    final target = Duration(milliseconds: value.round());
 
     await _player.seek(target);
 
-    if (mounted) {
+    if (mounted && !_isDisposed) {
       setState(() => _position = target);
     }
   }
@@ -2541,7 +2104,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<void> _changeSpeed(double speed) async {
     await _player.setRate(speed);
 
-    if (!mounted) return;
+    if (!mounted || _isDisposed) return;
 
     setState(() => _speed = speed);
     _startHideTimer();
@@ -2552,7 +2115,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     await _player.setVolume(volume);
 
-    if (!mounted) return;
+    if (!mounted || _isDisposed) return;
 
     setState(() => _volume = volume);
   }
@@ -2588,7 +2151,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.setAudioTrack(track);
 
     if (mounted) Navigator.pop(context);
-
     _startHideTimer();
   }
 
@@ -2596,7 +2158,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.setSubtitleTrack(track);
 
     if (mounted) Navigator.pop(context);
-
     _startHideTimer();
   }
 
@@ -2783,10 +2344,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   );
                 }),
                 ListTile(
-                  leading: const Icon(
-                    Icons.add,
-                    color: gold,
-                  ),
+                  leading: const Icon(Icons.add, color: gold),
                   title: const Text(
                     'Add External Subtitle',
                     style: TextStyle(color: white),
@@ -3008,11 +2566,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   inactiveColor: Colors.white30,
                   onChanged: max > 0
                       ? (value) {
-                          setState {
+                          setState(() {
                             _position = Duration(
                               milliseconds: value.round(),
                             );
-                          }
+                          });
                         }
                       : null,
                   onChangeEnd: max > 0 ? _seekTo : null,
@@ -3152,13 +2710,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 backgroundColor: gold,
                 foregroundColor: Colors.black,
               ),
-              onPressed: () {
-                setState(() {
-                  _errorMessage = null;
-                  _initialized = false;
-                });
-                _initializePlayer();
-              },
+              onPressed: _initializePlayer,
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
@@ -3179,9 +2731,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ),
         ),
         if (_isBuffering)
-          const CircularProgressIndicator(
-            color: gold,
-          ),
+          const CircularProgressIndicator(color: gold),
         if (_errorMessage != null)
           Positioned.fill(
             child: Container(
@@ -3190,9 +2740,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ),
         if (!_initialized && _errorMessage == null)
-          const CircularProgressIndicator(
-            color: gold,
-          ),
+          const CircularProgressIndicator(color: gold),
         if (_isLocked)
           Positioned(
             left: 15,
@@ -3232,31 +2780,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ),
         if (_showControls && !_isLocked && _errorMessage == null)
           Positioned.fill(
-            child: IgnorePointer(
-              ignoring: false,
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black70,
-                      Colors.transparent,
-                      Colors.transparent,
-                      Colors.black87,
-                    ],
-                    stops: [0, 0.28, 0.62, 1],
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    _topControls(),
-                    const Spacer(),
-                    _centerControls(),
-                    const Spacer(),
-                    _bottomControls(),
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black70,
+                    Colors.transparent,
+                    Colors.transparent,
+                    Colors.black87,
                   ],
+                  stops: [0, 0.28, 0.62, 1],
                 ),
+              ),
+              child: Column(
+                children: [
+                  _topControls(),
+                  const Spacer(),
+                  _centerControls(),
+                  const Spacer(),
+                  _bottomControls(),
+                ],
               ),
             ),
           ),
