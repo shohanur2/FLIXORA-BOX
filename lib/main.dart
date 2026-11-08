@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -557,6 +558,7 @@ class FlixoraApp extends StatelessWidget {
     );
   }
 }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -1916,6 +1918,7 @@ class DownloadsScreen extends StatelessWidget {
     );
   }
 }
+
 class MovieDetailsScreen extends StatelessWidget {
   final Movie movie;
   final bool isFavourite;
@@ -2051,10 +2054,10 @@ class MovieDetailsScreen extends StatelessWidget {
                         movie.year,
                         white,
                       ),
-                      if (movie.runtime > 0)
+                      if ((movie.runtime ?? 0) > 0)
                         _info(
                           Icons.schedule,
-                          '${movie.runtime.toStringAsFixed(0)} min',
+                          '${movie.runtime!.toStringAsFixed(0)} min',
                           white,
                         ),
                     ],
@@ -2108,16 +2111,16 @@ class MovieDetailsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    movie.description.isEmpty
+                    movie.overview.isEmpty
                         ? 'No description available.'
-                        : movie.description,
+                        : movie.overview,
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
                       height: 1.7,
                     ),
                   ),
-                  if (movie.genre.isNotEmpty) ...[
+                  if (movie.genres.isNotEmpty) ...[
                     const SizedBox(height: 25),
                     const Text(
                       'Genres',
@@ -2131,7 +2134,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: movie.genre.map((genre) {
+                      children: movie.genres.map((genre) {
                         return Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 13,
@@ -2185,7 +2188,7 @@ class MovieDetailsScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 3),
                               Text(
-                                movie.source == 'supabase'
+                                movie.isFlixora
                                     ? 'Flixora published movie'
                                     : 'Discover more movies on Flixora',
                                 style: const TextStyle(
@@ -2272,6 +2275,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     setState(() {
       loading = true;
       error = null;
+      _showControls = true;
     });
 
     final previousController = _controller;
@@ -2565,7 +2569,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                             ),
                                           ],
                                         ),
-
                                         Row(
                                           mainAxisAlignment:
                                               MainAxisAlignment.center,
@@ -2612,7 +2615,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                             ),
                                           ],
                                         ),
-
                                         Padding(
                                           padding: const EdgeInsets.symmetric(
                                             horizontal: 12,
