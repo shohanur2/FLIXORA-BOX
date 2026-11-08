@@ -19,14 +19,14 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Setup Java
-      - name: Setup Java 17
+      # 2. Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Flutter (fixed version)
+      # 3. Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -38,10 +38,10 @@ jobs:
       - name: Check Flutter
         run: |
           flutter --version
-          flutter doctor -v
           java -version
+          flutter doctor -v
 
-      # 5. Validate project files
+      # 5. Validate project
       - name: Validate project
         run: |
           test -f pubspec.yaml || {
@@ -54,12 +54,28 @@ jobs:
             exit 1
           }
 
-          test -d android || {
-            echo "ERROR: Android project folder not found"
+      # 6. Generate Android project if missing
+      - name: Generate Android project
+        run: |
+          if [ ! -d android ]; then
+            echo "Android folder missing. Generating Android project..."
+            flutter create \
+              --platforms=android \
+              --project-name=flixora \
+              --org=com.flixora .
+          else
+            echo "Android project already exists."
+          fi
+
+      # 7. Validate Android project
+      - name: Validate Android project
+        run: |
+          test -f android/app/src/main/AndroidManifest.xml || {
+            echo "ERROR: AndroidManifest.xml not found"
             exit 1
           }
 
-      # 6. Configure Android app name and internet permission
+      # 8. Configure app name and Internet permission
       - name: Configure Flixora Android
         run: |
           python3 - <<'PY'
@@ -67,10 +83,6 @@ jobs:
           import re
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
-
-          if not manifest.exists():
-              raise SystemExit("ERROR: AndroidManifest.xml not found")
-
           content = manifest.read_text()
 
           content = re.sub(
@@ -81,11 +93,6 @@ jobs:
           )
 
           if 'android.permission.INTERNET' not in content:
-              content = content.replace(
-                  '<manifest',
-                  '<manifest',
-                  1
-              )
               content = re.sub(
                   r'(<manifest[^>]*>)',
                   r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>',
@@ -95,24 +102,23 @@ jobs:
 
           manifest.write_text(content)
 
-          print("Flixora Android configuration checked.")
+          print("Flixora Android configuration completed.")
           PY
 
-      # 7. Install dependencies
+      # 9. Install dependencies
       - name: Install dependencies
         run: flutter pub get
 
-      # 8. Verify dependencies
+      # 10. Verify dependencies
       - name: Verify dependencies
         run: flutter pub deps
 
-      # 9. Analyze project
+      # 11. Analyze project
       - name: Analyze Flutter project
         continue-on-error: true
-        run: |
-          flutter analyze --no-pub
+        run: flutter analyze --no-pub
 
-      # 10. Build release APK
+      # 12. Build release APK
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -124,7 +130,7 @@ jobs:
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 
-      # 11. Verify APK
+      # 13. Verify APK
       - name: Verify APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
@@ -134,9 +140,10 @@ jobs:
             exit 1
           fi
 
+          echo "APK successfully generated:"
           ls -lh "$APK"
 
-      # 12. Upload APK
+      # 14. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
