@@ -38,6 +38,7 @@ dependencies:
 
   # Device Settings
   app_settings: ^5.1.1
+  screen_brightness: ^2.1.11
 
 dev_dependencies:
   flutter_test:
