@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -46,8 +45,17 @@ const Color white = Colors.white;
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
 
+int _toInt(dynamic value) {
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
 class Movie {
   final int id;
+
+  // TMDB ID identifies the same movie across TMDB and Flixora.
+  final int tmdbId;
+
   final int sourceId;
   final String source;
   final String title;
@@ -64,6 +72,7 @@ class Movie {
 
   const Movie({
     required this.id,
+    this.tmdbId = 0,
     this.sourceId = 0,
     this.source = 'tmdb',
     required this.title,
@@ -83,9 +92,11 @@ class Movie {
 
   factory Movie.fromJson(Map<String, dynamic> json) {
     final date = (json['release_date'] ?? '').toString();
+    final movieId = _toInt(json['id']);
 
     return Movie(
-      id: (json['id'] as num?)?.toInt() ?? 0,
+      id: movieId,
+      tmdbId: movieId,
       title: (json['title'] ?? json['name'] ?? 'Unknown Movie').toString(),
       year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
       releaseDate: date,
@@ -97,7 +108,8 @@ class Movie {
   }
 
   factory Movie.fromSupabase(Map<String, dynamic> json) {
-    final dbId = (json['id'] as num?)?.toInt() ?? 0;
+    final dbId = _toInt(json['id']);
+    final tmdbId = _toInt(json['tmdb_id']);
     final date = (json['release_date'] ?? '').toString();
     final rawGenres = json['genre'];
 
@@ -106,8 +118,10 @@ class Movie {
         : <String>[];
 
     return Movie(
+      // Keep the Supabase ID for existing favourites and saved items.
       id: -dbId.abs(),
       sourceId: dbId,
+      tmdbId: tmdbId,
       source: 'flixora',
       title: (json['title'] ?? 'Unknown Movie').toString(),
       year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
@@ -124,10 +138,17 @@ class Movie {
   }
 
   factory Movie.fromCache(Map<String, dynamic> json) {
+    final cachedId = _toInt(json['id']);
+    final cachedSource = (json['source'] ?? 'tmdb').toString();
+    final cachedTmdbId = _toInt(json['tmdbId']);
+
     return Movie(
-      id: (json['id'] as num?)?.toInt() ?? 0,
-      sourceId: (json['sourceId'] as num?)?.toInt() ?? 0,
-      source: (json['source'] ?? 'tmdb').toString(),
+      id: cachedId,
+      tmdbId: cachedTmdbId > 0
+          ? cachedTmdbId
+          : (cachedSource == 'tmdb' ? cachedId : 0),
+      sourceId: _toInt(json['sourceId']),
+      source: cachedSource,
       title: (json['title'] ?? 'Unknown Movie').toString(),
       year: (json['year'] ?? 'N/A').toString(),
       overview: (json['overview'] ?? '').toString(),
@@ -147,6 +168,7 @@ class Movie {
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'tmdbId': tmdbId,
         'sourceId': sourceId,
         'source': source,
         'title': title,
@@ -515,7 +537,6 @@ class DownloadManager {
     }
   }
 }
-
 class FlixoraApp extends StatelessWidget {
   const FlixoraApp({super.key});
 
@@ -599,6 +620,40 @@ class _HomeScreenState extends State<HomeScreen> {
   final Set<int> _saved = {};
   final List<DownloadTask> _downloads = [];
 
+  // Collect TMDB IDs from published Flixora/Admin movies.
+  Set<int> get _flixoraTmdbIds {
+    return flixoraMovies
+        .map((movie) => movie.tmdbId)
+        .where((id) => id > 0)
+        .toSet();
+  }
+
+  // Hide TMDB catalogue entries that already exist in Flixora Admin.
+  List<Movie> _withoutFlixoraDuplicates(List<Movie> movies) {
+    final adminIds = _flixoraTmdbIds;
+
+    return movies.where((movie) {
+      if (movie.tmdbId <= 0) return true;
+      return !adminIds.contains(movie.tmdbId);
+    }).toList();
+  }
+
+  // Deduplicate a mixed list by TMDB ID, preserving the first entry.
+  // Admin entries must be placed first before TMDB entries.
+  List<Movie> _deduplicateMovies(List<Movie> movies) {
+    final seenTmdbIds = <int>{};
+    final seenFallbackIds = <String>{};
+
+    return movies.where((movie) {
+      if (movie.tmdbId > 0) {
+        return seenTmdbIds.add(movie.tmdbId);
+      }
+
+      final fallbackKey = '${movie.source}:${movie.id}';
+      return seenFallbackIds.add(fallbackKey);
+    }).toList();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -609,12 +664,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _timer = Timer.periodic(
       const Duration(seconds: 5),
       (_) {
-        if (!mounted || _tab != 0 || trending.isEmpty) return;
+        if (!mounted || _tab != 0) return;
 
-        final slideCount = trending.length < 5 ? trending.length : 5;
-        if (slideCount == 0) return;
+        final slideCount = _withoutFlixoraDuplicates(trending).length;
+        final visibleCount = slideCount < 5 ? slideCount : 5;
 
-        _slide = (_slide + 1) % slideCount;
+        if (visibleCount == 0) return;
+
+        _slide = (_slide + 1) % visibleCount;
 
         if (_sliderController.hasClients) {
           _sliderController.animateToPage(
@@ -769,8 +826,7 @@ class _HomeScreenState extends State<HomeScreen> {
         homeError = null;
       });
 
-      // Each source is handled independently so a TMDB failure
-      // does not prevent Flixora movies from loading.
+      // Each source is handled independently.
       final results = await Future.wait<List<Movie>>([
         TmdbService.getMovies('trending/movie/week')
             .catchError((_) => <Movie>[]),
@@ -800,10 +856,13 @@ class _HomeScreenState extends State<HomeScreen> {
           homeError = null;
         }
 
-        final slideCount = trending.length < 5 ? trending.length : 5;
-        if (slideCount == 0) {
+        final slideCount =
+            _withoutFlixoraDuplicates(trending).length;
+        final visibleCount = slideCount < 5 ? slideCount : 5;
+
+        if (visibleCount == 0) {
           _slide = 0;
-        } else if (_slide >= slideCount) {
+        } else if (_slide >= visibleCount) {
           _slide = 0;
         }
       });
@@ -836,8 +895,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ...topRated,
     ];
 
-    final seen = <int>{};
-    return combined.where((movie) => seen.add(movie.id)).toList();
+    return _deduplicateMovies(combined);
   }
 
   Future<void> searchMovies(String query) async {
@@ -873,13 +931,13 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Admin results first: they take priority over TMDB results.
     final combined = <Movie>[
       ...results[1],
       ...results[0],
     ];
 
-    final seen = <int>{};
-    final unique = combined.where((movie) => seen.add(movie.id)).toList();
+    final unique = _deduplicateMovies(combined);
 
     setState(() {
       searchResults = unique;
@@ -1141,9 +1199,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _featuredSlider() {
-    if (trending.isEmpty) return const SizedBox.shrink();
+    final slides = _withoutFlixoraDuplicates(trending)
+        .take(5)
+        .toList();
 
-    final slides = trending.take(5).toList();
+    if (slides.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
       height: 420,
@@ -1308,20 +1368,19 @@ class _HomeScreenState extends State<HomeScreen> {
             _movieRow(flixoraMovies),
           ],
           _sectionTitle('Trending This Week'),
-          _movieRow(trending),
+          _movieRow(_withoutFlixoraDuplicates(trending)),
           _sectionTitle('Popular Movies'),
-          _movieRow(popular),
+          _movieRow(_withoutFlixoraDuplicates(popular)),
           _sectionTitle('Now Playing'),
-          _movieRow(latest),
+          _movieRow(_withoutFlixoraDuplicates(latest)),
           _sectionTitle('Top Rated'),
-          _movieRow(topRated),
+          _movieRow(_withoutFlixoraDuplicates(topRated)),
           const SizedBox(height: 30),
         ],
       ),
     );
   }
-
-  Widget _searchContent() {
+      Widget _searchContent() {
     if (_searchLoading) {
       return const Center(
         child: CircularProgressIndicator(color: gold),
