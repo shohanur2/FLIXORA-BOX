@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       # 1. Checkout source code
@@ -26,7 +27,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Flutter
+      # 3. Setup Gradle Cache
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
+      # 4. Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -34,14 +39,14 @@ jobs:
           channel: stable
           cache: true
 
-      # 4. Check environment
+      # 5. Check environment
       - name: Check Flutter
         run: |
           flutter --version
           java -version
           flutter doctor -v
 
-      # 5. Validate project files
+      # 6. Validate project files
       - name: Validate project
         run: |
           test -f pubspec.yaml
@@ -50,8 +55,9 @@ jobs:
           test -f android/app/build.gradle
           test -f android/gradle/wrapper/gradle-wrapper.properties
           test -f android/app/src/main/AndroidManifest.xml
+          test -f assets/app_icon.png
 
-      # 6. Configure app name and Internet permission
+      # 7. Configure app name and Internet permission
       - name: Configure Flixora Android
         run: |
           python3 - <<'PY'
@@ -80,32 +86,54 @@ jobs:
           print("Flixora Android configuration completed.")
           PY
 
-      # 7. Install dependencies
+      # 8. Install dependencies
       - name: Install dependencies
         run: flutter pub get
 
-      # 8. Verify dependencies
+      # 9. Generate Premium App Icon
+      - name: Generate FLIXORA App Icon
+        run: dart run flutter_launcher_icons
+
+      # 10. Verify dependencies
       - name: Verify dependencies
         run: flutter pub deps
 
-      # 9. Analyze Flutter project
+      # 11. Analyze Flutter project
       - name: Analyze Flutter project
         continue-on-error: true
         run: flutter analyze --no-pub
 
-      # 10. Build release APK
+      # 12. Build release APK with retry
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          GRADLE_OPTS: >-
+            -Dorg.gradle.internal.http.connectionTimeout=120000
+            -Dorg.gradle.internal.http.socketTimeout=120000
         run: |
-          flutter build apk --release \
-            --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
-            --dart-define=SUPABASE_URL="$SUPABASE_URL" \
-            --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+          for attempt in 1 2 3; do
+            echo "Starting APK build attempt $attempt of 3"
 
-      # 11. Verify APK
+            if flutter build apk --release \
+              --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
+              --dart-define=SUPABASE_URL="$SUPABASE_URL" \
+              --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"; then
+              echo "APK build successful."
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "Build failed. Waiting before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "APK build failed after 3 attempts."
+          exit 1
+
+      # 13. Verify APK
       - name: Verify APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
@@ -118,7 +146,7 @@ jobs:
           echo "APK successfully generated:"
           ls -lh "$APK"
 
-      # 12. Upload APK
+      # 14. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
