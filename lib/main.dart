@@ -536,6 +536,455 @@ class DownloadManager {
     }
   }
 }
+class FlixoraApp extends StatelessWidget {
+  const FlixoraApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Flixora',
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: bg,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: gold,
+          brightness: Brightness.dark,
+          primary: gold,
+          secondary: goldLight,
+          surface: panel,
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: bg,
+          foregroundColor: white,
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: const Color(0xFF111111),
+          indicatorColor: gold.withValues(alpha: 0.18),
+          labelTextStyle: WidgetStateProperty.resolveWith((states) {
+            return TextStyle(
+              color: states.contains(WidgetState.selected)
+                  ? gold
+                  : Colors.white54,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            );
+          }),
+        ),
+        useMaterial3: true,
+      ),
+      home: const HomeScreen(),
+    );
+  }
+}
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final PageController _sliderController = PageController();
+  final TextEditingController _searchController = TextEditingController();
+
+  Timer? _timer;
+  Timer? _searchTimer;
+
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+
+  int _slide = 0;
+  int _tab = 0;
+
+  String _search = '';
+  bool _searchLoading = false;
+  String? _searchError;
+
+  bool loading = true;
+  bool _online = false;
+  bool _connectionKnown = false;
+  bool _refreshing = false;
+
+  String? homeError;
+
+  List<Movie> trending = [];
+  List<Movie> popular = [];
+  List<Movie> latest = [];
+  List<Movie> topRated = [];
+  List<Movie> flixoraMovies = [];
+  List<Movie> searchResults = [];
+
+  final Set<int> _favourites = {};
+  final Set<int> _saved = {};
+  final List<DownloadTask> _downloads = [];
+
+  Set<int> get _flixoraTmdbIds {
+    return flixoraMovies
+        .map((movie) => movie.tmdbId)
+        .where((id) => id > 0)
+        .toSet();
+  }
+
+  List<Movie> _withoutFlixoraDuplicates(List<Movie> movies) {
+    final adminIds = _flixoraTmdbIds;
+
+    return movies.where((movie) {
+      if (movie.tmdbId <= 0) return true;
+      return !adminIds.contains(movie.tmdbId);
+    }).toList();
+  }
+
+  List<Movie> _deduplicateMovies(List<Movie> movies) {
+    final seenTmdbIds = <int>{};
+    final seenFallbackIds = <String>{};
+
+    return movies.where((movie) {
+      if (movie.tmdbId > 0) {
+        return seenTmdbIds.add(movie.tmdbId);
+      }
+
+      final fallbackKey = '${movie.source}:${movie.id}';
+      return seenFallbackIds.add(fallbackKey);
+    }).toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    _initializeApp();
+    _listenToConnectivity();
+
+    _timer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) {
+        if (!mounted || _tab != 0) return;
+
+        final slideCount = _withoutFlixoraDuplicates(trending).length;
+        final visibleCount = slideCount < 5 ? slideCount : 5;
+
+        if (visibleCount == 0) return;
+
+        _slide = (_slide + 1) % visibleCount;
+
+        if (_sliderController.hasClients) {
+          _sliderController.animateToPage(
+            _slide,
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeInOut,
+          );
+        }
+      },
+    );
+  }
+
+  Future<void> _initializeApp() async {
+    await _loadCachedMovies();
+    await _loadSavedPreferences();
+
+    if (!mounted) return;
+
+    final online = await InternetService.isOnline();
+
+    if (!mounted) return;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+
+    if (online) {
+      await loadHome();
+    } else {
+      setState(() {
+        loading = false;
+        if (_allMovies().isEmpty) homeError = 'offline';
+      });
+    }
+  }
+
+  Future<void> _loadSavedPreferences() async {
+    final results = await Future.wait<Set<int>>([
+      MovieCache.getFavourites(),
+      MovieCache.getSaved(),
+    ]);
+
+    if (!mounted) return;
+
+    setState(() {
+      _favourites
+        ..clear()
+        ..addAll(results[0]);
+
+      _saved
+        ..clear()
+        ..addAll(results[1]);
+    });
+  }
+
+  Future<void> _loadCachedMovies() async {
+    final results = await Future.wait<List<Movie>>([
+      MovieCache.getList(MovieCache.trendingKey),
+      MovieCache.getList(MovieCache.popularKey),
+      MovieCache.getList(MovieCache.latestKey),
+      MovieCache.getList(MovieCache.topRatedKey),
+      MovieCache.getList(MovieCache.flixoraKey),
+    ]);
+
+    if (!mounted) return;
+
+    setState(() {
+      trending = results[0];
+      popular = results[1];
+      latest = results[2];
+      topRated = results[3];
+      flixoraMovies = results[4];
+      loading = false;
+      homeError = null;
+    });
+  }
+
+  void _listenToConnectivity() {
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen(
+      (results) async {
+        final hasNetwork = !results.contains(ConnectivityResult.none);
+
+        if (!hasNetwork) {
+          if (!mounted) return;
+
+          setState(() {
+            _online = false;
+            _connectionKnown = true;
+            if (_allMovies().isEmpty) homeError = 'offline';
+          });
+          return;
+        }
+
+        final online = await InternetService.isOnline();
+
+        if (!mounted) return;
+
+        final wasOffline = !_online;
+
+        setState(() {
+          _online = online;
+          _connectionKnown = true;
+        });
+
+        if (online && wasOffline) {
+          await loadHome();
+
+          if (_search.trim().isNotEmpty) {
+            searchMovies(_search);
+          }
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _searchTimer?.cancel();
+    _connectivitySubscription?.cancel();
+    _sliderController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> loadHome() async {
+    if (_refreshing) return;
+
+    _refreshing = true;
+
+    try {
+      final online = await InternetService.isOnline();
+
+      if (!mounted) return;
+
+      if (!online) {
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+          loading = false;
+          if (_allMovies().isEmpty) homeError = 'offline';
+        });
+        return;
+      }
+
+      setState(() {
+        _online = true;
+        _connectionKnown = true;
+        loading = _allMovies().isEmpty;
+        homeError = null;
+      });
+
+      final results = await Future.wait<List<Movie>>([
+        TmdbService.getMovies('trending/movie/week')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/popular')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/now_playing')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/top_rated')
+            .catchError((_) => <Movie>[]),
+        FlixoraMovieService.getPublishedMovies()
+            .catchError((_) => <Movie>[]),
+      ]);
+
+      if (!mounted) return;
+
+      setState(() {
+        trending = results[0];
+        popular = results[1];
+        latest = results[2];
+        topRated = results[3];
+        flixoraMovies = results[4];
+        loading = false;
+
+        if (_allMovies().isEmpty) {
+          homeError = 'Unable to load movies.';
+        } else {
+          homeError = null;
+        }
+
+        final slideCount =
+            _withoutFlixoraDuplicates(trending).length;
+        final visibleCount = slideCount < 5 ? slideCount : 5;
+
+        if (visibleCount == 0) {
+          _slide = 0;
+        } else if (_slide >= visibleCount) {
+          _slide = 0;
+        }
+      });
+
+      await Future.wait([
+        MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.popularKey, popular),
+        MovieCache.saveList(MovieCache.latestKey, latest),
+        MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+      ]);
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        loading = false;
+        if (_allMovies().isEmpty) homeError = e.toString();
+      });
+    } finally {
+      _refreshing = false;
+    }
+  }
+
+  List<Movie> _allMovies() {
+    final combined = <Movie>[
+      ...flixoraMovies,
+      ...trending,
+      ...popular,
+      ...latest,
+      ...topRated,
+    ];
+
+    return _deduplicateMovies(combined);
+  }
+
+  Future<void> searchMovies(String query) async {
+    final text = query.trim();
+
+    if (text.isEmpty) {
+      if (!mounted) return;
+
+      setState(() {
+        _search = '';
+        searchResults = [];
+        _searchError = null;
+        _searchLoading = false;
+      });
+      return;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _search = text;
+      _searchLoading = true;
+      _searchError = null;
+    });
+
+    final results = await Future.wait<List<Movie>>([
+      TmdbService.search(text).catchError((_) => <Movie>[]),
+      FlixoraMovieService.searchPublishedMovies(text)
+          .catchError((_) => <Movie>[]),
+    ]);
+
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
+    final combined = <Movie>[
+      ...results[1],
+      ...results[0],
+    ];
+
+    final unique = _deduplicateMovies(combined);
+
+    setState(() {
+      searchResults = unique;
+      _searchLoading = false;
+      _searchError = unique.isEmpty ? 'No movies found.' : null;
+    });
+
+    await MovieCache.saveSearch(text, unique);
+  }
+
+  void _onSearchChanged(String value) {
+    _searchTimer?.cancel();
+
+    if (value.trim().isEmpty) {
+      setState(() {
+        _search = '';
+        searchResults = [];
+        _searchError = null;
+        _searchLoading = false;
+      });
+      return;
+    }
+
+    _searchTimer = Timer(
+      const Duration(milliseconds: 500),
+      () => searchMovies(value),
+    );
+  }
+
+  Future<void> _toggleFavourite(Movie movie) async {
+    setState(() {
+      if (_favourites.contains(movie.id)) {
+        _favourites.remove(movie.id);
+      } else {
+        _favourites.add(movie.id);
+      }
+    });
+
+    await MovieCache.saveFavourites(_favourites);
+  }
+
+  Future<void> _toggleSaved(Movie movie) async {
+    setState(() {
+      if (_saved.contains(movie.id)) {
+        _saved.remove(movie.id);
+      } else {
+        _saved.add(movie.id);
+      }
+    });
+
+    await MovieCache.saveSaved(_saved);
+  }
+
+  Future<void> addDownload(Movie movie) async {
     final task = DownloadTask(
       movieId: movie.id,
       title: movie.title,
