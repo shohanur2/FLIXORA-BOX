@@ -1,0 +1,96 @@
+
+name: Setup FLIXORA Android Project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  setup-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: stable
+          cache: true
+
+      - name: Check Project
+        run: |
+          test -f pubspec.yaml
+          test -f lib/main.dart
+
+      - name: Generate Android Project
+        run: |
+          flutter create \
+            --platforms=android \
+            --project-name=flixora \
+            --org=com.flixora \
+            .
+
+      - name: Configure Android Manifest
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
+          content = manifest.read_text()
+
+          content = re.sub(
+              r'android:label="[^"]*"',
+              'android:label="Flixora"',
+              content,
+              count=1
+          )
+
+          if 'android.permission.INTERNET' not in content:
+              content = re.sub(
+                  r'(<manifest[^>]*>)',
+                  r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>',
+                  content,
+                  count=1
+              )
+
+          manifest.write_text(content)
+          print("Android Manifest configured.")
+          PY
+
+      - name: Verify Android Project
+        run: |
+          test -f android/settings.gradle
+          test -f android/app/build.gradle
+          test -f android/gradle/wrapper/gradle-wrapper.properties
+          test -f android/app/src/main/AndroidManifest.xml
+
+      - name: Commit Android Project
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add android
+
+          if git diff --cached --quiet; then
+            echo "No Android changes to commit."
+          else
+            git commit -m "Add permanent Android project configuration"
+            git push
+          fi
