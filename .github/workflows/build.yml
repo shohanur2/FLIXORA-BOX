@@ -30,7 +30,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.35.7'
           channel: stable
           cache: true
 
@@ -41,41 +41,17 @@ jobs:
           java -version
           flutter doctor -v
 
-      # 5. Validate project
+      # 5. Validate project files
       - name: Validate project
         run: |
-          test -f pubspec.yaml || {
-            echo "ERROR: pubspec.yaml not found"
-            exit 1
-          }
+          test -f pubspec.yaml
+          test -f lib/main.dart
+          test -f android/settings.gradle
+          test -f android/app/build.gradle
+          test -f android/gradle/wrapper/gradle-wrapper.properties
+          test -f android/app/src/main/AndroidManifest.xml
 
-          test -f lib/main.dart || {
-            echo "ERROR: lib/main.dart not found"
-            exit 1
-          }
-
-      # 6. Generate Android project if missing
-      - name: Generate Android project
-        run: |
-          if [ ! -d android ]; then
-            echo "Android folder missing. Generating Android project..."
-            flutter create \
-              --platforms=android \
-              --project-name=flixora \
-              --org=com.flixora .
-          else
-            echo "Android project already exists."
-          fi
-
-      # 7. Validate Android project
-      - name: Validate Android project
-        run: |
-          test -f android/app/src/main/AndroidManifest.xml || {
-            echo "ERROR: AndroidManifest.xml not found"
-            exit 1
-          }
-
-      # 8. Configure app name and Internet permission
+      # 6. Configure app name and Internet permission
       - name: Configure Flixora Android
         run: |
           python3 - <<'PY'
@@ -101,24 +77,23 @@ jobs:
               )
 
           manifest.write_text(content)
-
           print("Flixora Android configuration completed.")
           PY
 
-      # 9. Install dependencies
+      # 7. Install dependencies
       - name: Install dependencies
         run: flutter pub get
 
-      # 10. Verify dependencies
+      # 8. Verify dependencies
       - name: Verify dependencies
         run: flutter pub deps
 
-      # 11. Analyze project
+      # 9. Analyze Flutter project
       - name: Analyze Flutter project
         continue-on-error: true
         run: flutter analyze --no-pub
 
-      # 12. Build release APK
+      # 10. Build release APK
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -130,7 +105,7 @@ jobs:
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 
-      # 13. Verify APK
+      # 11. Verify APK
       - name: Verify APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
@@ -143,7 +118,7 @@ jobs:
           echo "APK successfully generated:"
           ls -lh "$APK"
 
-      # 14. Upload APK
+      # 12. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
