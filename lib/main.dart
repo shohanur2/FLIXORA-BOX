@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -203,20 +205,78 @@ class Movie {
   }
 }
 
+/// Displays network images online, but reads disk cache only while offline.
+/// A cache miss offline never starts a network request.
+class FlixoraCachedImage extends StatelessWidget {
+  final String imageUrl;
+  final BoxFit fit;
+  final bool isOnline;
+  final Widget? placeholder;
+  final Widget? fallback;
+
+  const FlixoraCachedImage({
+    super.key,
+    required this.imageUrl,
+    this.fit = BoxFit.cover,
+    required this.isOnline,
+    this.placeholder,
+    this.fallback,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final empty = fallback ?? Container(color: panel);
+    if (imageUrl.isEmpty) return empty;
+    if (isOnline) {
+      return CachedNetworkImage(
+        imageUrl: imageUrl,
+        fit: fit,
+        placeholder: (_, __) => placeholder ?? Container(color: panel),
+        errorWidget: (_, __, ___) => empty,
+      );
+    }
+
+    return FutureBuilder<FileInfo?>(
+      future: DefaultCacheManager().getFileFromCache(imageUrl),
+      builder: (context, snapshot) {
+        final file = snapshot.data?.file;
+        if (file != null && file.existsSync()) {
+          return Image.file(file, fit: fit);
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return placeholder ?? Container(color: panel);
+        }
+        return empty;
+      },
+    );
+  }
+}
+
 class InternetService {
   static Future<bool> isOnline() async {
     try {
       final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) return false;
 
-      if (connectivity.contains(ConnectivityResult.none)) {
-        return false;
+      // Test real Internet reachability, not just Wi-Fi/mobile connectivity.
+      final endpoints = <Uri>[
+        Uri.parse('https://www.google.com/generate_204'),
+        Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
+      ];
+
+      for (final endpoint in endpoints) {
+        try {
+          final response = await http
+              .get(endpoint)
+              .timeout(const Duration(seconds: 4));
+          if (response.statusCode == 204 || response.statusCode == 200) {
+            return true;
+          }
+        } catch (_) {
+          // Try the fallback endpoint.
+        }
       }
-
-      final response = await http
-          .get(Uri.parse('https://www.google.com/generate_204'))
-          .timeout(const Duration(seconds: 6));
-
-      return response.statusCode == 204 || response.statusCode == 200;
+      return false;
     } catch (_) {
       return false;
     }
@@ -231,6 +291,50 @@ class MovieCache {
   static const String flixoraKey = 'flixora_published';
   static const String favouritesKey = 'flixora_favourites';
   static const String savedKey = 'flixora_saved';
+  static const String downloadsKey = 'flixora_downloads';
+
+  static Future<void> saveDownloads(List<DownloadTask> tasks) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        downloadsKey,
+        jsonEncode(tasks.where((task) => task.status == 'Completed' && task.filePath != null).map((task) => task.toJson()).toList()),
+      );
+    } catch (_) {}
+  }
+
+  static Future<List<DownloadTask>> getDownloads() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(downloadsKey);
+      if (raw == null || raw.isEmpty) return [];
+      final decoded = jsonDecode(raw) as List;
+      final tasks = decoded
+          .whereType<Map>()
+          .map(
+            (item) => DownloadTask.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList();
+      final valid = <DownloadTask>[];
+      for (final task in tasks) {
+        if (task.status == 'Completed' &&
+            task.filePath != null &&
+            await File(task.filePath!).exists()) {
+          valid.add(task);
+        }
+      }
+      // Remove stale records whose local video file no longer exists.
+      await prefs.setString(
+        downloadsKey,
+        jsonEncode(valid.map((task) => task.toJson()).toList()),
+      );
+      return valid;
+    } catch (_) {
+      return [];
+    }
+  }
 
   static Future<void> saveList(String key, List<Movie> movies) async {
     try {
@@ -472,6 +576,7 @@ class DownloadTask {
   final int movieId;
   final String title;
   final String poster;
+  final String videoUrl;
   double progress;
   String status;
   String? filePath;
@@ -480,10 +585,31 @@ class DownloadTask {
     required this.movieId,
     required this.title,
     required this.poster,
+    this.videoUrl = '',
     this.progress = 0,
     this.status = 'Waiting',
     this.filePath,
   });
+
+  Map<String, dynamic> toJson() => {
+        'movieId': movieId,
+        'title': title,
+        'poster': poster,
+        'videoUrl': videoUrl,
+        'progress': progress,
+        'status': status,
+        'filePath': filePath,
+      };
+
+  factory DownloadTask.fromJson(Map<String, dynamic> json) => DownloadTask(
+        movieId: _toInt(json['movieId']),
+        title: (json['title'] ?? 'Downloaded Movie').toString(),
+        poster: (json['poster'] ?? '').toString(),
+        videoUrl: (json['videoUrl'] ?? '').toString(),
+        progress: (json['progress'] as num?)?.toDouble() ?? 1,
+        status: (json['status'] ?? 'Completed').toString(),
+        filePath: json['filePath']?.toString(),
+      );
 }
 
 class DownloadManager {
@@ -492,6 +618,7 @@ class DownloadManager {
   static Future<void> download({
     required String url,
     required String fileName,
+    required int uniqueId,
     required Function(double) onProgress,
     required Function(String) onComplete,
     required Function(String) onError,
@@ -512,7 +639,7 @@ class DownloadManager {
         '_',
       );
 
-      final path = '${directory.path}/$safeName.mp4';
+      final path = '${directory.path}/${safeName}_$uniqueId.mp4';
 
       await _dio.download(
         url,
@@ -585,11 +712,12 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final PageController _sliderController = PageController();
   final TextEditingController _searchController = TextEditingController();
 
   Timer? _timer;
+  Timer? _networkTimer;
   Timer? _searchTimer;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
@@ -605,6 +733,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _online = false;
   bool _connectionKnown = false;
   bool _refreshing = false;
+  bool _checkingConnection = false;
 
   String? homeError;
 
@@ -652,9 +781,14 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _initializeApp();
     _listenToConnectivity();
+    _networkTimer = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) => _refreshConnectionStatus(),
+    );
 
     _timer = Timer.periodic(
       const Duration(seconds: 5),
@@ -682,6 +816,14 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeApp() async {
     await _loadCachedMovies();
     await _loadSavedPreferences();
+    final savedDownloads = await MovieCache.getDownloads();
+    if (mounted) {
+      setState(() {
+        _downloads
+          ..clear()
+          ..addAll(savedDownloads);
+      });
+    }
 
     if (!mounted) return;
 
@@ -785,8 +927,42 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshConnectionStatus();
+    }
+  }
+
+  Future<void> _refreshConnectionStatus() async {
+    if (!mounted || _checkingConnection) return;
+    _checkingConnection = true;
+    try {
+      final online = await InternetService.isOnline();
+      if (!mounted || online == _online) return;
+
+      final wasOffline = !_online;
+      setState(() {
+        _online = online;
+        _connectionKnown = true;
+        if (!online && _allMovies().isEmpty) homeError = 'offline';
+      });
+
+      if (online && wasOffline) {
+        await loadHome();
+        if (_search.trim().isNotEmpty) {
+          searchMovies(_search);
+        }
+      }
+    } finally {
+      _checkingConnection = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _networkTimer?.cancel();
     _searchTimer?.cancel();
     _connectivitySubscription?.cancel();
     _sliderController.dispose();
@@ -909,7 +1085,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (!mounted) return;
 
+    final onlineNow = _online && await InternetService.isOnline();
+    if (!mounted) return;
+    if (!onlineNow) {
+      setState(() {
+        _online = false;
+        _connectionKnown = true;
+      });
+      final cached = await MovieCache.getSearch(text);
+      if (!mounted) return;
+      setState(() {
+        _search = text;
+        searchResults = cached;
+        _searchLoading = false;
+        _searchError = cached.isEmpty ? 'Check your internet connection' : null;
+      });
+      return;
+    }
+
     setState(() {
+      _online = true;
       _search = text;
       _searchLoading = true;
       _searchError = null;
@@ -985,10 +1180,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> addDownload(Movie movie) async {
+    if (!_online || !await InternetService.isOnline()) {
+      if (mounted) {
+        setState(() { _online = false; _connectionKnown = true; });
+        _showMessage('Check your internet connection');
+      }
+      return;
+    }
+
+    if (movie.downloadUrl.trim().isEmpty) {
+      _showMessage('Download is not available for this movie.');
+      return;
+    }
+
+    final existing = _downloads.where((item) => item.movieId == movie.id).toList();
+    if (existing.any((item) => item.status == 'Downloading' || item.status == 'Completed')) {
+      _showMessage(existing.any((item) => item.status == 'Completed')
+          ? 'This movie is already downloaded.'
+          : 'This movie is already downloading.');
+      return;
+    }
+
     final task = DownloadTask(
       movieId: movie.id,
       title: movie.title,
       poster: movie.posterUrl,
+      videoUrl: movie.videoUrl,
       status: 'Downloading',
     );
 
@@ -997,6 +1214,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await DownloadManager.download(
       url: movie.downloadUrl,
       fileName: movie.title,
+      uniqueId: movie.id,
       onProgress: (progress) {
         if (!mounted) return;
         setState(() => task.progress = progress);
@@ -1009,14 +1227,44 @@ class _HomeScreenState extends State<HomeScreen> {
             ..status = 'Completed'
             ..filePath = path;
         });
+        MovieCache.saveDownloads(_downloads);
         _showMessage('${movie.title} downloaded successfully.');
       },
       onError: (message) {
         if (!mounted) return;
-        setState(() => task.status = message);
+        setState(() => _downloads.remove(task));
         _showMessage(message);
       },
     );
+  }
+
+  Future<void> _deleteDownload(DownloadTask task) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panel,
+        title: const Text('Delete Download?', style: TextStyle(color: white)),
+        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete', style: TextStyle(color: Colors.redAccent))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (task.filePath != null) {
+      try {
+        final file = File(task.filePath!);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        _showMessage('Could not delete downloaded file.');
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() => _downloads.remove(task));
+    await MovieCache.saveDownloads(_downloads);
+    _showMessage('Download removed from this device.');
   }
 
   void _showMessage(String message) {
@@ -1044,11 +1292,43 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (_) => MovieDetailsScreen(
           movie: movie,
+          isOnline: _online,
           isFavourite: _favourites.contains(movie.id),
           isSaved: _saved.contains(movie.id),
           onFavourite: () => _toggleFavourite(movie),
           onSave: () => _toggleSaved(movie),
           onDownload: () => addDownload(movie),
+          onWatch: () async {
+            DownloadTask? downloaded;
+            for (final task in _downloads) {
+              if (task.movieId == movie.id && task.status == 'Completed' &&
+                  task.filePath != null && File(task.filePath!).existsSync()) {
+                downloaded = task;
+                break;
+              }
+            }
+            if (downloaded != null) {
+              if (!mounted) return;
+              Navigator.push(context, MaterialPageRoute(
+                builder: (_) => MoviePlayerScreen(
+                  movie: movie,
+                  localFilePath: downloaded!.filePath,
+                ),
+              ));
+              return;
+            }
+            if (!_online || !await InternetService.isOnline()) {
+              if (mounted) {
+                setState(() { _online = false; _connectionKnown = true; });
+                _showMessage('Check your internet connection');
+              }
+              return;
+            }
+            if (!mounted) return;
+            Navigator.push(context, MaterialPageRoute(
+              builder: (_) => MoviePlayerScreen(movie: movie),
+            ));
+          },
         ),
       ),
     );
@@ -1473,7 +1753,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _downloadsContent() {
-    return DownloadsScreen(tasks: _downloads);
+    return DownloadsScreen(
+      tasks: _downloads,
+      onDelete: _deleteDownload,
+      onPlay: (task) {
+        if (task.filePath == null) return;
+        final movie = Movie(
+          id: task.movieId,
+          title: task.title,
+          year: 'N/A',
+          overview: '',
+          poster: task.poster,
+          backdrop: task.poster,
+          rating: 0,
+          releaseDate: '',
+          videoUrl: task.filePath!,
+        );
+        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(movie: movie, localFilePath: task.filePath)));
+      },
+    );
   }
 
   Widget _profileContent() {
@@ -1655,6 +1953,16 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
         actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Tooltip(
+              message: _online ? 'Internet connected' : 'No internet connection',
+              child: Icon(
+                _online ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+                color: _online ? Colors.greenAccent : Colors.redAccent,
+              ),
+            ),
+          ),
           if (_tab == 0 || _tab == 1 || _tab == 2)
             IconButton(
               onPressed: () {
@@ -1848,10 +2156,14 @@ class NoInternetScreen extends StatelessWidget {
 
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> tasks;
+  final Future<void> Function(DownloadTask) onDelete;
+  final ValueChanged<DownloadTask> onPlay;
 
   const DownloadsScreen({
     super.key,
     required this.tasks,
+    required this.onDelete,
+    required this.onPlay,
   });
 
   @override
@@ -1973,6 +2285,22 @@ class DownloadsScreen extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 6),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Play downloaded movie',
+                    onPressed: task.status == 'Completed' && task.filePath != null ? () => onPlay(task) : null,
+                    icon: const Icon(Icons.play_circle_fill, color: gold),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete download',
+                    onPressed: task.status == 'Completed' ? () => onDelete(task) : null,
+                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  ),
+                ],
+              ),
             ],
           ),
         );
@@ -1982,20 +2310,24 @@ class DownloadsScreen extends StatelessWidget {
 }
 class MovieDetailsScreen extends StatelessWidget {
   final Movie movie;
+  final bool isOnline;
   final bool isFavourite;
   final bool isSaved;
   final VoidCallback onFavourite;
   final VoidCallback onSave;
   final VoidCallback onDownload;
+  final VoidCallback onWatch;
 
   const MovieDetailsScreen({
     super.key,
     required this.movie,
+    required this.isOnline,
     required this.isFavourite,
     required this.isSaved,
     required this.onFavourite,
     required this.onSave,
     required this.onDownload,
+    required this.onWatch,
   });
 
   @override
@@ -2013,7 +2345,8 @@ class MovieDetailsScreen extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   movie.backdropUrl.isNotEmpty
-                      ? CachedNetworkImage(
+                      ? FlixoraCachedImage(
+                          isOnline: isOnline,
                           imageUrl: movie.backdropUrl,
                           fit: BoxFit.cover,
                         )
@@ -2046,7 +2379,8 @@ class MovieDetailsScreen extends StatelessWidget {
                           width: 115,
                           height: 165,
                           child: movie.posterUrl.isNotEmpty
-                              ? CachedNetworkImage(
+                              ? FlixoraCachedImage(
+                                  isOnline: isOnline,
                                   imageUrl: movie.posterUrl,
                                   fit: BoxFit.cover,
                                 )
@@ -2162,16 +2496,7 @@ class MovieDetailsScreen extends StatelessWidget {
                           backgroundColor: gold,
                           foregroundColor: Colors.black,
                         ),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => MoviePlayerScreen(
-                                movie: movie,
-                              ),
-                            ),
-                          );
-                        },
+                        onPressed: onWatch,
                         icon: const Icon(
                           Icons.play_arrow_rounded,
                           size: 27,
@@ -2249,10 +2574,12 @@ class MovieDetailsScreen extends StatelessWidget {
 
 class MoviePlayerScreen extends StatefulWidget {
   final Movie movie;
+  final String? localFilePath;
 
   const MoviePlayerScreen({
     super.key,
     required this.movie,
+    this.localFilePath,
   });
 
   @override
@@ -2305,6 +2632,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   bool get _validVideoUrl {
+    if (widget.localFilePath != null) return true;
     final uri = Uri.tryParse(widget.movie.videoUrl.trim());
 
     return uri != null &&
@@ -2403,9 +2731,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      await _player.open(
-        Media(widget.movie.videoUrl.trim()),
-      );
+      final playbackSource = widget.localFilePath ?? widget.movie.videoUrl.trim();
+      if (widget.localFilePath != null && !await File(widget.localFilePath!).exists()) {
+        throw Exception('Downloaded file is missing.');
+      }
+      await _player.open(Media(playbackSource));
 
       if (!mounted || _isDisposed) return;
 
@@ -3171,6 +3501,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _playerBody() {
     return Stack(
+      fit: StackFit.expand,
       alignment: Alignment.center,
       children: [
         Positioned.fill(
