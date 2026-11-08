@@ -3495,7 +3495,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           inactiveTrackColor: Colors.white24,
                           thumbColor: Colors.white,
                           overlayColor: gold.withValues(alpha: 0.22),
-                          showValueIndicator: ShowValueIndicator.always,
+                          showValueIndicator: ShowValueIndicator.onDrag,
                           valueIndicatorColor: gold,
                           valueIndicatorTextStyle: const TextStyle(
                             color: Colors.black,
