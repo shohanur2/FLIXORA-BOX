@@ -16,6 +16,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'video_quality_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -2632,6 +2633,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isOpening = false;
   bool _playerIsOnline = true;
   Timer? _playerConnectionTimer;
+  List<Map<String, String>> _availableQualities = [];
+  String? _selectedQuality;
+  String _currentVideoUrl = '';
+  bool _loadingQualities = false;
 
   String? _errorMessage;
 
@@ -2655,10 +2660,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return 'flixora_resume_$id';
   }
 
+  String _resolveInitialNetworkUrl() {
+    final legacyUrl = widget.movie.videoUrl.trim();
+    final legacyUri = Uri.tryParse(legacyUrl);
+    if (legacyUri != null &&
+        (legacyUri.scheme == 'http' || legacyUri.scheme == 'https') &&
+        legacyUri.host.isNotEmpty) {
+      return legacyUrl;
+    }
+
+    if (_availableQualities.isEmpty) return '';
+
+    // Prefer a moderate default (720p); otherwise use the lowest available
+    // encoded version to avoid unexpectedly starting with a very large file.
+    final defaultQuality = _availableQualities.cast<Map<String, String>?>().firstWhere(
+      (item) => item?['quality']?.trim().toLowerCase() == '720p',
+      orElse: () => _availableQualities.first,
+    )!;
+    _selectedQuality = defaultQuality['quality'];
+    return defaultQuality['video_url'] ?? '';
+  }
+
   bool get _validVideoUrl {
     if (widget.localFilePath != null) return true;
-    final uri = Uri.tryParse(widget.movie.videoUrl.trim());
-
+    final url = _resolveInitialNetworkUrl();
+    final uri = Uri.tryParse(url);
     return uri != null &&
         (uri.scheme == 'http' || uri.scheme == 'https') &&
         uri.host.isNotEmpty;
@@ -2675,7 +2701,138 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _attachPlayerListeners();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
-    _initializePlayer();
+    _prepareAndInitializePlayer();
+  }
+
+  Future<void> _prepareAndInitializePlayer() async {
+    // Load Admin quality URLs before opening the player. This allows playback
+    // even when the legacy movies.video_url field is empty.
+    await _loadVideoQualities();
+    if (!mounted || _isDisposed) return;
+    await _initializePlayer();
+  }
+
+  Future<void> _loadVideoQualities() async {
+    final client = supabaseClient;
+    final movieId = widget.movie.sourceId;
+    if (client == null || movieId <= 0 || widget.localFilePath != null) return;
+
+    if (mounted) setState(() => _loadingQualities = true);
+    try {
+      final rows = await client
+          .from('movie_video_qualities')
+          .select('quality, video_url')
+          .eq('movie_id', movieId);
+
+      final qualities = (rows as List)
+          .whereType<Map>()
+          .map((row) => {
+                'quality': (row['quality'] ?? '').toString(),
+                'video_url': (row['video_url'] ?? '').toString(),
+              })
+          .where((row) =>
+              row['quality']!.isNotEmpty && row['video_url']!.isNotEmpty)
+          .toList();
+
+      final sortedQualities = VideoQualityService.sort(
+        qualities, (item) => item['quality']!,
+      );
+
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _availableQualities = sortedQualities;
+        if (sortedQualities.isNotEmpty) {
+          final current = sortedQualities.where(
+            (item) => item['video_url'] == widget.movie.videoUrl,
+          );
+          _selectedQuality = current.isNotEmpty
+              ? current.first['quality']
+              : null;
+        }
+      });
+    } catch (e) {
+      debugPrint('Could not load video qualities: $e');
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingQualities = false);
+      }
+    }
+  }
+
+  Future<void> _changeVideoQuality(Map<String, String> item) async {
+    final url = item['video_url']?.trim() ?? '';
+    if (url.isEmpty || _isDisposed || widget.localFilePath != null) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      return;
+    }
+
+    if (_isOpening || url == _currentVideoUrl) return;
+
+    final previousQuality = _selectedQuality;
+    final previousUrl = _currentVideoUrl;
+    final wasPlaying = _isPlaying;
+    final resumeAt = _position;
+    _isOpening = true;
+
+    try {
+      if (mounted) {
+        setState(() {
+          _errorMessage = null;
+          _initialized = false;
+        });
+      }
+
+      await _player.open(Media(url));
+      if (!mounted || _isDisposed) return;
+      if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+      if (wasPlaying) {
+        await _player.play();
+      } else {
+        await _player.pause();
+      }
+
+      _currentVideoUrl = url;
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _selectedQuality = item['quality'];
+          _initialized = true;
+        });
+      }
+    } catch (e) {
+      // Re-open the previous encoded URL so a failed quality change does not
+      // leave the player stuck on a broken source.
+      var restored = false;
+      if (previousUrl.isNotEmpty && !_isDisposed) {
+        try {
+          await _player.open(Media(previousUrl));
+          if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+          if (wasPlaying) {
+            await _player.play();
+          } else {
+            await _player.pause();
+          }
+          _currentVideoUrl = previousUrl;
+          restored = true;
+        } catch (_) {
+          restored = false;
+        }
+      }
+
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _selectedQuality = previousQuality;
+          _initialized = restored;
+          _errorMessage = restored
+              ? 'Could not switch quality. Previous playback was restored.'
+              : 'Could not switch quality or restore the previous video.';
+        });
+      }
+    } finally {
+      _isOpening = false;
+    }
   }
 
   void _startPlayerConnectionMonitor() {
@@ -2776,11 +2933,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      final playbackSource = widget.localFilePath ?? widget.movie.videoUrl.trim();
-      if (widget.localFilePath != null && !await File(widget.localFilePath!).exists()) {
+      if (widget.localFilePath != null &&
+          !await File(widget.localFilePath!).exists()) {
         throw Exception('Downloaded file is missing.');
       }
+      final playbackSource = widget.localFilePath ?? _resolveInitialNetworkUrl();
+      if (playbackSource.trim().isEmpty) {
+        throw Exception('No playable video URL is available.');
+      }
       await _player.open(Media(playbackSource));
+      if (widget.localFilePath == null) {
+        _currentVideoUrl = playbackSource;
+      }
 
       if (!mounted || _isDisposed) return;
 
@@ -3216,6 +3380,68 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  Future<void> _showQualitySelector() async {
+    if (_availableQualities.isEmpty || _loadingQualities) return;
+    _cancelHideTimer();
+
+    final selected = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select video quality',
+                style: TextStyle(
+                  color: white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Changes the encoded resolution of this same movie.',
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _availableQualities.map((item) {
+                  final quality = item['quality']!;
+                  final active = quality == _selectedQuality;
+                  final label = VideoQualityService.displayName(quality);
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: active,
+                    selectedColor: gold,
+                    backgroundColor: bg,
+                    labelStyle: TextStyle(
+                      color: active ? Colors.black : white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    onSelected: (_) => Navigator.pop(sheetContext, item),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || _isDisposed) return;
+    if (selected != null && selected['quality'] != _selectedQuality) {
+      await _changeVideoQuality(selected);
+    }
+    _startHideTimer();
+  }
+
   void _showSettings() {
     _cancelHideTimer();
 
@@ -3260,19 +3486,53 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
                 Row(
                   children: [
-                    const Icon(Icons.brightness_low, color: white),
+                    const Icon(Icons.brightness_low, color: white, size: 20),
                     Expanded(
-                      child: Slider(
-                        value: _screenBrightness,
-                        min: 0.0,
-                        max: 1.0,
-                        divisions: 20,
-                        activeColor: gold,
-                        inactiveColor: Colors.white24,
-                        onChanged: _changeApplicationBrightness,
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 6,
+                          activeTrackColor: gold,
+                          inactiveTrackColor: Colors.white24,
+                          thumbColor: Colors.white,
+                          overlayColor: gold.withValues(alpha: 0.22),
+                          showValueIndicator: ShowValueIndicator.always,
+                          valueIndicatorColor: gold,
+                          valueIndicatorTextStyle: const TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          trackShape: const RoundedRectSliderTrackShape(),
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 10,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 17,
+                          ),
+                        ),
+                        child: Slider(
+                          value: _screenBrightness.clamp(0.0, 1.0),
+                          min: 0.0,
+                          max: 1.0,
+                          divisions: 20,
+                          label: '${(_screenBrightness * 100).round()}%',
+                          onChanged: _changeApplicationBrightness,
+                        ),
                       ),
                     ),
-                    const Icon(Icons.brightness_high, color: white),
+                    const Icon(Icons.brightness_high, color: white, size: 20),
+                    const SizedBox(width: 5),
+                    SizedBox(
+                      width: 38,
+                      child: Text(
+                        '${(_screenBrightness * 100).round()}%',
+                        textAlign: TextAlign.end,
+                        style: const TextStyle(
+                          color: white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -3346,26 +3606,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     Navigator.pop(context);
                     _showSubtitleTracks();
                   },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
-                    Icons.high_quality,
-                    color: gold,
-                  ),
-                  title: const Text(
-                    'Video Quality',
-                    style: TextStyle(color: white),
-                  ),
-                  subtitle: Text(
-                    _tracks.video.length > 1
-                        ? '${_tracks.video.length} video tracks available'
-                        : 'Quality depends on the video source',
-                    style: const TextStyle(
-                      color: Colors.white54,
-                      fontSize: 12,
-                    ),
-                  ),
                 ),
               ],
             ),
@@ -3470,27 +3710,53 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           Row(
             children: [
               IconButton(
+                constraints: const BoxConstraints(
+                  minWidth: 34,
+                  minHeight: 40,
+                ),
+                padding: EdgeInsets.zero,
                 onPressed: () => _changeVolume(_volume - 10),
                 icon: const Icon(
                   Icons.volume_down,
                   color: white,
+                  size: 20,
                 ),
               ),
-              Expanded(
-                child: Slider(
-                  value: _volume,
-                  min: 0,
-                  max: 100,
-                  activeColor: gold,
-                  inactiveColor: Colors.white24,
-                  onChanged: _changeVolume,
+              SizedBox(
+                width: 52,
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    activeTrackColor: gold,
+                    inactiveTrackColor: Colors.white24,
+                    thumbColor: Colors.white,
+                    overlayColor: gold.withValues(alpha: 0.16),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 12,
+                    ),
+                  ),
+                  child: Slider(
+                    value: _volume.clamp(0.0, 100.0),
+                    min: 0,
+                    max: 100,
+                    onChanged: _changeVolume,
+                  ),
                 ),
               ),
               IconButton(
+                constraints: const BoxConstraints(
+                  minWidth: 34,
+                  minHeight: 40,
+                ),
+                padding: EdgeInsets.zero,
                 onPressed: () => _changeVolume(_volume + 10),
                 icon: const Icon(
                   Icons.volume_up,
                   color: white,
+                  size: 20,
                 ),
               ),
               TextButton(
@@ -3549,6 +3815,33 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               ),
             ),
           ),
+          if (widget.localFilePath == null) ...[
+            const SizedBox(width: 6),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: white,
+                side: BorderSide(
+                  color: _availableQualities.isNotEmpty ? gold : Colors.white30,
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+              ),
+              onPressed: _availableQualities.isNotEmpty
+                  ? _showQualitySelector
+                  : null,
+              icon: const Icon(Icons.high_quality, size: 17),
+              label: Text(
+                _loadingQualities
+                    ? '...'
+                    : _selectedQuality == null
+                        ? 'Quality'
+                        : VideoQualityService.displayName(_selectedQuality!),
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
           IconButton(
             onPressed: _showSettings,
             icon: const Icon(
