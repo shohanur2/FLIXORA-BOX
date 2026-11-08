@@ -1,39 +1,11 @@
-
-import 'package:supabase_flutter/supabase_flutter.dart';
-
-class VideoQuality {
-  final String quality;
-  final String? videoUrl;
-  final String? storagePath;
-
-  const VideoQuality({
-    required this.quality,
-    this.videoUrl,
-    this.storagePath,
-  });
-
-  factory VideoQuality.fromMap(Map<String, dynamic> map) {
-    return VideoQuality(
-      quality: map['quality']?.toString() ?? '',
-      videoUrl: map['video_url']?.toString(),
-      storagePath: map['storage_path']?.toString(),
-    );
-  }
-
-  String? get playableUrl {
-    final url = videoUrl?.trim();
-    if (url != null && url.isNotEmpty) return url;
-    return null;
-  }
-}
-
+/// Shared helpers for FLIXORA's real video-quality selection.
+///
+/// A quality label is a requested/declared encode. It does not prove the
+/// video's actual resolution or bitrate; those require media metadata.
 class VideoQualityService {
-  VideoQualityService({SupabaseClient? client})
-      : _client = client ?? Supabase.instance.client;
+  VideoQualityService._();
 
-  final SupabaseClient _client;
-
-  static const List<String> supportedQualities = [
+  static const List<String> supportedQualities = <String>[
     '240p',
     '360p',
     '480p',
@@ -43,57 +15,42 @@ class VideoQualityService {
     '2160p',
   ];
 
-  /// Loads all available video qualities for a movie.
-  Future<List<VideoQuality>> getQualities(String movieId) async {
-    final id = movieId.trim();
-
-    if (id.isEmpty) {
-      throw ArgumentError('Movie ID cannot be empty.');
-    }
-
-    final response = await _client
-        .from('movie_video_qualities')
-        .select('quality, video_url, storage_path')
-        .eq('movie_id', id);
-
-    final qualities = (response as List)
-        .map(
-          (item) => VideoQuality.fromMap(
-            Map<String, dynamic>.from(item as Map),
-          ),
-        )
-        .where((item) => item.quality.isNotEmpty)
-        .toList();
-
-    final order = {
-      for (var i = 0; i < supportedQualities.length; i++)
-        supportedQualities[i]: i,
-    };
-
-    qualities.sort(
-      (a, b) => (order[a.quality] ?? 999)
-          .compareTo(order[b.quality] ?? 999),
-    );
-
-    return qualities;
+  /// Extracts a numeric vertical resolution from labels such as 1080p or 4K.
+  static int rank(String label) {
+    final normalized = label.trim().toLowerCase();
+    if (normalized == '4k' || normalized == 'uhd') return 2160;
+    if (normalized == '2k' || normalized == 'qhd') return 1440;
+    final match = RegExp(r'(\d{3,4})\s*p?').firstMatch(normalized);
+    return int.tryParse(match?.group(1) ?? '') ?? 0;
   }
 
-  /// Returns the first quality that has a direct playable URL.
-  VideoQuality? getDefaultQuality(List<VideoQuality> qualities) {
-    for (final quality in qualities) {
-      if (quality.playableUrl != null) {
-        return quality;
-      }
-    }
-    return null;
+  static List<T> sort<T>(
+    Iterable<T> items,
+    String Function(T item) labelOf,
+  ) {
+    final result = items.toList();
+    result.sort((a, b) => rank(labelOf(a)).compareTo(rank(labelOf(b))));
+    return result;
   }
 
-  /// Converts database quality names into display labels.
-  static String getDisplayName(String quality) {
-    switch (quality) {
+  /// Returns true only when measured video height matches the selected label.
+  /// A 5% tolerance allows common non-exact encodes.
+  static bool matchesMeasuredHeight(String label, int measuredHeight) {
+    final expected = rank(label);
+    if (expected <= 0 || measuredHeight <= 0) return false;
+    return (measuredHeight - expected).abs() <= expected * 0.05;
+  }
+
+  /// Friendly labels for the player quality selector.
+  static String displayName(String quality) {
+    switch (quality.trim().toLowerCase()) {
       case '1440p':
+      case 'qhd':
+      case '2k':
         return '2K';
       case '2160p':
+      case 'uhd':
+      case '4k':
         return '4K';
       default:
         return quality;
