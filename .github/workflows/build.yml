@@ -16,22 +16,18 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      # 1. Checkout source code
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # 2. Setup Java 17
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3. Setup Gradle Cache
       - name: Setup Gradle Cache
         uses: gradle/actions/setup-gradle@v4
 
-      # 4. Setup Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -39,14 +35,12 @@ jobs:
           channel: stable
           cache: true
 
-      # 5. Check environment
-      - name: Check Flutter
+      - name: Check environment
         run: |
           flutter --version
           java -version
           flutter doctor -v
 
-      # 6. Validate project files
       - name: Validate project
         run: |
           test -f pubspec.yaml
@@ -57,7 +51,6 @@ jobs:
           test -f android/app/src/main/AndroidManifest.xml
           test -f assets/app_icon.png
 
-      # 7. Configure app name and Internet permission
       - name: Configure Flixora Android
         run: |
           python3 - <<'PY'
@@ -86,24 +79,22 @@ jobs:
           print("Flixora Android configuration completed.")
           PY
 
-      # 8. Install dependencies
+      - name: Clean Flutter project
+        run: flutter clean
+
       - name: Install dependencies
         run: flutter pub get
 
-      # 9. Generate Premium App Icon
       - name: Generate FLIXORA App Icon
         run: dart run flutter_launcher_icons
 
-      # 10. Verify dependencies
       - name: Verify dependencies
         run: flutter pub deps
 
-      # 11. Analyze Flutter project
       - name: Analyze Flutter project
         continue-on-error: true
         run: flutter analyze --no-pub
 
-      # 12. Build release APK with retry
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -133,7 +124,6 @@ jobs:
           echo "APK build failed after 3 attempts."
           exit 1
 
-      # 13. Verify APK
       - name: Verify APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
@@ -146,7 +136,6 @@ jobs:
           echo "APK successfully generated:"
           ls -lh "$APK"
 
-      # 14. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
