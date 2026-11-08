@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,9 +28,22 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
       - name: Check Flutter
         run: flutter doctor -v
+
+      - name: Validate project
+        run: |
+          test -f pubspec.yaml || {
+            echo "ERROR: pubspec.yaml not found"
+            exit 1
+          }
+
+          test -f lib/main.dart || {
+            echo "ERROR: lib/main.dart not found"
+            exit 1
+          }
 
       - name: Generate Android project
         run: flutter create --platforms=android --project-name=flixora --org=com.flixora .
@@ -39,6 +55,10 @@ jobs:
           import re
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
+
+          if not manifest.exists():
+              raise SystemExit("ERROR: AndroidManifest.xml not found")
+
           content = manifest.read_text()
 
           content = re.sub(
@@ -63,6 +83,7 @@ jobs:
               )
 
           permission = 'android.permission.INTERNET'
+
           if permission not in content:
               content = content.replace(
                   '<application',
@@ -122,50 +143,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Fix app_settings compileSdk
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+      - name: Verify dependencies
+        run: flutter pub deps
 
-          files = list(Path.home().glob(
-              ".pub-cache/hosted/pub.dev/app_settings-*/android/build.gradle"
-          ))
-          files += list(Path.home().glob(
-              ".pub-cache/hosted/pub.dev/app_settings-*/android/build.gradle.kts"
-          ))
-
-          if not files:
-              raise SystemExit("ERROR: app_settings Gradle file not found")
-
-          updated = False
-
-          for file in files:
-              content = file.read_text()
-
-              new_content, count = re.subn(
-                  r'compileSdkVersion\s+33',
-                  'compileSdkVersion 36',
-                  content
-              )
-
-              if count == 0:
-                  new_content, count = re.subn(
-                      r'compileSdk\s*=\s*33',
-                      'compileSdk = 36',
-                      content
-                  )
-
-              if count > 0:
-                  file.write_text(new_content)
-                  updated = True
-                  print(f"Updated compileSdk to 36: {file}")
-              else:
-                  print(f"No matching API 33 setting found: {file}")
-
-          if not updated:
-              raise SystemExit("ERROR: Could not update app_settings compileSdk")
-          PY
+      - name: Analyze Flutter project
+        run: flutter analyze --no-pub
+        continue-on-error: true
 
       - name: Build APK
         env:
@@ -178,8 +161,21 @@ jobs:
             --dart-define=SUPABASE_URL="$SUPABASE_URL" \
             --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 
+      - name: Verify APK
+        run: |
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK file was not generated."
+            exit 1
+          fi
+
+          ls -lh "$APK"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FLIXORA-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
