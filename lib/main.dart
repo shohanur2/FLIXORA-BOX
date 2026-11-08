@@ -320,7 +320,7 @@ class TmdbService {
       throw Exception('Could not load movies.');
     }
 
-    final data = jsonDecode(response.body);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
     final results = data['results'] as List? ?? [];
 
     return results
@@ -356,7 +356,7 @@ class TmdbService {
       throw Exception('Search failed.');
     }
 
-    final data = jsonDecode(response.body);
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
     final results = data['results'] as List? ?? [];
 
     return results
@@ -476,6 +476,14 @@ class DownloadManager {
     required Function(String) onError,
   }) async {
     try {
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty) {
+        onError('Invalid download URL.');
+        return;
+      }
+
       final directory = await getApplicationDocumentsDirectory();
 
       final safeName = fileName.replaceAll(
@@ -489,7 +497,9 @@ class DownloadManager {
         url,
         path,
         onReceiveProgress: (received, total) {
-          if (total > 0) onProgress(received / total);
+          if (total > 0) {
+            onProgress((received / total).clamp(0.0, 1.0));
+          }
         },
       );
 
@@ -601,7 +611,10 @@ class _HomeScreenState extends State<HomeScreen> {
       (_) {
         if (!mounted || _tab != 0 || trending.isEmpty) return;
 
-        _slide = (_slide + 1) % trending.length;
+        final slideCount = trending.length < 5 ? trending.length : 5;
+        if (slideCount == 0) return;
+
+        _slide = (_slide + 1) % slideCount;
 
         if (_sliderController.hasClients) {
           _sliderController.animateToPage(
@@ -640,7 +653,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadSavedPreferences() async {
-    final results = await Future.wait([
+    final results = await Future.wait<Set<int>>([
       MovieCache.getFavourites(),
       MovieCache.getSaved(),
     ]);
@@ -659,7 +672,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadCachedMovies() async {
-    final results = await Future.wait([
+    final results = await Future.wait<List<Movie>>([
       MovieCache.getList(MovieCache.trendingKey),
       MovieCache.getList(MovieCache.popularKey),
       MovieCache.getList(MovieCache.latestKey),
@@ -742,6 +755,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!online) {
         setState(() {
           _online = false;
+          _connectionKnown = true;
           loading = false;
           if (_allMovies().isEmpty) homeError = 'offline';
         });
@@ -755,12 +769,19 @@ class _HomeScreenState extends State<HomeScreen> {
         homeError = null;
       });
 
-      final results = await Future.wait([
-        TmdbService.getMovies('trending/movie/week'),
-        TmdbService.getMovies('movie/popular'),
-        TmdbService.getMovies('movie/now_playing'),
-        TmdbService.getMovies('movie/top_rated'),
-        FlixoraMovieService.getPublishedMovies(),
+      // Each source is handled independently so a TMDB failure
+      // does not prevent Flixora movies from loading.
+      final results = await Future.wait<List<Movie>>([
+        TmdbService.getMovies('trending/movie/week')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/popular')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/now_playing')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/top_rated')
+            .catchError((_) => <Movie>[]),
+        FlixoraMovieService.getPublishedMovies()
+            .catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
@@ -772,7 +793,19 @@ class _HomeScreenState extends State<HomeScreen> {
         topRated = results[3];
         flixoraMovies = results[4];
         loading = false;
-        homeError = null;
+
+        if (_allMovies().isEmpty) {
+          homeError = 'Unable to load movies.';
+        } else {
+          homeError = null;
+        }
+
+        final slideCount = trending.length < 5 ? trending.length : 5;
+        if (slideCount == 0) {
+          _slide = 0;
+        } else if (_slide >= slideCount) {
+          _slide = 0;
+        }
       });
 
       await Future.wait([
@@ -830,7 +863,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _searchError = null;
     });
 
-    final results = await Future.wait([
+    final results = await Future.wait<List<Movie>>([
       TmdbService.search(text).catchError((_) => <Movie>[]),
       FlixoraMovieService.searchPublishedMovies(text)
           .catchError((_) => <Movie>[]),
@@ -2211,13 +2244,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return;
     }
 
+    final uri = Uri.tryParse(videoUrl);
+
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _initializing = false;
+        _error = 'Invalid video URL.';
+      });
+      return;
+    }
+
     VideoPlayerController? controller;
 
     try {
-      controller = VideoPlayerController.networkUrl(
-        Uri.parse(videoUrl),
-      );
-
+      controller = VideoPlayerController.networkUrl(uri);
       _controller = controller;
 
       await controller.initialize();
@@ -2268,7 +2311,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return;
     }
 
-    if (controller.value.hasError) {
+    if (controller.value.hasError && _error == null) {
       setState(() {
         _error =
             controller.value.errorDescription ?? 'Video playback error.';
@@ -2394,6 +2437,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                             setState(() {
                               _initializing = true;
                               _error = null;
+                              _showControls = true;
                             });
                             _initializePlayer();
                           },
