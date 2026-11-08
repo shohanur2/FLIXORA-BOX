@@ -687,7 +687,7 @@ class FlixoraApp extends StatelessWidget {
         ),
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: const Color(0xFF111111),
-          indicatorColor: gold.withOpacity(0.18),
+          indicatorColor: gold.withValues(alpha: 0.18),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             return TextStyle(
               color: states.contains(WidgetState.selected)
@@ -3290,7 +3290,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             color: Colors.black54,
             shape: BoxShape.circle,
             border: Border.all(
-              color: gold.withOpacity(0.6),
+              color: gold.withValues(alpha: 0.6),
               width: 1.5,
             ),
           ),
@@ -3566,7 +3566,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withOpacity(0.7),
+                    Colors.black.withValues(alpha: 0.7),
                     Colors.transparent,
                     Colors.transparent,
                     Colors.black87,
