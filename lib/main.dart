@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
@@ -1313,6 +1314,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 builder: (_) => MoviePlayerScreen(
                   movie: movie,
                   localFilePath: downloaded!.filePath,
+                  recommendedMovies: _allMovies(),
+                  onMovieSelected: _openMovie,
+                  isOnline: _online,
                 ),
               ));
               return;
@@ -1326,7 +1330,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
             if (!mounted) return;
             Navigator.push(context, MaterialPageRoute(
-              builder: (_) => MoviePlayerScreen(movie: movie),
+              builder: (_) => MoviePlayerScreen(
+                movie: movie,
+                recommendedMovies: _allMovies(),
+                onMovieSelected: _openMovie,
+                isOnline: _online,
+              ),
             ));
           },
         ),
@@ -1769,7 +1778,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           releaseDate: '',
           videoUrl: task.filePath!,
         );
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(movie: movie, localFilePath: task.filePath)));
+        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(
+            movie: movie,
+            localFilePath: task.filePath,
+            recommendedMovies: _allMovies(),
+            onMovieSelected: _openMovie,
+            isOnline: _online,
+          )));
       },
     );
   }
@@ -2575,11 +2590,17 @@ class MovieDetailsScreen extends StatelessWidget {
 class MoviePlayerScreen extends StatefulWidget {
   final Movie movie;
   final String? localFilePath;
+  final List<Movie> recommendedMovies;
+  final ValueChanged<Movie>? onMovieSelected;
+  final bool isOnline;
 
   const MoviePlayerScreen({
     super.key,
     required this.movie,
     this.localFilePath,
+    this.recommendedMovies = const [],
+    this.onMovieSelected,
+    this.isOnline = true,
   });
 
   @override
@@ -2609,11 +2630,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isDisposed = false;
   bool _initialized = false;
   bool _isOpening = false;
+  bool _playerIsOnline = true;
+  Timer? _playerConnectionTimer;
 
   String? _errorMessage;
 
   double _speed = 1.0;
   double _volume = 100;
+  double _screenBrightness = 0.5;
 
   Timer? _hideTimer;
 
@@ -2644,11 +2668,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void initState() {
     super.initState();
 
+    _playerIsOnline = widget.isOnline;
     _player = Player();
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
+    _loadApplicationBrightness();
+    _startPlayerConnectionMonitor();
     _initializePlayer();
+  }
+
+  void _startPlayerConnectionMonitor() {
+    _refreshPlayerConnection();
+    _playerConnectionTimer?.cancel();
+    _playerConnectionTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _refreshPlayerConnection(),
+    );
+  }
+
+  Future<void> _refreshPlayerConnection() async {
+    if (!mounted || _isDisposed) return;
+
+    final online = await InternetService.isOnline();
+    if (!mounted || _isDisposed || online == _playerIsOnline) return;
+
+    setState(() => _playerIsOnline = online);
   }
 
   // Listeners are attached once. Retrying playback will not create
@@ -3138,6 +3183,39 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
+  Future<void> _loadApplicationBrightness() async {
+    try {
+      final value = await ScreenBrightness.instance.application;
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _screenBrightness = value.clamp(0.0, 1.0).toDouble();
+      });
+    } catch (e) {
+      debugPrint('Could not read app brightness: $e');
+    }
+  }
+
+  Future<void> _changeApplicationBrightness(double value) async {
+    final brightness = value.clamp(0.0, 1.0).toDouble();
+    if (mounted && !_isDisposed) {
+      setState(() => _screenBrightness = brightness);
+    }
+    try {
+      await ScreenBrightness.instance
+          .setApplicationScreenBrightness(brightness);
+    } catch (e) {
+      debugPrint('Could not change app brightness: $e');
+    }
+  }
+
+  Future<void> _resetApplicationBrightness() async {
+    try {
+      await ScreenBrightness.instance.resetApplicationScreenBrightness();
+    } catch (e) {
+      debugPrint('Could not reset app brightness: $e');
+    }
+  }
+
   void _showSettings() {
     _cancelHideTimer();
 
@@ -3173,6 +3251,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
+                const Text(
+                  'Screen Brightness',
+                  style: TextStyle(
+                    color: gold,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Row(
+                  children: [
+                    const Icon(Icons.brightness_low, color: white),
+                    Expanded(
+                      child: Slider(
+                        value: _screenBrightness,
+                        min: 0.0,
+                        max: 1.0,
+                        divisions: 20,
+                        activeColor: gold,
+                        inactiveColor: Colors.white24,
+                        onChanged: _changeApplicationBrightness,
+                      ),
+                    ),
+                    const Icon(Icons.brightness_high, color: white),
+                  ],
+                ),
+                const SizedBox(height: 14),
                 const Text(
                   'Playback Speed',
                   style: TextStyle(
@@ -3422,7 +3525,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       child: Row(
         children: [
           IconButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              if (_isFullscreen) {
+                _toggleFullscreen();
+              } else {
+                Navigator.pop(context);
+              }
+            },
             icon: const Icon(
               Icons.arrow_back,
               color: white,
@@ -3592,6 +3701,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   void dispose() {
     _isDisposed = true;
+    _playerConnectionTimer?.cancel();
+    unawaited(_resetApplicationBrightness());
     _cancelHideTimer();
 
     _positionSubscription?.cancel();
@@ -3615,14 +3726,187 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.dispose();
   }
 
+  List<Movie> get _relatedMovies {
+    final candidates = widget.recommendedMovies
+        .where((item) =>
+            item.id != widget.movie.id &&
+            item.genres.any(widget.movie.genres.contains))
+        .toList();
+    candidates.sort((a, b) {
+      final aMatches = a.genres.where(widget.movie.genres.contains).length;
+      final bMatches = b.genres.where(widget.movie.genres.contains).length;
+      return bMatches.compareTo(aMatches);
+    });
+    return candidates.take(20).toList();
+  }
+
+  List<Movie> get _recommendedMovies {
+    final relatedIds = _relatedMovies.map((movie) => movie.id).toSet();
+    return widget.recommendedMovies
+        .where((item) =>
+            item.id != widget.movie.id && !relatedIds.contains(item.id))
+        .take(20)
+        .toList();
+  }
+
+  Widget _movieRail(String title, List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: white,
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 188,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: movies.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 11),
+              itemBuilder: (context, index) {
+                final item = movies[index];
+                return GestureDetector(
+                  onTap: widget.onMovieSelected == null
+                      ? null
+                      : () => widget.onMovieSelected!(item),
+                  child: SizedBox(
+                    width: 112,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(9),
+                          child: SizedBox(
+                            width: 112,
+                            height: 148,
+                            child: item.posterUrl.isNotEmpty
+                                ? FlixoraCachedImage(
+                                    isOnline: _playerIsOnline,
+                                    imageUrl: item.posterUrl,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Container(
+                                    color: panel,
+                                    child: const Icon(
+                                      Icons.movie,
+                                      color: gold,
+                                      size: 35,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _playerPageContent() {
+    final related = _relatedMovies;
+    final recommended = _recommendedMovies;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: _playerBody(),
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 17, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.movie.title,
+                  style: const TextStyle(
+                    color: white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                if (widget.movie.year.isNotEmpty)
+                  Text(
+                    widget.movie.year,
+                    style: const TextStyle(color: Colors.white60),
+                  ),
+                if (widget.movie.overview.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    widget.movie.overview,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: _movieRail('Related Movies', related)),
+        SliverToBoxAdapter(child: _movieRail('Recommended for You', recommended)),
+        const SliverToBoxAdapter(child: SizedBox(height: 28)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
-        top: false,
-        bottom: false,
-        child: _playerBody(),
+    return PopScope(
+      canPop: !_isFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isFullscreen) {
+          _toggleFullscreen();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: bg,
+        body: _isFullscreen
+            ? SafeArea(
+                top: false,
+                bottom: false,
+                child: _playerBody(),
+              )
+            : SafeArea(
+                top: true,
+                bottom: true,
+                child: _playerPageContent(),
+              ),
       ),
     );
   }
