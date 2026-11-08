@@ -48,6 +48,9 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --project-name=flixora --org=com.flixora .
 
+      - name: Remove Default Flutter Test
+        run: rm -f test/widget_test.dart
+
       - name: Set Flixora App Name and Premium Icon
         run: |
           python3 - <<'PY'
@@ -148,7 +151,6 @@ jobs:
 
       - name: Analyze Flutter project
         run: flutter analyze --no-pub
-        continue-on-error: true
 
       - name: Build APK
         env:
