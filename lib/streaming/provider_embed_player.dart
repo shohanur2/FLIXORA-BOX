@@ -1,0 +1,263 @@
+import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+
+import 'provider_catalog.dart';
+
+/// A dedicated in-app surface for provider-owned HTTPS embed players.
+/// Direct MP4/HLS playback continues to use FLIXORA's existing media_kit player.
+class ProviderEmbedPlayer extends StatefulWidget {
+  const ProviderEmbedPlayer({
+    super.key,
+    required this.source,
+    required this.onClose,
+  });
+
+  final ProviderEmbedSource source;
+  final VoidCallback onClose;
+
+  @override
+  State<ProviderEmbedPlayer> createState() => _ProviderEmbedPlayerState();
+}
+
+class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
+  late final WebViewController _controller;
+  bool _isLoading = true;
+  int _progress = 0;
+  bool _showingFullscreenWidget = false;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController();
+    _configureAndLoad();
+  }
+
+  Future<void> _configureAndLoad() async {
+    try {
+      await _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      await _controller.setBackgroundColor(Colors.black);
+      await _controller.enableZoom(false);
+      await _controller.setNavigationDelegate(
+        NavigationDelegate(
+          onProgress: (progress) {
+            if (!mounted) return;
+            setState(() => _progress = progress);
+          },
+          onPageStarted: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isLoading = true;
+              _errorMessage = null;
+            });
+          },
+          onPageFinished: (_) {
+            if (!mounted) return;
+            setState(() {
+              _isLoading = false;
+              _progress = 100;
+            });
+          },
+          onWebResourceError: (error) {
+            if (!mounted || !error.isForMainFrame) return;
+            setState(() {
+              _isLoading = false;
+              _errorMessage =
+                  'This provider page could not load. Check your internet connection or try another stream.';
+            });
+          },
+          onNavigationRequest: (request) {
+            final uri = Uri.tryParse(request.url);
+            if (uri != null &&
+                ProviderCatalog.allowsNavigation(widget.source, uri)) {
+              return NavigationDecision.navigate;
+            }
+            return NavigationDecision.prevent;
+          },
+        ),
+      );
+
+      final platformController = _controller.platform;
+      if (platformController is AndroidWebViewController) {
+        await platformController.setMediaPlaybackRequiresUserGesture(false);
+        await platformController.setCustomWidgetCallbacks(
+          onShowCustomWidget: (customWidget, onCustomWidgetHidden) {
+            if (!mounted || _showingFullscreenWidget) return;
+            _showingFullscreenWidget = true;
+            Navigator.of(context)
+                .push(
+                  MaterialPageRoute<void>(
+                    fullscreenDialog: true,
+                    builder: (_) => Scaffold(
+                      backgroundColor: Colors.black,
+                      body: SafeArea(child: customWidget),
+                    ),
+                  ),
+                )
+                .whenComplete(() {
+                  _showingFullscreenWidget = false;
+                });
+          },
+          onHideCustomWidget: () {
+            if (!mounted || !_showingFullscreenWidget) return;
+            _showingFullscreenWidget = false;
+            Navigator.of(context).maybePop();
+          },
+        );
+      }
+
+      await _controller.loadRequest(Uri.parse(widget.source.url));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Could not start ' +
+            widget.source.name +
+            '. Try another available stream.';
+      });
+    }
+  }
+
+  Future<void> _retry() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _progress = 0;
+      _errorMessage = null;
+    });
+    try {
+      await _controller.reload();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Retry failed. Please choose another stream.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          WebViewWidget(controller: _controller),
+          if (_isLoading)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(
+                value: _progress > 0 ? _progress / 100 : null,
+                minHeight: 2,
+                backgroundColor: Colors.white12,
+                color: const Color(0xFFD6AD45),
+              ),
+            ),
+          Positioned(
+            top: 7,
+            left: 8,
+            right: 8,
+            child: Row(
+              children: [
+                Expanded(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      child: Text(
+                        widget.source.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _controlButton(
+                  icon: Icons.refresh_rounded,
+                  tooltip: 'Reload stream',
+                  onPressed: _retry,
+                ),
+                const SizedBox(width: 5),
+                _controlButton(
+                  icon: Icons.close_rounded,
+                  tooltip: 'Back to FLIXORA player',
+                  onPressed: widget.onClose,
+                ),
+              ],
+            ),
+          ),
+          if (_errorMessage != null)
+            Positioned.fill(
+              child: ColoredBox(
+                color: Colors.black.withValues(alpha: 0.88),
+                child: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.cloud_off_rounded,
+                          color: Color(0xFFD6AD45),
+                          size: 38,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          _errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: _retry,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _controlButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+  }) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.72),
+      shape: const CircleBorder(),
+      child: IconButton(
+        tooltip: tooltip,
+        visualDensity: VisualDensity.compact,
+        onPressed: onPressed,
+        icon: Icon(icon, color: Colors.white, size: 19),
+      ),
+    );
+  }
+}
