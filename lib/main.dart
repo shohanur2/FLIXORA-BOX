@@ -1719,7 +1719,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           subtitle: Text(
                             'File size: ${item['size_label']}',
                             style: const TextStyle(
-                              color: Colors.white87,
+                              color: Colors.white70,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                             ),
@@ -3627,7 +3627,7 @@ class DownloadsScreen extends StatelessWidget {
                 'Your saved videos will appear here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white87,
+                  color: Colors.white70,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
@@ -3729,7 +3729,7 @@ class DownloadsScreen extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: Colors.white87,
+                              color: Colors.white70,
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -3785,7 +3785,7 @@ class DownloadsScreen extends StatelessWidget {
                             Text(
                               'Downloaded: ${DownloadManager.formatBytes(task.bytesReceived)}',
                               style: const TextStyle(
-                                color: Colors.white87,
+                                color: Colors.white70,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -4318,7 +4318,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         Text(
           label,
           style: const TextStyle(
-            color: Colors.white87,
+            color: Colors.white70,
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
@@ -6324,7 +6324,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   child: Text(
                                     info.join('  •  '),
                                     style: const TextStyle(
-                                      color: Colors.white87,
+                                      color: Colors.white70,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -6363,7 +6363,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Country: ${widget.movie.originCountry}',
                                 style: const TextStyle(
-                                  color: Colors.white87,
+                                  color: Colors.white70,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6374,7 +6374,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Original language: ${widget.movie.originalLanguage.toUpperCase()}',
                                 style: const TextStyle(
-                                  color: Colors.white87,
+                                  color: Colors.white70,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6385,7 +6385,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 '${widget.movie.runtime!.round()} min',
                                 style: const TextStyle(
-                                  color: Colors.white87,
+                                  color: Colors.white70,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6434,7 +6434,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? 'No description available.'
                         : widget.movie.overview,
                     style: const TextStyle(
-                      color: Colors.white87,
+                      color: Colors.white70,
                       fontSize: 13,
                       height: 1.5,
                     ),
