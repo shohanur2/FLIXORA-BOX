@@ -1495,7 +1495,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('Could not resolve Admin movie record: $e');
       // Keep the already-loaded published Admin entry usable if the network
       // lookup fails; otherwise fall back to the requested TMDB catalogue item.
-      return requested.isFlixora
+      return requested.isFlixora || requested.mediaType == 'tv'
           ? requested
           : (_cachedFlixoraMatch(requested) ?? requested);
     }
