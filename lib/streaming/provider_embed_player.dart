@@ -92,6 +92,12 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
 
       final platformController = _controller.platform;
       if (platformController is AndroidWebViewController) {
+        // Provider embeds often use cross-site player iframes and cookies.
+        final cookieManager = WebViewCookieManager().platform;
+        if (cookieManager is AndroidWebViewCookieManager) {
+          await cookieManager.setAcceptThirdPartyCookies(platformController, true);
+        }
+        await platformController.setUseWideViewPort(true);
         await platformController.setMediaPlaybackRequiresUserGesture(false);
         await platformController.setCustomWidgetCallbacks(
           onShowCustomWidget: (customWidget, onCustomWidgetHidden) {
