@@ -4437,7 +4437,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   int _selectedAudioTrackIndex = 0;
   List<ProviderEmbedSource> _providerSources = [];
   ProviderEmbedSource? _selectedProviderSource;
-  int _providerAttemptIndex = -1;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
 
@@ -4565,8 +4564,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _failedProviderIds.clear();
     setState(() {
       _selectedProviderSource = source;
-      _providerAttemptIndex =
-          _providerSources.indexWhere((item) => item.id == source.id);
       _errorMessage = null;
       _showControls = false;
       _initialized = false;
@@ -4617,8 +4614,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       _failedProviderIds.clear();
       setState(() {
         _selectedProviderSource = fallback;
-        _providerAttemptIndex =
-            _providerSources.indexWhere((item) => item.id == fallback.id);
         _showControls = false;
         _initialized = false;
         _errorMessage = null;
@@ -4653,8 +4648,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return;
     }
 
-    _providerAttemptIndex =
-        _providerSources.indexWhere((item) => item.id == selectedNextSource.id);
     setState(() {
       _selectedProviderSource = selectedNextSource;
       _errorMessage = null;
