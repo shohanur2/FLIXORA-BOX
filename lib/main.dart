@@ -54,11 +54,19 @@ const Color gold = Color(0xFFB8892D);
 const Color goldLight = Color(0xFF8D6A1F);
 const Color white = Color(0xFF191919);
 const Color ink = Color(0xFF191919);
+const Color ink70 = Color(0xB3191919);
+const Color ink60 = Color(0x99191919);
+const Color ink58 = Color(0x94191919);
+const Color ink54 = Color(0x8A191919);
+const Color ink38 = Color(0x61191919);
+const Color ink24 = Color(0x3D191919);
+const Color ink12 = Color(0x1F191919);
+const Color ink10 = Color(0x1A191919);
 const Color playerBg = Color(0xFF080808);
 const Color playerPanel = Color(0xFF191919);
 const Color playerGold = Color(0xFFD6AD45);
 const Color playerGoldLight = Color(0xFFFFE5A3);
-const Color playerWhite = ink;
+const Color playerWhite = Colors.white;
 
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
@@ -967,7 +975,7 @@ class FlixoraApp extends StatelessWidget {
             return TextStyle(
               color: states.contains(WidgetState.selected)
                   ? gold
-                  : ink.withValues(alpha: 0.58),
+                  : ink58,
               fontWeight: FontWeight.bold,
               fontSize: 12,
             );
@@ -1240,7 +1248,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: panel,
         title: Text(title, style: const TextStyle(color: white)),
-        content: Text(message, style: const TextStyle(color: ink.withValues(alpha: 0.7), height: 1.45)),
+        content: Text(message, style: const TextStyle(color: ink70, height: 1.45)),
         actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
       ),
     );
@@ -1704,7 +1712,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: ink.withValues(alpha: 0.7),
+                    color: ink70,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1724,7 +1732,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: ListTile(
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: const BorderSide(color: ink.withValues(alpha: 0.12)),
+                            side: const BorderSide(color: ink12),
                           ),
                           leading: const Icon(
                             Icons.high_quality_rounded,
@@ -1741,7 +1749,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           subtitle: Text(
                             'File size: ${item['size_label']}',
                             style: const TextStyle(
-                              color: ink.withValues(alpha: 0.7),
+                              color: ink70,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                             ),
@@ -1831,7 +1839,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: panel,
         title: const Text('Delete Download?', style: TextStyle(color: white)),
-        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: ink.withValues(alpha: 0.7))),
+        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: ink70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete', style: TextStyle(color: Colors.redAccent))),
@@ -2267,7 +2275,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => setState(() => _sectionFilters[title] = value),
-                  child: Center(child: Text(value, style: TextStyle(color: active ? const gold : ink.withValues(alpha: 0.6), fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                  child: Center(child: Text(value, style: TextStyle(color: active ? gold : ink60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
                 );
               },
             ),
@@ -2336,10 +2344,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       const Icon(Icons.star, color: gold, size: 12),
                       const SizedBox(width: 3),
                       Text(movie.rating.toStringAsFixed(1),
-                          style: const TextStyle(color: ink.withValues(alpha: 0.6), fontSize: 10)),
+                          style: const TextStyle(color: ink60, fontSize: 10)),
                       const SizedBox(width: 6),
                       Text(movie.year,
-                          style: const TextStyle(color: ink.withValues(alpha: 0.54), fontSize: 10)),
+                          style: const TextStyle(color: ink54, fontSize: 10)),
                     ],
                   ),
                 ],
@@ -2431,7 +2439,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   width: _slide == index ? 18 : 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: _slide == index ? ink : ink.withValues(alpha: 0.54),
+                    color: _slide == index ? ink : ink54,
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
@@ -2530,7 +2538,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
-                                        color: ink.withValues(alpha: 0.6),
+                                        color: ink60,
                                         fontSize: 10,
                                         fontWeight: FontWeight.w600,
                                       ),
@@ -2674,7 +2682,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return Center(
         child: Text(
           'No $title available.',
-          style: const TextStyle(color: ink.withValues(alpha: 0.54)),
+          style: const TextStyle(color: ink54),
         ),
       );
     }
@@ -2737,7 +2745,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               Text(
                 movie.year,
                 style: const TextStyle(
-                  color: ink.withValues(alpha: 0.54),
+                  color: ink54,
                   fontSize: 10,
                 ),
               ),
@@ -2759,7 +2767,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return Center(
         child: Text(
           _searchError ?? 'Search for a movie.',
-          style: const TextStyle(color: ink.withValues(alpha: 0.54)),
+          style: const TextStyle(color: ink54),
         ),
       );
     }
@@ -2823,7 +2831,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 4),
                   Text(
                     user == null ? 'Sign in to sync your account' : 'Visitor account',
-                    style: const TextStyle(color: ink.withValues(alpha: 0.54), fontSize: 12),
+                    style: const TextStyle(color: ink54, fontSize: 12),
                   ),
                 ],
               ),
@@ -2851,7 +2859,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               trailingText: '${_favourites.length}'),
           _profileTile(Icons.notifications_none, 'Messages',
               () => _openProfileSection('Messages'),
-              trailing: const Icon(Icons.chevron_right, color: ink.withValues(alpha: 0.54))),
+              trailing: const Icon(Icons.chevron_right, color: ink54)),
           _profileTile(Icons.live_tv_outlined, 'TV Download & Web Link',
               () => _openProfileSection('TV Download & Web Link'),
               trailing: const Text('NEW', style: TextStyle(
@@ -2881,7 +2889,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const Center(
           child: Text(
             'FLIXORA  •  Movies, made simple.',
-            style: TextStyle(color: ink.withValues(alpha: 0.38), fontSize: 12),
+            style: TextStyle(color: ink38, fontSize: 12),
           ),
         ),
       ],
@@ -2893,15 +2901,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       Padding(
         padding: const EdgeInsets.fromLTRB(4, 2, 2, 10),
         child: Row(children: [
-          const Icon(Icons.history, color: ink.withValues(alpha: 0.7), size: 20),
+          const Icon(Icons.history, color: ink70, size: 20),
           const SizedBox(width: 9),
           const Expanded(child: Text('Watch History', style: TextStyle(color: white, fontSize: 17, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic))),
-          Text('${_watchHistory.length}', style: const TextStyle(color: ink.withValues(alpha: 0.54))),
-          IconButton(tooltip: 'View all watch history', onPressed: () => _openProfileSection('Watch History'), icon: const Icon(Icons.chevron_right, color: ink.withValues(alpha: 0.7), size: 25)),
+          Text('${_watchHistory.length}', style: const TextStyle(color: ink54)),
+          IconButton(tooltip: 'View all watch history', onPressed: () => _openProfileSection('Watch History'), icon: const Icon(Icons.chevron_right, color: ink70, size: 25)),
         ]),
       ),
       if (_watchHistory.isEmpty)
-        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 12), child: Text('Movies you play will appear here.', style: TextStyle(color: ink.withValues(alpha: 0.54))))
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 12), child: Text('Movies you play will appear here.', style: TextStyle(color: ink54)))
       else
         SizedBox(height: 112, child: ListView.separated(
           scrollDirection: Axis.horizontal, itemCount: _watchHistory.length,
@@ -2936,10 +2944,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
             const SizedBox(height: 7),
-            const Text('Recently watched', style: TextStyle(color: ink.withValues(alpha: 0.6), fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+            const Text('Recently watched', style: TextStyle(color: ink60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
           ])),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: ink.withValues(alpha: 0.6)), color: panel,
+            icon: const Icon(Icons.more_vert, color: ink60), color: panel,
             onSelected: (value) async {
               if (value == 'remove') {
                 setState(() => _watchHistory.removeWhere((item) => item.id == movie.id));
@@ -2948,7 +2956,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
           ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink.withValues(alpha: 0.7), child: Icon(Icons.play_arrow, color: Colors.black, size: 21))),
+          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.black, size: 21))),
         ]);
       },
     );
@@ -2971,7 +2979,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Widget? trailing,
   }) {
     return ListTile(
-      leading: Icon(icon, color: ink.withValues(alpha: 0.7)),
+      leading: Icon(icon, color: ink70),
       title: Text(title, style: const TextStyle(
         color: white, fontWeight: FontWeight.w600,
       )),
@@ -2982,9 +2990,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: Text(trailingText,
-                  style: const TextStyle(color: ink.withValues(alpha: 0.54))),
+                  style: const TextStyle(color: ink54)),
             ),
-          const Icon(Icons.chevron_right, color: ink.withValues(alpha: 0.54)),
+          const Icon(Icons.chevron_right, color: ink54),
         ],
       ),
       onTap: onTap,
@@ -3032,9 +3040,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return SwitchListTile(
       value: value, onChanged: onChanged, activeThumbColor: ink,
       activeTrackColor: const gold, inactiveThumbColor: ink,
-      inactiveTrackColor: ink.withValues(alpha: 0.24),
+      inactiveTrackColor: ink24,
       title: Text(title, style: const TextStyle(color: white, fontSize: 15, fontStyle: FontStyle.italic)),
-      subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: ink.withValues(alpha: 0.6), fontSize: 12, height: 1.3))),
+      subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: ink60, fontSize: 12, height: 1.3))),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
     );
   }
@@ -3042,7 +3050,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _settingsContent() {
     return Column(children: [
       Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 14, 12, 16), children: [
-        const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: ink.withValues(alpha: 0.7), fontSize: 13))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.notifications_none, 'Notifications', () => _saveBoolSetting('flixora_notifications', !_notificationsEnabled, (x) => _notificationsEnabled = x),
             trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: ink, activeTrackColor: const gold)),
@@ -3054,7 +3062,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
         ]),
         const SizedBox(height: 20),
-        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: ink.withValues(alpha: 0.7), fontSize: 13))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.system_update, 'Check update', () => _showSettingsInfo('Check update', 'Automatic update checking is not connected to a release service yet. Install new FLIXORA versions from the official release when available.')),
           _profileTile(Icons.info_outline, 'About us', () => _showSettingsInfo('About FLIXORA', 'FLIXORA is a free movie and series discovery and streaming app.')),
@@ -3079,7 +3087,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text(message, textAlign: TextAlign.center,
-                style: const TextStyle(color: ink.withValues(alpha: 0.54), height: 1.4)),
+                style: const TextStyle(color: ink54, height: 1.4)),
           ],
         ),
       ),
@@ -3216,7 +3224,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           style: const TextStyle(color: white),
           decoration: const InputDecoration(
             labelText: '4–6 digit PIN',
-            counterStyle: TextStyle(color: ink.withValues(alpha: 0.54)),
+            counterStyle: TextStyle(color: ink54),
           ),
         ),
         actions: [
@@ -3277,7 +3285,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? const gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? const gold : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
         },
       ))),
-      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink.withValues(alpha: 0.54)))) : ListView.builder(
+      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
@@ -3290,7 +3298,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(movie.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 14, fontWeight: FontWeight.w700)),
               const Spacer(),
-              Row(children: [const Icon(Icons.star, color: gold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: gold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink.withValues(alpha: 0.54), fontSize: 11)))]),
+              Row(children: [const Icon(Icons.star, color: gold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: gold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
             IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
@@ -3336,7 +3344,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return const Center(
             child: Text(
               'No movies available yet.',
-              style: TextStyle(color: ink.withValues(alpha: 0.54)),
+              style: TextStyle(color: ink54),
             ),
           );
         }
@@ -3374,9 +3382,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 22, color: selected ? const gold : ink.withValues(alpha: 0.6)),
+              Icon(selected ? activeIcon : icon, size: 22, color: selected ? const gold : ink60),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? const gold : ink.withValues(alpha: 0.6), fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+              Text(label, style: TextStyle(color: selected ? const gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
             ],          ),
         ),
       ),
@@ -3423,7 +3431,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       decoration: BoxDecoration(
                         color: const Color(0xFFF2F0EA),
                         borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: ink.withValues(alpha: 0.12)),
+                        border: Border.all(color: ink12),
                       ),
                       child: TextField(
                         controller: _searchController,
@@ -3433,12 +3441,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         decoration: InputDecoration(
                           hintText: 'Search movies & series...',
                           hintStyle: const TextStyle(
-                            color: ink.withValues(alpha: 0.54),
+                            color: ink54,
                             fontSize: 13,
                           ),
                           prefixIcon: const Icon(
                             Icons.search,
-                            color: ink.withValues(alpha: 0.7),
+                            color: ink70,
                             size: 21,
                           ),
                           suffixIcon: _searchController.text.isEmpty
@@ -3450,7 +3458,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   },
                                   icon: const Icon(
                                     Icons.close,
-                                    color: ink.withValues(alpha: 0.54),
+                                    color: ink54,
                                     size: 18,
                                   ),
                                 ),
@@ -3523,7 +3531,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Container(
             height: 56,
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: ink.withValues(alpha: 0.1), width: 0.5)),
+              border: Border(top: BorderSide(color: ink10, width: 0.5)),
             ),
             child: Row(
               children: [
@@ -3651,7 +3659,7 @@ class DownloadsScreen extends StatelessWidget {
                 'Your saved videos will appear here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: ink.withValues(alpha: 0.7),
+                  color: ink70,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
@@ -3700,7 +3708,7 @@ class DownloadsScreen extends StatelessWidget {
                   border: Border.all(
                     color: completed
                         ? const Color(0x5539E69B)
-                        : ink.withValues(alpha: 0.12),
+                        : ink12,
                   ),
                 ),
                 child: Row(
@@ -3753,7 +3761,7 @@ class DownloadsScreen extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: ink.withValues(alpha: 0.7),
+                              color: ink70,
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -3784,7 +3792,7 @@ class DownloadsScreen extends StatelessWidget {
                                         ? task.progress
                                         : (completed ? 1 : null),
                                     minHeight: 6,
-                                    backgroundColor: ink.withValues(alpha: 0.24),
+                                    backgroundColor: ink24,
                                     color: statusColor,
                                   ),
                                 ),
@@ -3809,7 +3817,7 @@ class DownloadsScreen extends StatelessWidget {
                             Text(
                               'Downloaded: ${DownloadManager.formatBytes(task.bytesReceived)}',
                               style: const TextStyle(
-                                color: ink.withValues(alpha: 0.7),
+                                color: ink70,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -3829,7 +3837,7 @@ class DownloadsScreen extends StatelessWidget {
                               : null,
                           icon: Icon(
                             Icons.play_circle_fill,
-                            color: completed ? const Color(0xFF39E69B) : ink.withValues(alpha: 0.24),
+                            color: completed ? const Color(0xFF39E69B) : ink24,
                           ),
                         ),
                         IconButton(
@@ -3968,7 +3976,7 @@ class MovieDetailsScreen extends StatelessWidget {
                             Text(
                               movie.year,
                               style: const TextStyle(
-                                color: ink.withValues(alpha: 0.6),
+                                color: ink60,
                               ),
                             ),                            const SizedBox(height: 8),
                             Row(
@@ -3992,14 +4000,14 @@ class MovieDetailsScreen extends StatelessWidget {
                               const SizedBox(height: 8),
                               Text(
                                 'Country: ${movie.originCountry}',
-                                style: const TextStyle(color: ink.withValues(alpha: 0.6)),
+                                style: const TextStyle(color: ink60),
                               ),
                             ],
                             if (movie.originalLanguage.isNotEmpty) ...[
                               const SizedBox(height: 6),
                               Text(
                                 'Language: ${movie.originalLanguage.toUpperCase()}',
-                                style: const TextStyle(color: ink.withValues(alpha: 0.6)),
+                                style: const TextStyle(color: ink60),
                               ),
                             ],
                             if (movie.runtime != null &&
@@ -4008,7 +4016,7 @@ class MovieDetailsScreen extends StatelessWidget {
                               Text(
                                 '${movie.runtime} min',
                                 style: const TextStyle(
-                                  color: ink.withValues(alpha: 0.6),
+                                  color: ink60,
                                 ),
                               ),
                             ],
@@ -4051,7 +4059,7 @@ class MovieDetailsScreen extends StatelessWidget {
                         ? 'No description available.'
                         : movie.overview,
                     style: const TextStyle(
-                      color: ink.withValues(alpha: 0.7),
+                      color: ink70,
                       height: 1.6,
                       fontSize: 14,
                     ),
@@ -4085,7 +4093,7 @@ class MovieDetailsScreen extends StatelessWidget {
                       padding: EdgeInsets.symmetric(vertical: 10),
                       child: Text(
                         'This title is not currently available to stream on FLIXORA.',
-                        style: TextStyle(color: ink.withValues(alpha: 0.6), fontSize: 13),
+                        style: TextStyle(color: ink60, fontSize: 13),
                       ),
                     ),
                   const SizedBox(height: 12),
