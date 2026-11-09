@@ -548,6 +548,28 @@ class TmdbService {
     return [...results[0], ...results[1]];
   }
 
+  static Future<List<Map<String, dynamic>>> getCast(
+    int id, {String mediaType = 'movie'}
+  ) async {
+    if (apiKey.isEmpty || id <= 0) return [];
+    try {
+      final uri = Uri.parse('$base/$mediaType/$id/credits').replace(
+        queryParameters: {'api_key': apiKey, 'language': 'en-US'},
+      );
+      final response = await http.get(uri).timeout(const Duration(seconds: 15));
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return (data['cast'] as List? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .take(18)
+          .toList();
+    } catch (e) {
+      debugPrint('Could not load cast information: $e');
+      return [];
+    }
+  }
+
   static Future<Map<String, dynamic>> details(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -659,6 +681,47 @@ class FlixoraMovieService {
     }).where((movie) => movie.sourceId > 0 && movie.hasPlayableVideoUrl).toList();
   }
 
+  static Future<List<Map<String, String>>> getDownloadQualities(
+    Movie movie,
+  ) async {
+    final client = supabaseClient;
+    final options = <Map<String, String>>[];
+
+    if (client != null && movie.sourceId > 0) {
+      try {
+        final rows = await client
+            .from('movie_video_qualities')
+            .select('quality, video_url')
+            .eq('movie_id', movie.sourceId);
+        for (final item in (rows as List).whereType<Map>()) {
+          final quality = (item['quality'] ?? '').toString().trim();
+          final url = (item['video_url'] ?? '').toString().trim();
+          if (quality.isEmpty || !_isHttpUrl(url)) continue;
+          final path = Uri.parse(url).path.toLowerCase();
+          if (path.endsWith('.m3u8') || path.endsWith('.mpd')) continue;
+          options.add({'quality': quality, 'video_url': url});
+        }
+      } catch (e) {
+        debugPrint('Could not load download quality sources: $e');
+      }
+    }
+
+    if (options.isEmpty && _isHttpUrl(movie.downloadUrl)) {
+      final path = Uri.parse(movie.downloadUrl).path.toLowerCase();
+      if (!path.endsWith('.m3u8') && !path.endsWith('.mpd')) {
+        options.add({
+          'quality': 'Original',
+          'video_url': movie.downloadUrl.trim(),
+        });
+      }
+    }
+
+    return VideoQualityService.sort(
+      options,
+      (item) => item['quality'] ?? 'Original',
+    );
+  }
+
   static Future<List<Movie>> getPublishedMovies() async {
     final client = supabaseClient;
     if (client == null) return [];
@@ -697,21 +760,31 @@ class FlixoraMovieService {
   }
 }
 
-class DownloadTask {  final int movieId;  final String title;
+class DownloadTask {
+  final int movieId;
+  final String title;
   final String poster;
   final String videoUrl;
+  final String quality;
   double progress;
+  int bytesReceived;
+  int totalBytes;
   String status;
   String? filePath;
+  String? errorMessage;
 
   DownloadTask({
     required this.movieId,
     required this.title,
     required this.poster,
     this.videoUrl = '',
+    this.quality = 'Original',
     this.progress = 0,
+    this.bytesReceived = 0,
+    this.totalBytes = 0,
     this.status = 'Waiting',
     this.filePath,
+    this.errorMessage,
   });
 
   Map<String, dynamic> toJson() => {
@@ -719,9 +792,13 @@ class DownloadTask {  final int movieId;  final String title;
         'title': title,
         'poster': poster,
         'videoUrl': videoUrl,
+        'quality': quality,
         'progress': progress,
+        'bytesReceived': bytesReceived,
+        'totalBytes': totalBytes,
         'status': status,
         'filePath': filePath,
+        'errorMessage': errorMessage,
       };
 
   factory DownloadTask.fromJson(Map<String, dynamic> json) => DownloadTask(
@@ -729,22 +806,83 @@ class DownloadTask {  final int movieId;  final String title;
         title: (json['title'] ?? 'Downloaded Movie').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
+        quality: (json['quality'] ?? 'Original').toString(),
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
+        bytesReceived: _toInt(json['bytesReceived']),
+        totalBytes: _toInt(json['totalBytes']),
         status: (json['status'] ?? 'Completed').toString(),
         filePath: json['filePath']?.toString(),
+        errorMessage: json['errorMessage']?.toString(),
       );
 }
 
 class DownloadManager {
   static final Dio _dio = Dio();
 
+  static String formatBytes(int bytes) {
+    if (bytes <= 0) return 'Size unavailable';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    var size = bytes.toDouble();
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit++;
+    }
+    return '${size.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
+  }
+
+  static Future<int?> getRemoteFileSize(String url) async {
+    try {
+      final response = await _dio.head(
+        url,
+        options: Options(headers: {'Accept-Encoding': 'identity'}),
+      ).timeout(const Duration(seconds: 10));
+      final length = int.tryParse(
+        response.headers.value('content-length') ?? '',
+      );
+      if (length != null && length > 0) return length;
+    } catch (_) {
+      // Some file hosts block HEAD requests; try a one-byte range request.
+    }
+
+    final token = CancelToken();
+    try {
+      final response = await _dio.get<ResponseBody>(
+        url,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {
+            'Range': 'bytes=0-0',
+            'Accept-Encoding': 'identity',
+          },
+        ),
+        cancelToken: token,
+      ).timeout(const Duration(seconds: 10));
+      final contentRange = response.headers.value('content-range') ?? '';
+      final totalMatch = RegExp(r'/([0-9]+)$').firstMatch(contentRange);
+      final total = int.tryParse(totalMatch?.group(1) ?? '');
+      if (total != null && total > 0) return total;
+      final length = int.tryParse(
+        response.headers.value('content-length') ?? '',
+      );
+      if (response.statusCode == 200 && length != null && length > 0) {
+        return length;
+      }
+    } catch (_) {
+      // The size is unavailable when the host hides its content length.
+    } finally {
+      token.cancel('File size check complete');
+    }
+    return null;
+  }
+
   static Future<void> download({
     required String url,
     required String fileName,
     required int uniqueId,
-    required Function(double) onProgress,
-    required Function(String) onComplete,
-    required Function(String) onError,
+    required void Function(int received, int total) onProgress,
+    required Future<void> Function(String path) onComplete,
+    required void Function(String message) onError,
   }) async {
     try {
       final uri = Uri.tryParse(url);
@@ -756,33 +894,33 @@ class DownloadManager {
       }
 
       final directory = await getApplicationDocumentsDirectory();
-
       final safeName = fileName.replaceAll(
         RegExp(r'[^a-zA-Z0-9_-]'),
         '_',
       );
-
-      final path = '${directory.path}/${safeName}_$uniqueId.mp4';
+      final extensionMatch = RegExp(
+        r'\.(mp4|mkv|webm|mov|avi|m4v)$',
+        caseSensitive: false,
+      ).firstMatch(uri.path);
+      final extension = extensionMatch?.group(0) ?? '.mp4';
+      final path = '${directory.path}/${safeName}_$uniqueId$extension';
 
       await _dio.download(
         url,
         path,
         onReceiveProgress: (received, total) {
-          if (total > 0) {
-            onProgress((received / total).clamp(0.0, 1.0));
-          }
+          onProgress(received, total);
         },
       );
-
-      onComplete(path);
+      await onComplete(path);
     } on DioException catch (e) {
       onError(
         e.type == DioExceptionType.cancel
             ? 'Download cancelled'
-            : 'Download failed',
+            : 'Download failed. Please try again.',
       );
     } catch (_) {
-      onError('Download failed');
+      onError('Download failed. Please try again.');
     }
   }
 }
@@ -1465,59 +1603,198 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> addDownload(Movie movie) async {
-    if (!_online || !await InternetService.isOnline()) {
+    final hasInternet = await InternetService.isOnline();
+    if (!hasInternet) {
       if (mounted) {
-        setState(() { _online = false; _connectionKnown = true; });
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
         _showMessage('Check your internet connection');
       }
       return;
     }
 
-    if (movie.downloadUrl.trim().isEmpty) {
-      _showMessage('Download is not available for this movie.');
-      return;
-    }
+    if (mounted && !_online) setState(() => _online = true);
 
     final existing = _downloads.where((item) => item.movieId == movie.id).toList();
-    if (existing.any((item) => item.status == 'Downloading' || item.status == 'Completed')) {
+    if (existing.any((item) =>
+        item.status == 'Downloading' || item.status == 'Completed')) {
       _showMessage(existing.any((item) => item.status == 'Completed')
           ? 'This movie is already downloaded.'
           : 'This movie is already downloading.');
       return;
     }
 
+    final rawOptions = await FlixoraMovieService.getDownloadQualities(movie);
+    if (!mounted) return;
+    if (rawOptions.isEmpty) {
+      _showMessage(
+        'Download source is not available for this movie. Ask Admin to add a direct video file.',
+      );
+      return;
+    }
+
+    final options = await Future.wait(rawOptions.map((item) async {
+      final size = await DownloadManager.getRemoteFileSize(item['video_url']!);
+      return <String, String>{
+        ...item,
+        'size_bytes': size?.toString() ?? '',
+        'size_label': size == null
+            ? 'File size unavailable'
+            : DownloadManager.formatBytes(size),
+      };
+    }));
+
+    if (!mounted) return;
+    final selected = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.72,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Choose Download Quality',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  movie.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = options[index];
+                      final quality = item['quality'] ?? 'Original';
+                      return Material(
+                        color: bg,
+                        borderRadius: BorderRadius.circular(12),
+                        child: ListTile(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(color: Colors.white12),
+                          ),
+                          leading: const Icon(
+                            Icons.high_quality_rounded,
+                            color: goldLight,
+                            size: 25,
+                          ),
+                          title: Text(
+                            VideoQualityService.displayName(quality),
+                            style: const TextStyle(
+                              color: white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          subtitle: Text(
+                            'File size: ${item['size_label']}',
+                            style: const TextStyle(
+                              color: Colors.white87,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          trailing: const Icon(
+                            Icons.download_rounded,
+                            color: Color(0xFF37E69A),
+                          ),
+                          onTap: () => Navigator.pop(sheetContext, item),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || selected == null) return;
+    final selectedUrl = selected['video_url'] ?? '';
+    if (selectedUrl.isEmpty) {
+      _showMessage('This download source is not valid.');
+      return;
+    }
+
+    final expectedBytes = int.tryParse(selected['size_bytes'] ?? '') ?? 0;
+    final quality = selected['quality'] ?? 'Original';
     final task = DownloadTask(
       movieId: movie.id,
       title: movie.title,
       poster: movie.posterUrl,
-      videoUrl: movie.videoUrl,
+      videoUrl: selectedUrl,
+      quality: quality,
+      totalBytes: expectedBytes,
       status: 'Downloading',
     );
 
     setState(() => _downloads.insert(0, task));
 
     await DownloadManager.download(
-      url: movie.downloadUrl,
-      fileName: movie.title,
-      uniqueId: movie.id,
-      onProgress: (progress) {
+      url: selectedUrl,
+      fileName: '${movie.title}_$quality',
+      uniqueId: DateTime.now().millisecondsSinceEpoch,
+      onProgress: (received, total) {
         if (!mounted) return;
-        setState(() => task.progress = progress);
+        setState(() {
+          task.bytesReceived = received;
+          if (total > 0) task.totalBytes = total;
+          if (task.totalBytes > 0) {
+            task.progress = (received / task.totalBytes).clamp(0.0, 1.0);
+          }
+        });
       },
-      onComplete: (path) {
+      onComplete: (path) async {
+        final fileSize = await File(path).length();
         if (!mounted) return;
         setState(() {
           task
             ..progress = 1
+            ..bytesReceived = fileSize
+            ..totalBytes = fileSize
             ..status = 'Completed'
-            ..filePath = path;
+            ..filePath = path
+            ..errorMessage = null;
         });
-        MovieCache.saveDownloads(_downloads);
-        _showMessage('${movie.title} downloaded successfully.');
+        await MovieCache.saveDownloads(_downloads);
+        _showMessage('Successfully downloaded ${movie.title}.');
       },
       onError: (message) {
         if (!mounted) return;
-        setState(() => _downloads.remove(task));
+        setState(() {
+          task
+            ..status = 'Failed'
+            ..errorMessage = message;
+        });
         _showMessage(message);
       },
     );
@@ -1559,8 +1836,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
-          backgroundColor: panel,
+          content: Text(
+            message,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          backgroundColor: const Color(0xFF242832),
+          behavior: SnackBarBehavior.floating,
         ),
       );
   }
@@ -3281,8 +3566,9 @@ class NoInternetScreen extends StatelessWidget {
                 'Please check your internet connection and try again.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white54,
-                  fontSize: 14,
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(height: 25),
@@ -3324,25 +3610,25 @@ class DownloadsScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.download_outlined,
-                size: 65,
-                color: Colors.white30,
-              ),
+              const Icon(Icons.download_outlined, size: 65, color: goldLight),
               const SizedBox(height: 15),
               const Text(
                 'No Downloads Yet',
                 style: TextStyle(
                   color: white,
-                  fontSize: 19,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 8),
               const Text(
-                'Your downloaded movies will appear here.',
+                'Your saved videos will appear here.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white54),
+                style: TextStyle(
+                  color: Colors.white87,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ],
           ),
@@ -3350,110 +3636,195 @@ class DownloadsScreen extends StatelessWidget {
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: tasks.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final task = tasks[index];
-
-        return Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: panel,
-            borderRadius: BorderRadius.circular(14),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Text(
+            'Saved Videos',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
           ),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(9),
-                child: SizedBox(
-                  width: 65,
-                  height: 90,
-                  child: task.poster.isEmpty
-                      ? Container(
-                          color: bg,
-                          child: const Icon(
-                            Icons.movie,
-                            color: gold,
-                          ),
-                        )
-                      : CachedNetworkImage(
-                          imageUrl: task.poster,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => Container(
-                            color: bg,
-                            child: const Icon(
-                              Icons.movie,
-                              color: gold,
+        ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            itemCount: tasks.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final task = tasks[index];
+              final completed = task.status == 'Completed';
+              final failed = task.status == 'Failed';
+              final statusColor = completed
+                  ? const Color(0xFF39E69B)
+                  : failed
+                      ? Colors.redAccent
+                      : goldLight;
+              final percent = (task.progress * 100).round().clamp(0, 100);
+
+              return Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: panel,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: completed
+                        ? const Color(0x5539E69B)
+                        : Colors.white12,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(9),
+                      child: SizedBox(
+                        width: 68,
+                        height: 94,
+                        child: task.poster.isEmpty
+                            ? Container(
+                                color: bg,
+                                child: const Icon(
+                                  Icons.movie,
+                                  color: goldLight,
+                                  size: 30,
+                                ),
+                              )
+                            : CachedNetworkImage(
+                                imageUrl: task.poster,
+                                fit: BoxFit.cover,
+                                errorWidget: (_, __, ___) => Container(
+                                  color: bg,
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: goldLight,
+                                  ),
+                                ),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 13),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            task.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 14,
                             ),
                           ),
+                          const SizedBox(height: 5),
+                          Text(
+                            '${VideoQualityService.displayName(task.quality)}  •  ${task.totalBytes > 0 ? DownloadManager.formatBytes(task.totalBytes) : 'Size unavailable'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white87,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 7),
+                          Text(
+                            completed
+                                ? 'Successfully Downloaded'
+                                : failed
+                                    ? (task.errorMessage ?? 'Download failed')
+                                    : 'Downloading',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: statusColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 7),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(5),
+                                  child: LinearProgressIndicator(
+                                    value: task.totalBytes > 0
+                                        ? task.progress
+                                        : (completed ? 1 : null),
+                                    minHeight: 6,
+                                    backgroundColor: Colors.white24,
+                                    color: statusColor,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                completed
+                                    ? '100%'
+                                    : task.totalBytes > 0
+                                        ? '$percent%'
+                                        : DownloadManager.formatBytes(task.bytesReceived),
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (!completed && task.bytesReceived > 0) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Downloaded: ${DownloadManager.formatBytes(task.bytesReceived)}',
+                              style: const TextStyle(
+                                color: Colors.white87,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Play downloaded movie',
+                          onPressed: completed && task.filePath != null
+                              ? () => onPlay(task)
+                              : null,
+                          icon: Icon(
+                            Icons.play_circle_fill,
+                            color: completed ? const Color(0xFF39E69B) : Colors.white24,
+                          ),
                         ),
-                ),
-              ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      task.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      task.status,
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    LinearProgressIndicator(
-                      value: task.progress,
-                      backgroundColor: Colors.white12,
-                      color: gold,
-                    ),
-                    if (task.filePath != null) ...[
-                      const SizedBox(height: 5),
-                      Text(
-                        task.filePath!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white38,
-                          fontSize: 10,
+                        IconButton(
+                          tooltip: 'Delete download',
+                          onPressed: completed || failed
+                              ? () => onDelete(task)
+                              : null,
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.redAccent,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 6),
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: 'Play downloaded movie',
-                    onPressed: task.status == 'Completed' && task.filePath != null ? () => onPlay(task) : null,
-                    icon: const Icon(Icons.play_circle_fill, color: gold),
-                  ),
-                  IconButton(
-                    tooltip: 'Delete download',
-                    onPressed: task.status == 'Completed' ? () => onDelete(task) : null,
-                    icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                  ),
-                ],
-              ),
-            ],
+              );
+            },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }
@@ -5690,6 +6061,333 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
+  Future<void> _showMovieInfo() async {
+    _cancelHideTimer();
+    final castFuture = TmdbService.getCast(
+      widget.movie.tmdbId,
+      mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+    );
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.76,
+        minChildSize: 0.42,
+        maxChildSize: 0.94,
+        builder: (context, scrollController) => Stack(
+          children: [
+            SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(17, 46, 17, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(11),
+                        child: SizedBox(
+                          width: 100,
+                          height: 148,
+                          child: widget.movie.posterUrl.isEmpty
+                              ? Container(
+                                  color: bg,
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: goldLight,
+                                    size: 36,
+                                  ),
+                                )
+                              : FlixoraCachedImage(
+                                  imageUrl: widget.movie.posterUrl,
+                                  isOnline: _playerIsOnline,
+                                  fit: BoxFit.cover,
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.movie.title,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: white,
+                                fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Text(
+                              [
+                                widget.movie.mediaType == 'tv' ? 'TV SERIES' : 'MOVIE',
+                                if (widget.movie.year.isNotEmpty) widget.movie.year,
+                              ].join('  •  '),
+                              style: const TextStyle(
+                                color: goldLight,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            if (widget.movie.rating > 0) ...[
+                              const SizedBox(height: 9),
+                              Row(
+                                children: [
+                                  const Icon(Icons.star_rounded, color: goldLight, size: 19),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    '${widget.movie.rating.toStringAsFixed(1)}/10',
+                                    style: const TextStyle(
+                                      color: white,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  const Text(
+                                    'TMDB Rating',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (widget.movie.originCountry.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                'Country: ${widget.movie.originCountry}',
+                                style: const TextStyle(
+                                  color: Colors.white87,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                            if (widget.movie.originalLanguage.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Original language: ${widget.movie.originalLanguage.toUpperCase()}',
+                                style: const TextStyle(
+                                  color: Colors.white87,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                            if (widget.movie.runtime != null && widget.movie.runtime! > 0) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                '${widget.movie.runtime!.round()} min',
+                                style: const TextStyle(
+                                  color: Colors.white87,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (widget.movie.genres.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: widget.movie.genres.map((genre) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: bg,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: gold.withValues(alpha: 0.35)),
+                        ),
+                        child: Text(
+                          genre,
+                          style: const TextStyle(
+                            color: goldLight,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Movie Info',
+                    style: TextStyle(
+                      color: white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    widget.movie.overview.isEmpty
+                        ? 'No description available.'
+                        : widget.movie.overview,
+                    style: const TextStyle(
+                      color: Colors.white87,
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                  if (widget.movie.audioLanguages.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Available Audio: ${widget.movie.audioLanguages.join(', ')}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Cast',
+                    style: TextStyle(
+                      color: white,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 11),
+                  FutureBuilder<List<Map<String, dynamic>>>(
+                    future: castFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 112,
+                          child: Center(
+                            child: CircularProgressIndicator(color: goldLight),
+                          ),
+                        );
+                      }
+                      final cast = snapshot.data ?? const <Map<String, dynamic>>[];
+                      if (cast.isEmpty) {
+                        return const Text(
+                          'Cast photos are not available for this title.',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        );
+                      }
+                      return SizedBox(
+                        height: 142,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: cast.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 11),
+                          itemBuilder: (context, index) {
+                            final person = cast[index];
+                            final profile = (person['profile_path'] ?? '').toString();
+                            final name = (person['name'] ?? 'Cast member').toString();
+                            final character = (person['character'] ?? '').toString();
+                            return SizedBox(
+                              width: 78,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: SizedBox(
+                                      width: 72,
+                                      height: 88,
+                                      child: profile.isEmpty
+                                          ? Container(
+                                              color: bg,
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: goldLight,
+                                                size: 34,
+                                              ),
+                                            )
+                                          : FlixoraCachedImage(
+                                              imageUrl: '${imageBase}w185$profile',
+                                              isOnline: _playerIsOnline,
+                                              fit: BoxFit.cover,
+                                            ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (character.isNotEmpty)
+                                    Text(
+                                      character,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 5,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: bg,
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  tooltip: 'Close movie information',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => Navigator.of(sheetContext).pop(),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: white,
+                    size: 19,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    _startHideTimer();
+  }
+
   Widget _playerPageContent() {
     final related = _relatedMovies;
     final recommended = _recommendedMovies;
@@ -5707,6 +6405,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             genre.toLowerCase().contains('action') ||
             genre.toLowerCase().contains('adventure')))
         .take(20).toList();
+
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
@@ -5717,72 +6416,86 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         ),
         SliverToBoxAdapter(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 17, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 13, 12, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.movie.title,
-                  style: const TextStyle(
-                    color: white,
-                    fontSize: 21,
-                    fontWeight: FontWeight.bold,
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Movie information',
+                      onPressed: _showMovieInfo,
+                      icon: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.info_outline_rounded, color: goldLight, size: 17),
+                          Icon(Icons.keyboard_arrow_down_rounded, color: goldLight, size: 21),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 7),
-                if (widget.movie.year.isNotEmpty)
-                  Text(
-                    widget.movie.year,
-                    style: const TextStyle(color: Colors.white60),
-                  ),
-                if (widget.movie.originCountry.isNotEmpty ||
-                    widget.movie.originalLanguage.isNotEmpty ||
-                    widget.movie.genres.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    [
-                      if (widget.movie.mediaType == 'tv') 'TV Series' else 'Movie',
-                      if (widget.movie.originCountry.isNotEmpty) widget.movie.originCountry,
-                      if (widget.movie.originalLanguage.isNotEmpty) widget.movie.originalLanguage.toUpperCase(),
-                      ...widget.movie.genres.take(3),
-                    ].join('  •  '),
-                    style: const TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                ],
-                if (widget.movie.audioLanguages.isNotEmpty) ...[
-                  const SizedBox(height: 9),
-                  Text(
-                    'Available Audio: ${widget.movie.audioLanguages.join(', ')}',
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-                if (widget.movie.overview.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    widget.movie.overview,
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      height: 1.45,
-                    ),
+                if (widget.movie.year.isNotEmpty || widget.movie.rating > 0) ...[
+                  const SizedBox(height: 1),
+                  Row(
+                    children: [
+                      if (widget.movie.year.isNotEmpty)
+                        Text(
+                          widget.movie.year,
+                          style: const TextStyle(
+                            color: Colors.white87,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      if (widget.movie.year.isNotEmpty && widget.movie.rating > 0)
+                        const SizedBox(width: 12),
+                      if (widget.movie.rating > 0) ...[
+                        const Icon(Icons.star_rounded, color: goldLight, size: 15),
+                        const SizedBox(width: 3),
+                        Text(
+                          widget.movie.rating.toStringAsFixed(1),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: 13),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
                     _detailAction(Icons.playlist_add, 'Add to list', widget.onSave),
-                    _detailAction(Icons.share_outlined, 'Share', () => Share.share(
-                      '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
-                    )),
+                    _detailAction(
+                      Icons.share_outlined,
+                      'Share',
+                      () => Share.share(
+                        '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
+                      ),
+                    ),
                     _detailAction(Icons.download_outlined, 'Download', widget.onDownload),
-                    _detailAction(Icons.video_library_outlined, 'View downloads', widget.onViewDownloads),
+                    _detailAction(
+                      Icons.video_library_outlined,
+                      'View downloads',
+                      widget.onViewDownloads,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 18),
@@ -5790,7 +6503,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 const SizedBox(height: 12),
                 const Text(
                   'For You',
-                  style: TextStyle(color: white, fontSize: 20, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
             ),
