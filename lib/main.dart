@@ -1941,7 +1941,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  String _homeCategory = 'Trending';  String _homeCategory = 'All';
+  String _homeCategory = 'Trending';
 
   List<Movie> _moviesForHomeCategory(String category) {
     switch (category) {
@@ -2022,7 +2022,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                 )),
                 TextButton(
-                  onPressed: () => setState(() => _homeCategory = 'All'),
+                  onPressed: () => setState(() => _homeCategory = 'Trending'),
                   child: const Text('Show all'),
                 ),
               ],
