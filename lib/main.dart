@@ -1120,10 +1120,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('tv/popular').catchError((_) => <Movie>[]),
         TmdbService.getMovies('tv/top_rated').catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_genres': '16', 'sort_by': 'popularity.desc',
+          'with_genres': '16', 'with_origin_country': 'JP',
+          'sort_by': 'popularity.desc',
         }).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_origin_country': 'KR', 'with_original_language': 'ko',
+          'with_origin_country': 'KR|JP|CN|TH|TW',
+          'with_original_language': 'ko|ja|zh|th',
           'sort_by': 'popularity.desc',
         }).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
@@ -1974,9 +1976,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onRefresh: loadHome,
       child: ListView(
         children: [
-          _featuredSlider(),
-          _sectionTitle('Categories'),
           _homeCategoryStrip(),
+          _featuredSlider(),
           if (flixoraMovies.isNotEmpty) ...[
             _sectionTitle('Flixora Originals'),
             _movieRow(flixoraMovies),
