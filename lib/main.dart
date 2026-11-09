@@ -4439,6 +4439,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   ProviderEmbedSource? _selectedProviderSource;
   int _providerAttemptIndex = -1;
   final Set<String> _failedProviderIds = <String>{};
+  bool _isSelectingDefaultProvider = false;
 
   String? _errorMessage;
 
@@ -4578,16 +4579,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         !_playerIsOnline ||
         widget.localFilePath != null ||
         (!force && _validVideoUrl) ||
-        _selectedProviderSource != null) {
+        _selectedProviderSource != null ||
+        _isSelectingDefaultProvider) {
       return;
     }
 
-    // Resolve IMDb metadata before choosing Play4U. This is also important
-    // when a direct Admin source fails before the metadata request completes.
-    await _movieDetailsFuture;
-    if (!mounted || _isDisposed || _selectedProviderSource != null) return;
+    _isSelectingDefaultProvider = true;
+    try {
+      // Resolve IMDb metadata before choosing Play4U. This is also important
+      // when a direct Admin source fails before the metadata request completes.
+      await _movieDetailsFuture;
+      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
-    // Match the reference project's Play4U-first policy. If this movie has no
+      // Match the reference project's Play4U-first policy. If this movie has no
     // IMDb ID, select the first usable TMDB-based provider instead.
     final preferred = _providerSources.where(
       (source) => source.id == 'play4u' && source.isAvailable,
@@ -4599,25 +4603,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               orElse: () => null,
             );
 
-    if (fallback == null) return;
+      if (fallback == null) return;
 
-    // Stop the native engine before the WebView is mounted, releasing its
-    // decoder and network request while retaining the saved resume position.
-    try {
-      await _saveResumePosition(_position);
-      await _player.pause();
-      await _player.stop();
-    } catch (_) {}
-    if (!mounted || _isDisposed || _selectedProviderSource != null) return;
+      // Stop the native engine before the WebView is mounted, releasing its
+      // decoder and network request while retaining the saved resume position.
+      try {
+        await _saveResumePosition(_position);
+        await _player.pause();
+        await _player.stop();
+      } catch (_) {}
+      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
-    setState(() {
-      _selectedProviderSource = fallback;
-      _providerAttemptIndex =
-          _providerSources.indexWhere((item) => item.id == fallback.id);
-      _showControls = false;
-      _initialized = false;
-      _errorMessage = null;
-    });
+      _failedProviderIds.clear();
+      setState(() {
+        _selectedProviderSource = fallback;
+        _providerAttemptIndex =
+            _providerSources.indexWhere((item) => item.id == fallback.id);
+        _showControls = false;
+        _initialized = false;
+        _errorMessage = null;
+      });
+    } finally {
+      _isSelectingDefaultProvider = false;
+    }
   }
 
   void _tryNextProvider(ProviderEmbedSource failedSource) {
