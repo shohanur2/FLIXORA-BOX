@@ -73,6 +73,9 @@ class Movie {
   final double? runtime;
   final String videoUrl;
   final String downloadUrl;
+  final String mediaType;
+  final String originalLanguage;
+  final String originCountry;
 
   const Movie({
     required this.id,
@@ -90,6 +93,9 @@ class Movie {
     this.runtime,
     this.videoUrl = '',
     this.downloadUrl = '',
+    this.mediaType = 'movie',
+    this.originalLanguage = '',
+    this.originCountry = '',
   });
 
   bool get isFlixora => source == 'flixora';
@@ -122,10 +128,13 @@ class Movie {
         runtime: runtime ?? fallback.runtime,
         videoUrl: videoUrl.isNotEmpty ? videoUrl : fallback.videoUrl,
         downloadUrl: downloadUrl.isNotEmpty ? downloadUrl : fallback.downloadUrl,
+        mediaType: mediaType,
+        originalLanguage: originalLanguage.isNotEmpty ? originalLanguage : fallback.originalLanguage,
+        originCountry: originCountry.isNotEmpty ? originCountry : fallback.originCountry,
       );
 
-  factory Movie.fromJson(Map<String, dynamic> json) {
-    final date = (json['release_date'] ?? '').toString();
+  factory Movie.fromJson(Map<String, dynamic> json, {String? mediaType}) {
+    final date = (json['release_date'] ?? json['first_air_date'] ?? '').toString();
     final movieId = _toInt(json['id']);
 
     return Movie(
@@ -138,6 +147,11 @@ class Movie {
       poster: (json['poster_path'] ?? '').toString(),
       backdrop: (json['backdrop_path'] ?? '').toString(),
       rating: (json['vote_average'] as num?)?.toDouble() ?? 0,
+      mediaType: mediaType ?? (json['media_type'] ?? 'movie').toString(),
+      originalLanguage: (json['original_language'] ?? '').toString(),
+      originCountry: ((json['origin_country'] is List && (json['origin_country'] as List).isNotEmpty)
+              ? (json['origin_country'] as List).first
+              : '').toString(),
     );
   }
 
@@ -167,6 +181,7 @@ class Movie {
       runtime: (json['runtime'] as num?)?.toDouble(),
       videoUrl: (json['video_url'] ?? '').toString(),
       downloadUrl: (json['download_url'] ?? '').toString(),
+      mediaType: 'movie',
     );
   }
 
@@ -196,6 +211,9 @@ class Movie {
       runtime: (json['runtime'] as num?)?.toDouble(),
       videoUrl: (json['videoUrl'] ?? '').toString(),
       downloadUrl: (json['downloadUrl'] ?? '').toString(),
+      mediaType: (json['mediaType'] ?? 'movie').toString(),
+      originalLanguage: (json['originalLanguage'] ?? '').toString(),
+      originCountry: (json['originCountry'] ?? '').toString(),
     );
   }
 
@@ -215,6 +233,9 @@ class Movie {
         'runtime': runtime,
         'videoUrl': videoUrl,
         'downloadUrl': downloadUrl,
+        'mediaType': mediaType,
+        'originalLanguage': originalLanguage,
+        'originCountry': originCountry,
       };
 
   bool _isFullUrl(String value) {
@@ -324,6 +345,13 @@ class MovieCache {
   static const String favouritesKey = 'flixora_favourites';
   static const String savedKey = 'flixora_saved';
   static const String downloadsKey = 'flixora_downloads';
+  static const String trendingTvKey = 'flixora_trending_tv';
+  static const String popularTvKey = 'flixora_popular_tv';
+  static const String topRatedTvKey = 'flixora_top_rated_tv';
+  static const String animeKey = 'flixora_anime';
+  static const String koreanKey = 'flixora_korean_drama';
+  static const String bengaliMoviesKey = 'flixora_bengali_movies';
+  static const String bengaliTvKey = 'flixora_bengali_tv';
 
   static Future<void> saveDownloads(List<DownloadTask> tasks) async {
     try {
@@ -456,96 +484,52 @@ class MovieCache {
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
 
-  static Future<List<Movie>> getMovies(String endpoint) async {
-    if (apiKey.isEmpty) {
-      throw Exception('Movie service is not configured.');
-    }
-
-    final uri = Uri.parse('$base/$endpoint').replace(
-      queryParameters: {
-        'api_key': apiKey,
-        'language': 'en-US',
-        'page': '1',
-      },
-    );
-
-    final response = await http.get(uri).timeout(
-          const Duration(seconds: 20),
-        );
-
-    if (response.statusCode != 200) {
-      throw Exception('Could not load movies.');
-    }
-
+  static Future<List<Movie>> getMovies(
+    String endpoint, {
+    Map<String, String> extraParams = const {},
+  }) async {
+    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    final isTv = endpoint.startsWith('tv/') || endpoint.startsWith('discover/tv');
+    final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
+      'api_key': apiKey, 'language': 'en-US', 'page': '1', ...extraParams,
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) throw Exception('Could not load catalogue.');
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final results = data['results'] as List? ?? [];
-
-    return results
-        .whereType<Map>()
-        .map(
-          (item) => Movie.fromJson(
-            Map<String, dynamic>.from(item),
-          ),
-        )
-        .toList();
+    return results.whereType<Map>().map((item) => Movie.fromJson(
+      Map<String, dynamic>.from(item), mediaType: isTv ? 'tv' : 'movie',
+    )).toList();
   }
 
   static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) {
-      throw Exception('Movie service is not configured.');
+    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    Future<List<Movie>> searchType(String type) async {
+      final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
+        'api_key': apiKey, 'query': query, 'language': 'en-US',
+        'page': '1', 'include_adult': 'false',
+      });
+      final response = await http.get(uri).timeout(const Duration(seconds: 20));
+      if (response.statusCode != 200) return [];
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = data['results'] as List? ?? [];
+      return results.whereType<Map>().map((item) => Movie.fromJson(
+        Map<String, dynamic>.from(item), mediaType: type,
+      )).toList();
     }
-
-    final uri = Uri.parse('$base/search/movie').replace(
-      queryParameters: {
-        'api_key': apiKey,
-        'query': query,
-        'language': 'en-US',
-        'page': '1',
-        'include_adult': 'false',
-      },
-    );
-
-    final response = await http.get(uri).timeout(
-          const Duration(seconds: 20),
-        );
-
-    if (response.statusCode != 200) {
-      throw Exception('Search failed.');
-    }
-
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final results = data['results'] as List? ?? [];
-
-    return results
-        .whereType<Map>()
-        .map(
-          (item) => Movie.fromJson(
-            Map<String, dynamic>.from(item),
-          ),
-        )
-        .toList();
+    final results = await Future.wait([searchType('movie'), searchType('tv')]);
+    return [...results[0], ...results[1]];
   }
 
-  static Future<Map<String, dynamic>> details(int id) async {
-    if (apiKey.isEmpty) {
-      throw Exception('Movie service is not configured.');
-    }
-
-    final uri = Uri.parse('$base/movie/$id').replace(
-      queryParameters: {
-        'api_key': apiKey,
-        'language': 'en-US',
-      },
-    );
-
-    final response = await http.get(uri).timeout(
-          const Duration(seconds: 20),
-        );
-
-    if (response.statusCode != 200) {
-      throw Exception('Could not load movie details.');
-    }
-
+  static Future<Map<String, dynamic>> details(
+    int id, {String mediaType = 'movie'}
+  ) async {
+    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    final uri = Uri.parse('$base/$mediaType/$id').replace(queryParameters: {
+      'api_key': apiKey, 'language': 'en-US',
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) throw Exception('Could not load title details.');
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 }
@@ -829,6 +813,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> popular = [];
   List<Movie> latest = [];
   List<Movie> topRated = [];
+  List<Movie> trendingTv = [];
+  List<Movie> popularTv = [];
+  List<Movie> topRatedTv = [];
+  List<Movie> anime = [];
+  List<Movie> koreanDrama = [];
+  List<Movie> bengaliMovies = [];
+  List<Movie> bengaliTv = [];
   List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
 
@@ -847,21 +838,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final adminIds = _flixoraTmdbIds;
 
     return movies.where((movie) {
-      if (movie.tmdbId <= 0) return true;
+      if (movie.mediaType != 'movie' || movie.tmdbId <= 0) return true;
       return !adminIds.contains(movie.tmdbId);
     }).toList();
   }
 
   List<Movie> _deduplicateMovies(List<Movie> movies) {
-    final seenTmdbIds = <int>{};
+    final seenTmdbIds = <String>{};
     final seenFallbackIds = <String>{};
 
     return movies.where((movie) {
       if (movie.tmdbId > 0) {
-        return seenTmdbIds.add(movie.tmdbId);
+        return seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}');
       }
 
-      final fallbackKey = '${movie.source}:${movie.id}';
+      final fallbackKey = '${movie.mediaType}:${movie.source}:${movie.id}';
       return seenFallbackIds.add(fallbackKey);
     }).toList();
   }
@@ -959,6 +950,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.popularKey),
       MovieCache.getList(MovieCache.latestKey),
       MovieCache.getList(MovieCache.topRatedKey),
+      MovieCache.getList(MovieCache.trendingTvKey),
+      MovieCache.getList(MovieCache.popularTvKey),
+      MovieCache.getList(MovieCache.topRatedTvKey),
+      MovieCache.getList(MovieCache.animeKey),
+      MovieCache.getList(MovieCache.koreanKey),
+      MovieCache.getList(MovieCache.bengaliMoviesKey),
+      MovieCache.getList(MovieCache.bengaliTvKey),
       MovieCache.getList(MovieCache.flixoraKey),
     ]);
 
@@ -969,7 +967,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       popular = results[1];
       latest = results[2];
       topRated = results[3];
-      flixoraMovies = results[4];
+      trendingTv = results[4];
+      popularTv = results[5];
+      topRatedTv = results[6];
+      anime = results[7];
+      koreanDrama = results[8];
+      bengaliMovies = results[9];
+      bengaliTv = results[10];
+      flixoraMovies = results[11];
       loading = false;
       homeError = null;
     });
@@ -1086,16 +1091,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/popular')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/now_playing')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/top_rated')
-            .catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies()
-            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/movie/week').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/top_rated').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/tv/week').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/popular').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/top_rated').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_genres': '16', 'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_origin_country': 'KR', 'with_original_language': 'ko',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
@@ -1105,7 +1121,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         popular = results[1];
         latest = results[2];
         topRated = results[3];
-        flixoraMovies = results[4];
+        trendingTv = results[4];
+        popularTv = results[5];
+        topRatedTv = results[6];
+        anime = results[7];
+        koreanDrama = results[8];
+        bengaliMovies = results[9];
+        bengaliTv = results[10];
+        flixoraMovies = results[11];
         loading = false;
 
         if (_allMovies().isEmpty) {
@@ -1130,6 +1153,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.popularKey, popular),
         MovieCache.saveList(MovieCache.latestKey, latest),
         MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
+        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
+        MovieCache.saveList(MovieCache.animeKey, anime),
+        MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
+        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
+        MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
         MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
       ]);
     } catch (e) {
@@ -1151,6 +1181,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...popular,
       ...latest,
       ...topRated,
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...anime,
+      ...koreanDrama,
+      ...bengaliMovies,
+      ...bengaliTv,
     ];
 
     return _deduplicateMovies(combined);
@@ -1825,14 +1862,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             _movieRow(flixoraMovies),
           ],
-          _sectionTitle('Trending This Week'),
+          _sectionTitle('Trending Movies'),
           _movieRow(_withoutFlixoraDuplicates(trending)),
+          _sectionTitle('Trending TV Series'),
+          _movieRow(trendingTv),
+          _sectionTitle('Anime'),
+          _movieRow(anime),
+          _sectionTitle('Korean & Asian Drama'),
+          _movieRow(koreanDrama),
+          _sectionTitle('Bengali Movies'),
+          _movieRow(bengaliMovies),
+          _sectionTitle('Bengali TV Series'),
+          _movieRow(bengaliTv),
           _sectionTitle('Popular Movies'),
           _movieRow(_withoutFlixoraDuplicates(popular)),
+          _sectionTitle('Popular TV Series'),
+          _movieRow(popularTv),
           _sectionTitle('Now Playing'),
           _movieRow(_withoutFlixoraDuplicates(latest)),
-          _sectionTitle('Top Rated'),
+          _sectionTitle('Top Rated Movies'),
           _movieRow(_withoutFlixoraDuplicates(topRated)),
+          _sectionTitle('Top Rated TV Series'),
+          _movieRow(topRatedTv),
           const SizedBox(height: 25),
         ],
       ),
