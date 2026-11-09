@@ -95,6 +95,9 @@ jobs:
       - name: Verify dependencies
         run: flutter pub deps
 
+      - name: Run Flutter tests
+        run: flutter test --no-pub
+
       - name: Analyze Flutter project
         continue-on-error: true
         run: flutter analyze --no-pub
