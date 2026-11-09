@@ -1861,7 +1861,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: 220,
+      height: 198,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1872,7 +1872,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return GestureDetector(
             onTap: () => _openMovie(movie),
             child: Container(
-              width: 125,
+              width: 112,
               margin: const EdgeInsets.symmetric(horizontal: 5),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1964,7 +1964,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: 390,
+      height: MediaQuery.of(context).size.height * 0.64,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -2009,10 +2009,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             left: 0,
             right: 0,
             bottom: 28,
-            child: _featuredQuickCards([
-              ..._withoutFlixoraDuplicates(trending).take(5).toList().skip(_slide),
-              ..._withoutFlixoraDuplicates(trending).take(5).toList().take(_slide),
-            ]),
+            child: _featuredQuickCards(slides),
           ),
           Positioned(
             bottom: 8,
@@ -2041,19 +2038,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
-      height: 86,
+      height: 78,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
-          final typeLabel = movie.mediaType == 'tv' ? 'TV Series' : 'Movie';
+          final typeLabel = movie.mediaType == 'tv' ? 'TV Series' : (movie.genres.any((g) => g.toLowerCase().contains('animation')) || movie.originalLanguage.toLowerCase() == 'ja' ? 'Anime' : 'Movie');
 
           return GestureDetector(
-            onTap: () => _openMovie(movie),
+            onTap: () {
+              final slideIndex = movies.indexWhere((item) => item.id == movie.id);
+              if (slideIndex >= 0 && _sliderController.hasClients) {
+                _sliderController.animateToPage(slideIndex, duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
+              }
+              setState(() => _slide = slideIndex < 0 ? _slide : slideIndex);
+            },
             child: Container(
-              width: 265,
+              width: 238,
               margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
               padding: const EdgeInsets.all(7),
               decoration: BoxDecoration(
@@ -2066,19 +2069,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     borderRadius: BorderRadius.circular(7),
                     child: movie.posterUrl.isEmpty
                         ? Container(
-                            width: 48,
-                            height: 70,
+                            width: 43,
+                            height: 64,
                             color: const Color(0xFF292929),
                             child: const Icon(Icons.movie, color: gold),
                           )
                         : CachedNetworkImage(
                             imageUrl: movie.posterUrl,
-                            width: 48,
-                            height: 70,
+                            width: 43,
+                            height: 64,
                             fit: BoxFit.cover,
                             placeholder: (_, __) => Container(
-                              width: 48,
-                              height: 70,
+                              width: 43,
+                              height: 64,
                               color: const Color(0xFF292929),
                             ),
                             errorWidget: (_, __, ___) => Container(
@@ -2107,7 +2110,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '$typeLabel  •  ${movie.year}',
+                          '$typeLabel  •  ${movie.releaseDate.isNotEmpty ? movie.releaseDate : movie.year}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -2920,13 +2923,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           });
         },
         child: SizedBox(
-          height: 54,
+          height: 44,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 20, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
+              Icon(selected ? activeIcon : icon, size: 18, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 10, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 9, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
             ],
           ),
         ),
@@ -5139,7 +5142,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               scale: _videoZoom,
               child: Video(
                 controller: _videoController,
-                fit: BoxFit.contain,
+                fit: _videoZoom > 1.01 ? BoxFit.cover : BoxFit.contain,
                 controls: NoVideoControls,
               ),
             ),
