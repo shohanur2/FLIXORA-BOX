@@ -43,6 +43,23 @@ void main() {
       expect(sources[1].isAvailable, isTrue);
     });
 
+    test('all configured provider URLs are HTTPS and match their approved hosts', () {
+      final sources = ProviderCatalog.forMovie(
+        tmdbId: 157336,
+        imdbId: 'tt0816692',
+      );
+
+      for (final source in sources) {
+        final uri = Uri.parse(source.url);
+        expect(uri.scheme, 'https', reason: source.id);
+        expect(
+          ProviderCatalog.allowsNavigation(source, uri),
+          isTrue,
+          reason: source.id,
+        );
+      }
+    });
+
     test('does not build providers without a TMDB ID', () {
       expect(ProviderCatalog.forMovie(tmdbId: 0), isEmpty);
     });
