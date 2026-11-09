@@ -3845,8 +3845,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         overlayColor: gold.withValues(alpha: 0.18),
                         showValueIndicator: ShowValueIndicator.never,
                         trackShape: const RoundedRectSliderTrackShape(),
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                       ),
                       child: Slider(
                         value: sheetBrightness,
@@ -4085,10 +4085,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     thumbColor: Colors.white,
                     overlayColor: gold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 6,
+                      enabledThumbRadius: 5,
                     ),
                     overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 12,
+                      overlayRadius: 10,
                     ),
                   ),
                   child: Slider(
