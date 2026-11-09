@@ -2216,6 +2216,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         const SizedBox(height: 20),
         _profileGroup([
+          _profileTile(Icons.card_giftcard, 'Rewards Center',
+              () => _openProfileSection('Rewards Center')),
           _profileTile(Icons.history, 'Watch History',
               () => _openProfileSection('Watch History'),
               trailingText: '${_watchHistory.length}'),
@@ -2333,6 +2335,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
           ],
+        );
+      case 'Rewards Center':
+        return _profileMessagePage(
+          Icons.card_giftcard, 'Rewards are coming soon',
+          'FLIXORA rewards are not enabled yet.',
         );
       case 'Messages':
         return _profileMessagePage(
