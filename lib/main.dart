@@ -1288,23 +1288,100 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList();
   }
 
-  void _openMovie(Movie movie) {
+  Movie? _cachedFlixoraMatch(Movie movie) {
+    if (movie.tmdbId <= 0) return null;
+    for (final candidate in [...flixoraMovies, ...searchResults]) {
+      if (candidate.isFlixora && candidate.tmdbId == movie.tmdbId) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /// Resolve every entry point to the same Admin-managed movie record.
+  /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
+  Future<Movie?> _resolveMovieForOpening(Movie requested) async {
+    final client = supabaseClient;
+
+    if (!_online || client == null) {
+      return requested.isFlixora
+          ? requested
+          : (_cachedFlixoraMatch(requested) ?? requested);
+    }
+
+    try {
+      dynamic response;
+      if (requested.isFlixora && requested.sourceId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('id', requested.sourceId)
+            .limit(1);
+      } else if (requested.tmdbId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('tmdb_id', requested.tmdbId)
+            .order('created_at', ascending: false)
+            .limit(1);
+      }
+
+      if (response is List && response.isNotEmpty) {
+        final row = Map<String, dynamic>.from(response.first as Map);
+        // An Admin record takes priority even when it is unpublished.
+        if (row['is_published'] != true) return null;
+        return Movie.fromSupabase(row);
+      }
+
+      if (requested.isFlixora) return null;
+      return _cachedFlixoraMatch(requested) ?? requested;
+    } catch (e) {
+      debugPrint('Could not resolve Admin movie record: $e');
+      // Keep the already-loaded published Admin entry usable if the network
+      // lookup fails; otherwise fall back to the requested TMDB catalogue item.
+      return requested.isFlixora
+          ? requested
+          : (_cachedFlixoraMatch(requested) ?? requested);
+    }
+  }
+
+  Future<void> _openMovie(Movie movie) async {
+    final resolvedMovie = await _resolveMovieForOpening(movie);
+    if (!mounted) return;
+
+    if (resolvedMovie == null) {
+      _showMessage('This movie is currently unavailable.');
+      return;
+    }
+
+    final selectedMovie = resolvedMovie;
+    final isFavourite = _favourites.contains(selectedMovie.id) ||
+        _favourites.contains(movie.id);
+    final isSaved = _saved.contains(selectedMovie.id) ||
+        _saved.contains(movie.id);
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => MovieDetailsScreen(
-          movie: movie,
+          movie: selectedMovie,
           isOnline: _online,
-          isFavourite: _favourites.contains(movie.id),
-          isSaved: _saved.contains(movie.id),
-          onFavourite: () => _toggleFavourite(movie),
-          onSave: () => _toggleSaved(movie),
-          onDownload: () => addDownload(movie),
+          isFavourite: isFavourite,
+          isSaved: isSaved,
+          onFavourite: () => _toggleFavourite(selectedMovie),
+          onSave: () => _toggleSaved(selectedMovie),
+          onDownload: () => addDownload(selectedMovie),
           onWatch: () async {
             DownloadTask? downloaded;
             for (final task in _downloads) {
-              if (task.movieId == movie.id && task.status == 'Completed' &&
-                  task.filePath != null && File(task.filePath!).existsSync()) {
+              final matchesMovie = task.movieId == selectedMovie.id ||
+                  task.movieId == movie.id ||
+                  (selectedMovie.tmdbId > 0 &&
+                      task.movieId == selectedMovie.tmdbId);
+              if (matchesMovie &&
+                  task.status == 'Completed' &&
+                  task.filePath != null &&
+                  File(task.filePath!).existsSync()) {
                 downloaded = task;
                 break;
               }
@@ -1313,7 +1390,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (!mounted) return;
               Navigator.push(context, MaterialPageRoute(
                 builder: (_) => MoviePlayerScreen(
-                  movie: movie,
+                  movie: selectedMovie,
                   localFilePath: downloaded!.filePath,
                   recommendedMovies: _allMovies(),
                   onMovieSelected: _openMovie,
@@ -1324,7 +1401,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
             if (!_online || !await InternetService.isOnline()) {
               if (mounted) {
-                setState(() { _online = false; _connectionKnown = true; });
+                setState(() {
+                  _online = false;
+                  _connectionKnown = true;
+                });
                 _showMessage('Check your internet connection');
               }
               return;
@@ -1332,7 +1412,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (!mounted) return;
             Navigator.push(context, MaterialPageRoute(
               builder: (_) => MoviePlayerScreen(
-                movie: movie,
+                movie: selectedMovie,
                 recommendedMovies: _allMovies(),
                 onMovieSelected: _openMovie,
                 isOnline: _online,
@@ -2503,7 +2583,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 25),
-                  if (movie.videoUrl.trim().isNotEmpty)
+                  if (movie.videoUrl.trim().isNotEmpty || movie.isFlixora)
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -2661,6 +2741,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   String _resolveInitialNetworkUrl() {
+    // Admin-managed encodes take priority over the legacy single video_url.
+    // This keeps the initial source and the quality selector in sync.
+    if (_availableQualities.isNotEmpty) {
+      final defaultQuality = _availableQualities
+          .cast<Map<String, String>?>()
+          .firstWhere(
+            (item) => item?['quality']?.trim().toLowerCase() == '720p',
+            orElse: () => _availableQualities.first,
+          )!;
+      _selectedQuality = defaultQuality['quality'];
+      return defaultQuality['video_url'] ?? '';
+    }
+
     final legacyUrl = widget.movie.videoUrl.trim();
     final legacyUri = Uri.tryParse(legacyUrl);
     if (legacyUri != null &&
@@ -2668,17 +2761,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         legacyUri.host.isNotEmpty) {
       return legacyUrl;
     }
-
-    if (_availableQualities.isEmpty) return '';
-
-    // Prefer a moderate default (720p); otherwise use the lowest available
-    // encoded version to avoid unexpectedly starting with a very large file.
-    final defaultQuality = _availableQualities.cast<Map<String, String>?>().firstWhere(
-      (item) => item?['quality']?.trim().toLowerCase() == '720p',
-      orElse: () => _availableQualities.first,
-    )!;
-    _selectedQuality = defaultQuality['quality'];
-    return defaultQuality['video_url'] ?? '';
+    return '';
   }
 
   bool get _validVideoUrl {
@@ -3477,62 +3560,59 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                const Text(
-                  'Screen Brightness',
-                  style: TextStyle(
-                    color: gold,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
                 Row(
                   children: [
-                    const Icon(Icons.brightness_low, color: white, size: 20),
-                    Expanded(
-                      child: SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 6,
-                          activeTrackColor: gold,
-                          inactiveTrackColor: Colors.white24,
-                          thumbColor: Colors.white,
-                          overlayColor: gold.withValues(alpha: 0.22),
-                          showValueIndicator: ShowValueIndicator.onDrag,
-                          valueIndicatorColor: gold,
-                          valueIndicatorTextStyle: const TextStyle(
-                            color: Colors.black,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          trackShape: const RoundedRectSliderTrackShape(),
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 10,
-                          ),
-                          overlayShape: const RoundSliderOverlayShape(
-                            overlayRadius: 17,
-                          ),
-                        ),
-                        child: Slider(
-                          value: _screenBrightness.clamp(0.0, 1.0),
-                          min: 0.0,
-                          max: 1.0,
-                          divisions: 20,
-                          label: '${(_screenBrightness * 100).round()}%',
-                          onChanged: _changeApplicationBrightness,
-                        ),
+                    const Icon(Icons.brightness_6_outlined, color: gold, size: 20),
+                    const SizedBox(width: 9),
+                    const Expanded(
+                      child: Text(
+                        'Screen Brightness',
+                        style: TextStyle(color: white, fontWeight: FontWeight.w600),
                       ),
                     ),
-                    const Icon(Icons.brightness_high, color: white, size: 20),
-                    const SizedBox(width: 5),
-                    SizedBox(
-                      width: 38,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: bg,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: gold.withValues(alpha: 0.45)),
+                      ),
                       child: Text(
                         '${(_screenBrightness * 100).round()}%',
-                        textAlign: TextAlign.end,
                         style: const TextStyle(
-                          color: white,
+                          color: goldLight,
                           fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 4,
+                    activeTrackColor: gold,
+                    inactiveTrackColor: Colors.white24,
+                    thumbColor: Colors.white,
+                    overlayColor: gold.withValues(alpha: 0.18),
+                    showValueIndicator: ShowValueIndicator.never,
+                    trackShape: const RoundedRectSliderTrackShape(),
+                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
+                  ),
+                  child: Slider(
+                    value: _screenBrightness.clamp(0.0, 1.0),
+                    min: 0.0,
+                    max: 1.0,
+                    onChanged: _changeApplicationBrightness,
+                  ),
+                ),
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Dim', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                    Text('Bright', style: TextStyle(color: Colors.white54, fontSize: 11)),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -3666,7 +3746,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         .clamp(0.0, max > 0 ? max : 1.0);
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -3767,15 +3847,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     color: gold,
                     fontWeight: FontWeight.bold,
                   ),
-                ),
-              ),
-              IconButton(
-                onPressed: _toggleFullscreen,
-                icon: Icon(
-                  _isFullscreen
-                      ? Icons.fullscreen_exit
-                      : Icons.fullscreen,
-                  color: white,
                 ),
               ),
             ],
@@ -3910,6 +3981,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           child: Video(
             controller: _videoController,
             fit: BoxFit.contain,
+            controls: NoVideoControls,
           ),
         ),
         if (_isBuffering)
@@ -3984,6 +4056,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   const Spacer(),
                   _bottomControls(),
                 ],
+              ),
+            ),
+          ),
+        if (_showControls && !_isLocked && _errorMessage == null)
+          Positioned(
+            right: 10,
+            bottom: 8,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white24),
+              ),
+              child: IconButton(
+                tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                onPressed: _toggleFullscreen,
+                icon: Icon(
+                  _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                  color: white,
+                ),
               ),
             ),
           ),
