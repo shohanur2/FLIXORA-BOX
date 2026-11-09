@@ -19,6 +19,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
+import 'streaming/provider_catalog.dart';
+import 'streaming/provider_embed_player.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -595,6 +597,7 @@ class TmdbService {
     if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
     final uri = Uri.parse('$base/$mediaType/$id').replace(queryParameters: {
       'api_key': apiKey, 'language': 'en-US',
+      'append_to_response': 'external_ids',
     });
     final response = await http.get(uri).timeout(const Duration(seconds: 20));
     if (response.statusCode != 200) throw Exception('Could not load title details.');
@@ -4432,6 +4435,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
   int _selectedAudioTrackIndex = 0;
+  List<ProviderEmbedSource> _providerSources = [];
+  ProviderEmbedSource? _selectedProviderSource;
+  final Set<String> _failedProviderIds = <String>{};
+  bool _isSelectingDefaultProvider = false;
 
   String? _errorMessage;
 
@@ -4504,6 +4511,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
+    _providerSources = ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
@@ -4518,14 +4526,220 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final id = widget.movie.tmdbId;
     if (id <= 0) return {};
     try {
-      return await TmdbService.details(
+      final details = await TmdbService.details(
         id,
         mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
       );
+      final externalIds = details['external_ids'];
+      final imdbId = externalIds is Map
+          ? (externalIds['imdb_id'] ?? '').toString()
+          : '';
+      if (mounted && !_isDisposed && widget.movie.mediaType != 'tv') {
+        setState(() {
+          _providerSources = ProviderCatalog.forMovie(
+            tmdbId: id,
+            imdbId: imdbId,
+          );
+        });
+      }
+      return details;
     } catch (e) {
       debugPrint('Could not load player movie metadata: $e');
       return {};
     }
+  }
+
+  Future<void> _selectProviderSource(ProviderEmbedSource source) async {
+    if (!source.isAvailable || !_playerIsOnline || _isDisposed) return;
+    _cancelHideTimer();
+
+    // Release the native decoder before mounting an embedded provider. The
+    // last position is already persisted by the position listener.
+    try {
+      await _player.pause();
+      await _player.stop();
+    } catch (_) {}
+
+    if (!mounted || _isDisposed) return;
+    _failedProviderIds.clear();
+    setState(() {
+      _selectedProviderSource = source;
+      _errorMessage = null;
+      _showControls = false;
+      _initialized = false;
+    });
+  }
+
+  Future<void> _selectDefaultProviderIfNeeded({bool force = false}) async {
+    if (!mounted ||
+        _isDisposed ||
+        !_playerIsOnline ||
+        widget.localFilePath != null ||
+        (!force && _validVideoUrl) ||
+        _selectedProviderSource != null ||
+        _isSelectingDefaultProvider) {
+      return;
+    }
+
+    _isSelectingDefaultProvider = true;
+    try {
+      // Resolve IMDb metadata before choosing Play4U. This is also important
+      // when a direct Admin source fails before the metadata request completes.
+      await _movieDetailsFuture;
+      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
+
+      // Match the reference project's Play4U-first policy. If this movie has no
+    // IMDb ID, select the first usable TMDB-based provider instead.
+    final preferred = _providerSources.where(
+      (source) => source.id == 'play4u' && source.isAvailable,
+    );
+    final fallback = preferred.isNotEmpty
+        ? preferred.first
+        : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
+              (source) => source?.isAvailable == true,
+              orElse: () => null,
+            );
+
+      if (fallback == null) return;
+
+      // Stop the native engine before the WebView is mounted, releasing its
+      // decoder and network request while retaining the saved resume position.
+      try {
+        await _saveResumePosition(_position);
+        await _player.pause();
+        await _player.stop();
+      } catch (_) {}
+      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
+
+      _failedProviderIds.clear();
+      setState(() {
+        _selectedProviderSource = fallback;
+        _showControls = false;
+        _initialized = false;
+        _errorMessage = null;
+      });
+    } finally {
+      _isSelectingDefaultProvider = false;
+    }
+  }
+
+  void _tryNextProvider(ProviderEmbedSource failedSource) {
+    if (!mounted ||
+        _isDisposed ||
+        _selectedProviderSource?.id != failedSource.id) {
+      return; // Ignore stale callbacks from a provider that is no longer active.
+    }
+
+    _failedProviderIds.add(failedSource.id);
+    final selectedNextSource = ProviderCatalog.nextAvailableAfter(
+      _providerSources,
+      failedSource.id,
+      excludedIds: _failedProviderIds,
+    );
+
+    if (selectedNextSource == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No more available provider streams. Choose another stream below.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _selectedProviderSource = selectedNextSource;
+      _errorMessage = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${failedSource.name} failed to load. Trying ${selectedNextSource.name}...',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _closeProviderSource() async {
+    if (!mounted || _isDisposed) return;
+    setState(() {
+      _selectedProviderSource = null;
+      _errorMessage = null;
+      _showControls = true;
+    });
+    if (widget.localFilePath != null || _resolveInitialNetworkUrl().isNotEmpty) {
+      await _initializePlayer();
+    }
+  }
+
+  Widget _providerSelector() {
+    if (widget.localFilePath != null || widget.movie.mediaType == 'tv' ||
+        widget.movie.tmdbId <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    if (_providerSources.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Available Streams',
+          style: TextStyle(
+            color: playerWhite,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _playerIsOnline
+              ? 'Choose a stream to play inside FLIXORA'
+              : 'Connect to the internet to use online streams',
+          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _providerSources.map((source) {
+            final selected = _selectedProviderSource?.id == source.id;
+            final label = source.name.replaceFirst(RegExp(r'^STREAM \d+ · '), '');
+            return ChoiceChip(
+              label: Text(label),
+              selected: selected,
+              onSelected: source.isAvailable && _playerIsOnline
+                  ? (_) => _selectProviderSource(source)
+                  : null,
+              selectedColor: playerGold.withValues(alpha: 0.24),
+              backgroundColor: playerPanel,
+              disabledColor: playerPanel.withValues(alpha: 0.55),
+              side: BorderSide(
+                color: selected ? playerGold : const Color(0x3DFFFFFF),
+              ),
+              labelStyle: TextStyle(
+                color: source.isAvailable ? playerWhite : const Color(0x66FFFFFF),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+              avatar: Icon(
+                source.isAvailable ? Icons.play_circle_outline : Icons.info_outline,
+                size: 16,
+                color: source.isAvailable ? playerGoldLight : const Color(0x66FFFFFF),
+              ),
+            );
+          }).toList(),
+        ),
+        if (_selectedProviderSource != null) ...[
+          const SizedBox(height: 7),
+          Text(
+            'Playing with ${_selectedProviderSource!.name}',
+            style: const TextStyle(color: playerGoldLight, fontSize: 11),
+          ),
+        ],
+      ],
+    );
   }
 
   String _formatPlayerReleaseDate(String value) {
@@ -4660,7 +4874,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     // even when the legacy movies.video_url field is empty.
     await _loadVideoQualities();
     if (!mounted || _isDisposed) return;
+
+    // Admin-managed MP4/HLS always gets the first chance to play.
     await _initializePlayer();
+    if (!mounted || _isDisposed || _validVideoUrl ||
+        widget.localFilePath != null) {
+      return;
+    }
+
+    // Resolve the real IMDb ID before choosing the default provider. This
+    // avoids opening Play4U with a guessed or incomplete identifier.
+    await _movieDetailsFuture;
+    if (!mounted || _isDisposed) return;
+    await _selectDefaultProviderIfNeeded();
   }
 
   Future<void> _loadVideoQualities() async {
@@ -4802,6 +5028,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!mounted || _isDisposed || online == _playerIsOnline) return;
 
     setState(() => _playerIsOnline = online);
+    if (online &&
+        widget.localFilePath == null &&
+        !_validVideoUrl &&
+        _selectedProviderSource == null) {
+      unawaited(_movieDetailsFuture.then((_) async {
+        if (mounted && !_isDisposed) {
+          await _selectDefaultProviderIfNeeded();
+        }
+      }));
+    }
   }
 
   // Listeners are attached once. Retrying playback will not create
@@ -4842,6 +5078,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _errorMessage = value);
+      if (value.trim().isNotEmpty &&
+          !_isOpening &&
+          widget.localFilePath == null &&
+          _selectedProviderSource == null &&
+          _playerIsOnline) {
+        // A broken Admin direct stream should not strand the viewer. Keep it
+        // first priority, then fall back to the reference provider sequence.
+        unawaited(_selectDefaultProviderIfNeeded(force: true));
+      }
     });
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
@@ -4872,7 +5117,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!_validVideoUrl) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Invalid or unavailable video URL.';
+          _errorMessage = null;
+          _initialized = false;
         });
       }
       return;
@@ -4914,6 +5160,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
+      if (widget.localFilePath == null && _playerIsOnline) {
+        unawaited(_selectDefaultProviderIfNeeded(force: true));
+      }
     } finally {
       _isOpening = false;
     }
@@ -6011,6 +6260,41 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerBody() {
+    final providerSource = _selectedProviderSource;
+    if (providerSource != null) {
+      return ProviderEmbedPlayer(
+        key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
+        source: providerSource,
+        onClose: _closeProviderSource,
+        onFailure: () => _tryNextProvider(providerSource),
+      );
+    }
+
+    if (widget.localFilePath == null && !_validVideoUrl) {
+      return Container(
+        color: Colors.black,
+        padding: const EdgeInsets.all(22),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.play_circle_outline_rounded,
+                  color: playerGold, size: 48),
+              SizedBox(height: 10),
+              Text('Choose a stream below',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: playerWhite,
+                      fontSize: 15, fontWeight: FontWeight.w800)),
+              SizedBox(height: 5),
+              Text('Select an available provider to start playback inside FLIXORA.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Stack(
       fit: StackFit.expand,
       alignment: Alignment.center,
@@ -6385,6 +6669,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerResources() {
+    if (_selectedProviderSource != null) {
+      return const ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.language, color: playerGold),
+        title: Text('Audio tracks',
+            style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
+        subtitle: Text('Use the selected provider player to change audio language.',
+            style: TextStyle(color: Color(0x99FFFFFF))),
+      );
+    }
     if (_tracks.audio.isEmpty) {
       return const ListTile(
         contentPadding: EdgeInsets.zero,
@@ -6870,6 +7164,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ],
                 ),
                 _playerMetadata(),
+                const SizedBox(height: 16),
+                _providerSelector(),
                 const SizedBox(height: 13),
                 Wrap(
                   spacing: 8,
