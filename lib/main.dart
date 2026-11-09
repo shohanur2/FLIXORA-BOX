@@ -1551,6 +1551,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   localFilePath: downloaded!.filePath,
                   recommendedMovies: _allMovies(),
                   onMovieSelected: _openMovie,
+                  onSave: () => _toggleSaved(selectedMovie),
+                  onDownload: () => addDownload(selectedMovie),
+                  onViewDownloads: () {
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    setState(() => _tab = 5);
+                  },
                   isOnline: _online,
                 ),
               ));
@@ -1572,6 +1579,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 movie: selectedMovie,
                 recommendedMovies: _allMovies(),
                 onMovieSelected: _openMovie,
+                onSave: () => _toggleSaved(selectedMovie),
+                onDownload: () => addDownload(selectedMovie),
+                onViewDownloads: () {
+                  if (!mounted) return;
+                  Navigator.pop(context);
+                  setState(() => _tab = 5);
+                },
                 isOnline: _online,
               ),
             ));
@@ -2978,6 +2992,9 @@ class MoviePlayerScreen extends StatefulWidget {
   final String? localFilePath;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
+  final VoidCallback? onSave;
+  final VoidCallback? onDownload;
+  final VoidCallback? onViewDownloads;
   final bool isOnline;
 
   const MoviePlayerScreen({
@@ -2986,6 +3003,9 @@ class MoviePlayerScreen extends StatefulWidget {
     this.localFilePath,
     this.recommendedMovies = const [],
     this.onMovieSelected,
+    this.onSave,
+    this.onDownload,
+    this.onViewDownloads,
     this.isOnline = true,
   });
 
@@ -4768,6 +4788,72 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
+  Widget _detailAction(IconData icon, String label, VoidCallback? onPressed) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: white,
+        side: const BorderSide(color: Colors.white24),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      icon: Icon(icon, color: gold, size: 18),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  Widget _playerResources() {
+    if (widget.localFilePath != null) {
+      return const ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.download_done, color: gold),
+        title: Text('Resources', style: TextStyle(color: white, fontWeight: FontWeight.bold)),
+        subtitle: Text('Playing downloaded file', style: TextStyle(color: Colors.white60)),
+      );
+    }
+    if (_availableQualities.isEmpty) {
+      return const ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.video_settings_outlined, color: gold),
+        title: Text('Resources', style: TextStyle(color: white, fontWeight: FontWeight.bold)),
+        subtitle: Text('Quality options appear when provided by FLIXORA Admin', style: TextStyle(color: Colors.white60)),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Resources', style: TextStyle(color: white, fontSize: 18, fontWeight: FontWeight.bold)),
+                SizedBox(height: 4),
+                Text('Available video quality', style: TextStyle(color: Colors.white60, fontSize: 12)),
+              ],
+            ),
+          ),
+          DropdownButton<String>(
+            value: _availableQualities.any((item) => item['quality'] == _selectedQuality)
+                ? _selectedQuality
+                : _availableQualities.first['quality'],
+            dropdownColor: panel,
+            style: const TextStyle(color: white),
+            underline: Container(height: 1, color: gold),
+            items: _availableQualities.map((item) => DropdownMenuItem<String>(
+              value: item['quality'],
+              child: Text(item['quality'] ?? 'Auto'),
+            )).toList(),
+            onChanged: (quality) {
+              if (quality == null) return;
+              final item = _availableQualities.firstWhere((entry) => entry['quality'] == quality);
+              _changeVideoQuality(item);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _playerPageContent() {
     final related = _relatedMovies;
     final recommended = _recommendedMovies;
@@ -4813,6 +4899,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     widget.movie.year,
                     style: const TextStyle(color: Colors.white60),
                   ),
+                if (widget.movie.originCountry.isNotEmpty ||
+                    widget.movie.originalLanguage.isNotEmpty ||
+                    widget.movie.genres.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    [
+                      if (widget.movie.mediaType == 'tv') 'TV Series' else 'Movie',
+                      if (widget.movie.originCountry.isNotEmpty) widget.movie.originCountry,
+                      if (widget.movie.originalLanguage.isNotEmpty) widget.movie.originalLanguage.toUpperCase(),
+                      ...widget.movie.genres.take(3),
+                    ].join('  •  '),
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  ),
+                ],
                 if (widget.movie.overview.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -4825,6 +4925,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                   ),
                 ],
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _detailAction(Icons.playlist_add, 'Add to list', widget.onSave),
+                    _detailAction(Icons.share_outlined, 'Share', () => Share.share(
+                      '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
+                    )),
+                    _detailAction(Icons.download_outlined, 'Download', widget.onDownload),
+                    _detailAction(Icons.video_library_outlined, 'View downloads', widget.onViewDownloads),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _playerResources(),
+                const SizedBox(height: 12),
+                const Text(
+                  'For You',
+                  style: TextStyle(color: white, fontSize: 20, fontWeight: FontWeight.bold),
+                ),
               ],
             ),
           ),
