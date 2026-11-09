@@ -766,7 +766,8 @@ class FlixoraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flixora',
       theme: ThemeData(
-        fontFamily: 'sans-serif-rounded',
+        fontFamily: 'sans-serif-condensed',
+        textTheme: const TextTheme(bodyMedium: TextStyle(fontStyle: FontStyle.italic), bodyLarge: TextStyle(fontStyle: FontStyle.italic), titleMedium: TextStyle(fontStyle: FontStyle.italic), titleLarge: TextStyle(fontStyle: FontStyle.italic)),
         brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
@@ -852,6 +853,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<DownloadTask> _downloads = [];
   String? _profileSection;
   bool _studyMode = false;
+  bool _notificationsEnabled = true;
+  bool _familyMode = false;
+  bool _downloadInBackground = false;
+  bool _autoMiniPlayer = true;
+  String _appLanguage = 'English';
+  String _preferredQuality = 'Auto';
 
   Set<int> get _flixoraTmdbIds {
     return flixoraMovies
@@ -921,6 +928,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _initializeApp() async {
     await _loadCachedMovies();
     await _loadSavedPreferences();
+    await _loadAppSettings();
     final savedHistory = await MovieCache.getList(MovieCache.historyKey);
     final prefs = await SharedPreferences.getInstance();
     final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
@@ -956,6 +964,82 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (_allMovies().isEmpty) homeError = 'offline';
       });
     }
+  }
+
+  Future<void> _loadAppSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      setState(() {
+        _notificationsEnabled = prefs.getBool('flixora_notifications') ?? true;
+        _familyMode = prefs.getBool('flixora_family_mode') ?? false;
+        _downloadInBackground = prefs.getBool('flixora_download_background') ?? false;
+        _autoMiniPlayer = prefs.getBool('flixora_auto_miniplayer') ?? true;
+        _appLanguage = prefs.getString('flixora_language') ?? 'English';
+        _preferredQuality = prefs.getString('flixora_preferred_quality') ?? 'Auto';
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveBoolSetting(String key, bool value, void Function(bool) update) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(key, value);
+    if (mounted) setState(() => update(value));
+  }
+
+  Future<void> _showLanguagePicker() async {
+    const languages = ['English', 'বাংলা', 'हिन्दी'];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        backgroundColor: panel,
+        title: const Text('Select language', style: TextStyle(color: white)),
+        children: languages.map((language) => SimpleDialogOption(
+          onPressed: () => Navigator.pop(dialogContext, language),
+          child: Row(children: [
+            Expanded(child: Text(language, style: const TextStyle(color: white))),
+            if (_appLanguage == language) const Icon(Icons.check, color: gold),
+          ]),
+        )).toList(),
+      ),
+    );
+    if (selected == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('flixora_language', selected);
+    if (mounted) setState(() => _appLanguage = selected);
+    _showMessage('Language preference saved. Full app translation will be added separately.');
+  }
+
+  Future<void> _showWatchOptions() async {
+    const qualities = ['Auto', '360p', '480p', '720p', '1080p'];
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        backgroundColor: panel,
+        title: const Text('Watch Options', style: TextStyle(color: white)),
+        children: qualities.map((quality) => RadioListTile<String>(
+          value: quality, groupValue: _preferredQuality, activeColor: gold,
+          title: Text(quality, style: const TextStyle(color: white)),
+          onChanged: (value) => Navigator.pop(dialogContext, value),
+        )).toList(),
+      ),
+    );
+    if (selected == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('flixora_preferred_quality', selected);
+    if (mounted) setState(() => _preferredQuality = selected);
+  }
+
+  void _showSettingsInfo(String title, String message) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panel,
+        title: Text(title, style: const TextStyle(color: white)),
+        content: Text(message, style: const TextStyle(color: Colors.white70, height: 1.45)),
+        actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
+      ),
+    );
   }
 
   Future<void> _loadSavedPreferences() async {
@@ -1778,8 +1862,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: 255,
+      height: 390,
       child: Stack(
+        fit: StackFit.expand,
         children: [
           PageView.builder(
             controller: _sliderController,
@@ -1808,11 +1893,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
-                          colors: [
-                            Color(0x12000000),
-                            Colors.transparent,
-                            Color(0x66000000),
-                          ],
+                          colors: [Color(0x55000000), Color(0x08000000), Colors.transparent, Color(0xFF080808)],
+                          stops: [0, 0.28, 0.58, 1],
                         ),
                       ),
                     ),
@@ -1820,6 +1902,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               );
             },
+          ),
+          Positioned(
+            top: 72,
+            left: 0,
+            right: 0,
+            child: _homeCategoryStrip(),
           ),
           Positioned(
             bottom: 12,
@@ -1996,7 +2084,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   color: selected ? white : Colors.white60,
                   fontSize: 15,
                   fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
-                  fontFamily: 'sans-serif-rounded',
+                  fontFamily: 'sans-serif-condensed',
                 ),
               ),
             ),
@@ -2039,7 +2127,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onRefresh: loadHome,
       child: ListView(
         children: [
-          _homeCategoryStrip(),
           _featuredSlider(),
           _featuredQuickCards(_withoutFlixoraDuplicates(trending).take(5).toList()),
           if (flixoraMovies.isNotEmpty) ...[
@@ -2243,9 +2330,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _profileGroup([
           _profileTile(Icons.card_giftcard, 'Rewards Center',
               () => _openProfileSection('Rewards Center')),
-          _profileTile(Icons.history, 'Watch History',
-              () => _openProfileSection('Watch History'),
-              trailingText: '${_watchHistory.length}'),
+        ]),
+        const SizedBox(height: 12),
+        _watchHistoryPreview(),
+        const SizedBox(height: 12),
+        _profileGroup([
           _profileTile(Icons.bookmark_outline, 'My List',
               () => _openProfileSection('My List'),
               trailingText: '${_saved.length}'),
@@ -2291,6 +2380,72 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Widget _watchHistoryPreview() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(4, 2, 2, 10),
+        child: Row(children: [
+          const Icon(Icons.history, color: Colors.white70, size: 20),
+          const SizedBox(width: 9),
+          const Expanded(child: Text('Watch History', style: TextStyle(color: white, fontSize: 17, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic))),
+          Text('${_watchHistory.length}', style: const TextStyle(color: Colors.white54)),
+          IconButton(tooltip: 'View all watch history', onPressed: () => _openProfileSection('Watch History'), icon: const Icon(Icons.chevron_right, color: Colors.white70, size: 25)),
+        ]),
+      ),
+      if (_watchHistory.isEmpty)
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 12), child: Text('Movies you play will appear here.', style: TextStyle(color: Colors.white54)))
+      else
+        SizedBox(height: 112, child: ListView.separated(
+          scrollDirection: Axis.horizontal, itemCount: _watchHistory.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 10),
+          itemBuilder: (context, index) {
+            final movie = _watchHistory[index];
+            final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
+            return GestureDetector(onTap: () => _openMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
+              const SizedBox(height: 5),
+              Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
+            ])));
+          },
+        )),
+    ]);
+  }
+
+  Widget _watchHistoryPage() {
+    if (_watchHistory.isEmpty) return _profileMessagePage(Icons.history, 'No watch history yet', 'Movies you start watching will appear here.');
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 24), itemCount: _watchHistory.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 14),
+      itemBuilder: (context, index) {
+        final movie = _watchHistory[index];
+        final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
+        return Row(children: [
+          ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
+            FlixoraCachedImage(imageUrl: image, isOnline: _online),
+            Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
+          ]))),
+          const SizedBox(width: 11),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
+            const SizedBox(height: 7),
+            const Text('Recently watched', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+          ])),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.white60), color: panel,
+            onSelected: (value) async {
+              if (value == 'remove') {
+                setState(() => _watchHistory.removeWhere((item) => item.id == movie.id));
+                await MovieCache.saveList(MovieCache.historyKey, _watchHistory);
+              }
+            },
+            itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
+          ),
+          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: Colors.white70, child: Icon(Icons.play_arrow, color: Colors.black, size: 21))),
+        ]);
+      },
+    );
+  }
+
   Widget _profileGroup(List<Widget> children) {
     return Card(
       color: panel,
@@ -2331,7 +2486,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _profileSectionContent() {
     switch (_profileSection) {
       case 'Watch History':
-        return _collectionContent('Watch History', _watchHistory);
+        return _watchHistoryPage();
       case 'My List':
         return _collectionContent('My List', _moviesForIds(_saved));
       case 'My Favourites':
@@ -2339,28 +2494,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'My Activity':
         return _collectionContent('My Activity', _watchHistory);
       case 'Settings':
-        final user = supabaseClient?.auth.currentUser;
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _profileGroup([
-              _profileTile(Icons.person_outline,
-                  user?.email ?? 'Visitor Login',
-                  user == null ? _showVisitorLogin : _signOutVisitor,
-                  trailingText: user == null ? 'Login' : 'Logout'),
-              _profileTile(Icons.refresh, 'Refresh Movies', loadHome),
-            ]),
-            const SizedBox(height: 12),
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text(
-                'Account sign-in uses the FLIXORA Supabase account service. '
-                'Your saved list and watch history are currently stored on this device.',
-                style: TextStyle(color: Colors.white54, height: 1.45),
-              ),
-            ),
-          ],
-        );
+        return _settingsContent();
       case 'Rewards Center':
         return _profileMessagePage(
           Icons.card_giftcard, 'Rewards are coming soon',
@@ -2384,6 +2518,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       default:
         return _profileContent();
     }
+  }
+
+  Widget _settingSwitch({required String title, required String subtitle, required bool value, required ValueChanged<bool> onChanged}) {
+    return SwitchListTile(
+      value: value, onChanged: onChanged, activeThumbColor: Colors.white,
+      activeTrackColor: const Color(0xFF22DCA0), inactiveThumbColor: Colors.white,
+      inactiveTrackColor: Colors.white24,
+      title: Text(title, style: const TextStyle(color: white, fontSize: 15, fontStyle: FontStyle.italic)),
+      subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12, height: 1.3))),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    );
+  }
+
+  Widget _settingsContent() {
+    final user = supabaseClient?.auth.currentUser;
+    return Column(children: [
+      Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 14, 12, 16), children: [
+        const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: Colors.white70, fontSize: 13))),
+        _profileGroup([
+          _profileTile(Icons.notifications_none, 'Notifications', () => _saveBoolSetting('flixora_notifications', !_notificationsEnabled, (x) => _notificationsEnabled = x),
+            trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: Colors.white, activeTrackColor: const Color(0xFF22DCA0))),
+          _profileTile(Icons.language, 'Language', _showLanguagePicker, trailingText: _appLanguage),
+          _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
+          _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
+          _settingSwitch(title: 'Download in background', subtitle: 'Keep download tasks active while you use other screens.', value: _downloadInBackground, onChanged: (v) => _saveBoolSetting('flixora_download_background', v, (x) => _downloadInBackground = x)),
+          _settingSwitch(title: 'Auto activate Miniplayer', subtitle: 'Miniplayer behavior will be connected when the player feature is extended.', value: _autoMiniPlayer, onChanged: (v) => _saveBoolSetting('flixora_auto_miniplayer', v, (x) => _autoMiniPlayer = x)),
+          _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
+        ]),
+        const SizedBox(height: 20),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: Colors.white70, fontSize: 13))),
+        _profileGroup([
+          _profileTile(Icons.system_update, 'Check update', () => _showSettingsInfo('Check update', 'Automatic update checking is not connected to a release service yet. Install new FLIXORA versions from the official release when available.')),
+          _profileTile(Icons.info_outline, 'About us', () => _showSettingsInfo('About FLIXORA', 'FLIXORA is a free movie and series discovery and streaming app.')),
+          _profileTile(Icons.policy_outlined, 'Privacy Policy', () => _showSettingsInfo('Privacy Policy', 'The public privacy policy page will be added before release.')),
+          _profileTile(Icons.description_outlined, 'User Agreement', () => _showSettingsInfo('User Agreement', 'The user agreement page will be added before release.')),
+        ]),
+      ])),
+      Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 10), child: SizedBox(width: double.infinity, height: 54, child: DecoratedBox(
+        decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF20B9F2), Color(0xFF21E99A)]), borderRadius: BorderRadius.circular(9)),
+        child: TextButton(onPressed: user == null ? _showVisitorLogin : _signOutVisitor,
+          child: Text(user == null ? 'Log in/Sign up' : 'Log out', style: const TextStyle(color: Color(0xFF06110E), fontSize: 17, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))),
+      ))),
+    ]);
   }
 
   Widget _profileMessagePage(IconData icon, String title, String message) {
@@ -2633,14 +2810,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_search.isNotEmpty) return 'Search Results';
 
     if (_tab == 1) return 'Downloads';
-    if (_tab == 2) return _profileSection ?? 'Profile';
+    if (_tab == 2) return _profileSection ?? 'Me';
     return 'FLIXORA';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: _tab == 0 && _search.isEmpty,
       appBar: AppBar(
+        backgroundColor: _tab == 0 && _search.isEmpty ? Colors.transparent : bg,
+        elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
         toolbarHeight: _tab == 0 ? 68 : kToolbarHeight,
         titleSpacing: _tab == 0 ? 8 : 16,
         leading: _tab == 2 && _profileSection != null
@@ -2663,8 +2843,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Container(
                       height: 46,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF292929),
+                        color: const Color(0xAA292929),
                         borderRadius: BorderRadius.circular(11),
+                        border: Border.all(color: Colors.white12),
                       ),
                       child: TextField(
                         controller: _searchController,
@@ -2782,7 +2963,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
-            label: 'Profile',
+            label: 'Me',
           ),
         ],
       ),
