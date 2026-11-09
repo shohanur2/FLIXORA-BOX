@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
@@ -933,8 +934,10 @@ class FlixoraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flixora',
       theme: ThemeData(
-        fontFamily: 'sans-serif-condensed',
-        textTheme: const TextTheme(bodyMedium: TextStyle(fontStyle: FontStyle.italic), bodyLarge: TextStyle(fontStyle: FontStyle.italic), titleMedium: TextStyle(fontStyle: FontStyle.italic), titleLarge: TextStyle(fontStyle: FontStyle.italic)),
+        fontFamily: GoogleFonts.robotoSlab().fontFamily,
+        textTheme: GoogleFonts.robotoSlabTextTheme(
+          ThemeData.dark().textTheme,
+        ),
         brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
@@ -3461,7 +3464,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   color: gold,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.2,
-                  fontFamily: 'sans-serif-rounded',
                 ),
               ),
         actions: _tab == 0 || _showRanking
