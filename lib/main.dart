@@ -6166,11 +6166,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                         .where((item) => item.isNotEmpty),
                                   );
                                 }
-                                final runtime = _toInt(data['runtime'] ?? data['episode_run_time'] is List
-                                    ? ((data['episode_run_time'] as List).isNotEmpty
-                                        ? data['episode_run_time'][0]
-                                        : 0)
-                                    : data['runtime']);
+                                final episodeRuntimes = data['episode_run_time'];
+                                final rawRuntime = data['runtime'] ??
+                                    (episodeRuntimes is List && episodeRuntimes.isNotEmpty
+                                        ? episodeRuntimes.first
+                                        : 0);
+                                final runtime = _toInt(rawRuntime);
                                 final info = <String>[
                                   if (countries.isNotEmpty) 'Country: ${countries.join(', ')}',
                                   if (runtime > 0) '${runtime} min',
