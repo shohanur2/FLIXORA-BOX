@@ -25,6 +25,27 @@ class ProviderCatalog {
   static const String _pvrPlayHost =
       'dbhnmkjasgbvsdkjbskkvnskjbfckldsnckjbckjnxkjcsknxjvkjxnvcxknvku.pvrplay.fun';
 
+  // Redirect destinations approved by FLIXORA-REFERENCE's playback security
+  // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
+  static const Set<String> _approvedRedirectHosts = <String>{
+    'play4u.org',
+    'yapgrid.com',
+    'pvrplay.fun',
+    'reelsdownload.online',
+    'cinesrc.st',
+    'framextv.xyz',
+    'framextv.cc',
+    'streamrip.fun',
+    'filmu.in',
+    'multiembed.mov',
+    'codespecters.com',
+    'youtube.com',
+    'youtube-nocookie.com',
+    'youtu.be',
+    'vimeo.com',
+    'archive.org',
+  };
+
   /// Returns all nine built-in movie providers in reference-project order.
   /// Play4U requires the movie's real IMDb title ID; the others use TMDB ID.
   static List<ProviderEmbedSource> forMovie({
@@ -118,6 +139,22 @@ class ProviderCatalog {
     return 'DEMO_$hex';
   }
 
+  /// Returns the next available provider after a failed source. The order is
+  /// deterministic and never loops back to a provider that already failed.
+  static ProviderEmbedSource? nextAvailableAfter(
+    Iterable<ProviderEmbedSource> sources,
+    String failedSourceId,
+  ) {
+    final items = sources.toList(growable: false);
+    final failedIndex = items.indexWhere((item) => item.id == failedSourceId);
+    if (failedIndex < 0) return null;
+
+    for (var index = failedIndex + 1; index < items.length; index++) {
+      if (items[index].isAvailable) return items[index];
+    }
+    return null;
+  }
+
   /// Only HTTPS navigation on the provider's own domain (or its subdomains)
   /// is allowed inside the embedded player.
   static bool allowsNavigation(
@@ -131,7 +168,11 @@ class ProviderCatalog {
     }
 
     final host = uri.host.toLowerCase();
-    return source.allowedHosts.any((allowed) {
+    final approvedHosts = <String>{
+      ...source.allowedHosts,
+      ..._approvedRedirectHosts,
+    };
+    return approvedHosts.any((allowed) {
       final domain = allowed.toLowerCase();
       return host == domain || host.endsWith('.$domain');
     });
