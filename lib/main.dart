@@ -5141,7 +5141,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
     }
     final selectedIndex = _selectedAudioTrackIndex
-        .clamp(0, _tracks.audio.length - 1);
+        .clamp(0, _tracks.audio.length - 1).toInt();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
