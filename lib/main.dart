@@ -6122,10 +6122,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         Icons.chevron_right,
                         color: Color(0x8AFFFFFF),
                       ),
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _showAudioTracks();
-                      },
+                      onTap: _selectedProviderSource != null
+                          ? null
+                          : () {
+                              Navigator.pop(sheetContext);
+                              _showAudioTracks();
+                            },
                     ),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -6425,13 +6427,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ],
           if (_selectedProviderSource == null && _tracks.audio.isNotEmpty) ...[
-            const SizedBox(width: 5),
-            _playerTopAction(
-              icon: Icons.audiotrack_rounded,
-              label: audioLabel,
-              tooltip: 'Audio language: $audioLabel',
-              enabled: true,
-              onPressed: _showAudioTracks,
+            const SizedBox(width: 3),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Audio language: $audioLabel',
+                onPressed: _showAudioTracks,
+                icon: const Icon(
+                  Icons.audiotrack_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
+              ),
             ),
           ],
           const SizedBox(width: 3),
