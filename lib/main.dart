@@ -5665,6 +5665,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     style: const TextStyle(color: Colors.white60, fontSize: 12),
                   ),
                 ],
+                if (widget.movie.audioLanguages.isNotEmpty) ...[
+                  const SizedBox(height: 9),
+                  Text(
+                    'Available Audio: ${widget.movie.audioLanguages.join(', ')}',
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
                 if (widget.movie.overview.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(
