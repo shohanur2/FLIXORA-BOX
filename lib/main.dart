@@ -6479,28 +6479,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     required bool enabled,
     required VoidCallback onPressed,
   }) {
-    return OutlinedButton.icon(
-      onPressed: enabled ? onPressed : null,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: playerWhite,
-        disabledForegroundColor: const Color(0x66FFFFFF),
-        backgroundColor: Colors.black.withValues(alpha: 0.42),
-        side: BorderSide(
-          color: enabled
-              ? playerGold.withValues(alpha: 0.68)
-              : const Color(0x3DFFFFFF),
+    return Tooltip(
+      message: tooltip,
+      child: OutlinedButton(
+        onPressed: enabled ? onPressed : null,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: playerWhite,
+          disabledForegroundColor: const Color(0x66FFFFFF),
+          backgroundColor: Colors.black.withValues(alpha: 0.42),
+          side: BorderSide(
+            color: enabled
+                ? playerGold.withValues(alpha: 0.68)
+                : const Color(0x3DFFFFFF),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
-      ),
-      child: Tooltip(
-        message: tooltip,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 15, color: enabled ? playerGoldLight : playerWhite),
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? playerGoldLight : playerWhite,
+            ),
             const SizedBox(width: 4),
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 64),
