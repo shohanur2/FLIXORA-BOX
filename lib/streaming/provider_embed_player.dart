@@ -235,7 +235,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
                 value: _progress > 0 ? _progress / 100 : null,
                 minHeight: 2,
                 backgroundColor: Colors.white12,
-                color: const Color(0xFFD6AD45),
+                color: const Color(0xFFE50914),
               ),
             ),
           Positioned(
@@ -295,7 +295,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
                       children: [
                         const Icon(
                           Icons.cloud_off_rounded,
-                          color: Color(0xFFD6AD45),
+                          color: Color(0xFFE50914),
                           size: 38,
                         ),
                         const SizedBox(height: 10),
