@@ -2030,7 +2030,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: MediaQuery.of(context).size.height * 0.64,
+      height: MediaQuery.of(context).size.height * 0.46,
       child: Stack(
         fit: StackFit.expand,
         children: [
