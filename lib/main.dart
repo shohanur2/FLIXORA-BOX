@@ -1734,35 +1734,124 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _sectionTitle(
-    String title, {
-    String? subtitle,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 22, 16, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: white,
-              fontSize: 19,
-              fontWeight: FontWeight.bold,
+  void _openRanking([String category = 'Cinema']) {
+    setState(() {
+      _showRanking = true;
+      _rankingCategory = category;
+    });
+  }
+
+  List<String> _sectionFilterOptions(String section) {
+    switch (section) {
+      case 'Trending Movies':
+      case 'Popular Movies':
+        return const ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
+      case 'Trending TV Series':
+      case 'Popular TV Series':
+      case 'Top Rated TV Series':
+        return const ['All Series', 'Top Series', 'New Bengali', 'Anime', 'Asian Drama', 'Indian Drama'];
+      case 'Anime':
+        return const ['Popular', 'Action', 'Adventure', 'Fantasy', 'New Release'];
+      case 'Korean & Asian Drama':
+        return const ['All', 'Korean', 'Chinese', 'Japanese', 'Thai'];
+      case 'Bengali Movies':
+      case 'Bengali TV Series':
+        return const ['All', 'New', 'Popular', 'Top Rated'];
+      case 'Now Playing':
+        return const ['All', 'New Release', 'Action', 'Drama'];
+      case 'Top Rated Movies':
+        return const ['All', 'TOP Movies', 'Bollywood', 'Hollywood', 'South Indian'];
+      default:
+        return const [];
+    }
+  }
+
+  List<Movie> _filterSectionMovies(String section, List<Movie> source, String filter) {
+    final items = _deduplicateMovies(source);
+    if (filter == 'All' || filter == 'Cinema' || filter == 'All Series' || filter == 'Popular') {
+      if (filter == 'Popular' && section == 'Anime') {
+        return items.toList()..sort((a, b) => b.rating.compareTo(a.rating));
+      }
+      return items;
+    }
+    if (filter == 'TOP Movies' || filter == 'Top Series' || filter == 'Top Rated') {
+      return items.toList()..sort((a, b) => b.rating.compareTo(a.rating));
+    }
+    if (filter == 'New Release' || filter == 'New') {
+      return items.toList()..sort((a, b) => b.year.compareTo(a.year));
+    }
+    if (filter == 'New Bengali') {
+      return items.where((m) => m.originalLanguage.toLowerCase() == 'bn' || m.originCountry.toUpperCase() == 'BD').toList();
+    }
+    if (filter == 'Bollywood') {
+      return items.where((m) => ['hi', 'ur'].contains(m.originalLanguage.toLowerCase())).toList();
+    }
+    if (filter == 'Hollywood') {
+      return items.where((m) => m.originalLanguage.toLowerCase() == 'en').toList();
+    }
+    if (filter == 'South Indian') {
+      return items.where((m) => ['ta', 'te', 'ml', 'kn'].contains(m.originalLanguage.toLowerCase())).toList();
+    }
+    if (filter == 'Anime') {
+      return items.where((m) => m.genres.any((g) => g.toLowerCase().contains('animation')) || m.originalLanguage.toLowerCase() == 'ja').toList();
+    }
+    if (filter == 'Asian Drama') {
+      return items.where((m) => ['ko', 'zh', 'ja', 'th'].contains(m.originalLanguage.toLowerCase())).toList();
+    }
+    if (filter == 'Indian Drama') {
+      return items.where((m) => ['hi', 'bn', 'ta', 'te', 'ml', 'kn'].contains(m.originalLanguage.toLowerCase())).toList();
+    }
+    if (filter == 'Korean') return items.where((m) => m.originalLanguage.toLowerCase() == 'ko').toList();
+    if (filter == 'Chinese') return items.where((m) => ['zh', 'cn'].contains(m.originalLanguage.toLowerCase())).toList();
+    if (filter == 'Japanese') return items.where((m) => m.originalLanguage.toLowerCase() == 'ja').toList();
+    if (filter == 'Thai') return items.where((m) => m.originalLanguage.toLowerCase() == 'th').toList();
+    if (filter == 'Action' || filter == 'Adventure' || filter == 'Fantasy' || filter == 'Drama') {
+      return items.where((m) => m.genres.any((g) => g.toLowerCase().contains(filter.toLowerCase()))).toList();
+    }
+    return items;
+  }
+
+  Widget _sectionBlock(String title, List<Movie> movies) {
+    final filters = _sectionFilterOptions(title);
+    final selected = _sectionFilters[title] ?? (filters.isNotEmpty ? filters.first : '');
+    final visibleMovies = filters.isEmpty ? movies : _filterSectionMovies(title, movies, selected);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 21, 12, 7),
+          child: Row(
+            children: [
+              Expanded(child: Text(title, style: const TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.bold))),
+              TextButton(
+                onPressed: () => _openRanking(title.contains('TV') ? 'Cinema' : 'Cinema'),
+                style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(36, 28), tapTargetSize: MaterialTapTargetSize.shrinkWrap, visualDensity: VisualDensity.compact),
+                child: const Text('All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+              ),
+            ],
+          ),
+        ),
+        if (filters.isNotEmpty)
+          SizedBox(
+            height: 30,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: filters.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 18),
+              itemBuilder: (context, index) {
+                final value = filters[index];
+                final active = selected == value;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _sectionFilters[title] = value),
+                  child: Center(child: Text(value, style: TextStyle(color: active ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                );
+              },
             ),
           ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ],
-      ),
+        _movieRow(visibleMovies),
+      ],
     );
   }
 
@@ -1917,12 +2006,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
           ),
           Positioned(
-            top: 48,
-            left: 0,
-            right: 0,
-            child: _homeCategoryStrip(),
-          ),
-          Positioned(
             left: 0,
             right: 0,
             bottom: 28,
@@ -2052,6 +2135,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   String _homeCategory = 'Trending';
+  final Map<String, String> _sectionFilters = {};
 
   List<Movie> _moviesForHomeCategory(String category) {
     switch (category) {
@@ -2078,15 +2162,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       default:
         return [];
     }
-  }
-
-  Widget _homeCategoryStrip() {
-    const categories = [
-      'Trending', 'Anime', 'Movies', 'TV Series',
-      'Korean Drama', 'Bengali', 'Flixora Originals',
-    ];
-
-    return SizedBox(height: 40, child: Row(children: [Expanded(child: ListView.separated(padding: const EdgeInsets.only(left: 16, right: 8), scrollDirection: Axis.horizontal, itemCount: categories.length, separatorBuilder: (_, __) => const SizedBox(width: 20), itemBuilder: (context, index) { final category = categories[index]; final selected = _homeCategory == category; return GestureDetector(onTap: () => setState(() => _homeCategory = category), child: Center(child: Text(category, style: TextStyle(color: selected ? white : Colors.white60, fontSize: 15, fontWeight: selected ? FontWeight.w900 : FontWeight.w600, fontFamily: 'sans-serif-condensed')))); })), TextButton(onPressed: () => setState(() { _showRanking = true; _rankingCategory = 'Cinema'; }), style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 10), minimumSize: const Size(42, 32), tapTargetSize: MaterialTapTargetSize.shrinkWrap), child: const Text('All', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)))]));
   }
 
   Widget _homeContent() {
@@ -2120,32 +2195,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: ListView(
         children: [
           _featuredSlider(),
-          if (flixoraMovies.isNotEmpty) ...[
-            _sectionTitle('Flixora Originals'),
-            _movieRow(flixoraMovies),
-          ],
-          _sectionTitle('Trending Movies'),
-          _movieRow(_withoutFlixoraDuplicates(trending)),
-          _sectionTitle('Trending TV Series'),
-          _movieRow(trendingTv),
-          _sectionTitle('Anime'),
-          _movieRow(anime),
-          _sectionTitle('Korean & Asian Drama'),
-          _movieRow(koreanDrama),
-          _sectionTitle('Bengali Movies'),
-          _movieRow(bengaliMovies),
-          _sectionTitle('Bengali TV Series'),
-          _movieRow(bengaliTv),
-          _sectionTitle('Popular Movies'),
-          _movieRow(_withoutFlixoraDuplicates(popular)),
-          _sectionTitle('Popular TV Series'),
-          _movieRow(popularTv),
-          _sectionTitle('Now Playing'),
-          _movieRow(_withoutFlixoraDuplicates(latest)),
-          _sectionTitle('Top Rated Movies'),
-          _movieRow(_withoutFlixoraDuplicates(topRated)),
-          _sectionTitle('Top Rated TV Series'),
-          _movieRow(topRatedTv),
+          if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
+          _sectionBlock('Trending Movies', _withoutFlixoraDuplicates(trending)),
+          _sectionBlock('Trending TV Series', trendingTv),
+          _sectionBlock('Anime', anime),
+          _sectionBlock('Korean & Asian Drama', koreanDrama),
+          _sectionBlock('Bengali Movies', bengaliMovies),
+          _sectionBlock('Bengali TV Series', bengaliTv),
+          _sectionBlock('Popular Movies', _withoutFlixoraDuplicates(popular)),
+          _sectionBlock('Popular TV Series', popularTv),
+          _sectionBlock('Now Playing', _withoutFlixoraDuplicates(latest)),
+          _sectionBlock('Top Rated Movies', _withoutFlixoraDuplicates(topRated)),
+          _sectionBlock('Top Rated TV Series', topRatedTv),
           const SizedBox(height: 25),
         ],
       ),
@@ -2843,6 +2904,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Widget _bottomNavItem(int index, IconData icon, IconData activeIcon, String label) {
+    final selected = _tab == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () {
+          FocusScope.of(context).unfocus();
+          setState(() {
+            _search = '';
+            _showRanking = false;
+            _searchController.clear();
+            _searchLoading = false;
+            _profileSection = null;
+            _tab = index;
+          });
+        },
+        child: SizedBox(
+          height: 54,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(selected ? activeIcon : icon, size: 20, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
+              const SizedBox(height: 2),
+              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 10, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
@@ -2858,6 +2949,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       appBar: AppBar(
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
         elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
+        centerTitle: _showRanking,
         toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
         titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
         leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 2 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
@@ -2865,9 +2957,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ? Row(
                 children: [
                   Image.asset(
-                    'assets/app_icon.png',
-                    width: 43,
-                    height: 43,
+                    'assets/images/flixora_logo.png',
+                    width: 39,
+                    height: 39,
                     fit: BoxFit.contain,
                   ),
                   const SizedBox(width: 9),
@@ -2970,43 +3062,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ? const NoInternetScreen()
               : _currentPage(),
       extendBody: true,
-      bottomNavigationBar: _showRanking ? null : NavigationBar(
-        height: 68,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        backgroundColor: const Color(0xCC17181D),
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        indicatorColor: const Color(0x3322DCA0),
-        selectedIndex: _tab,
-        onDestinationSelected: (index) {
-          FocusScope.of(context).unfocus();
-          setState(() {
-            _search = '';
-            _showRanking = false;
-            _searchController.clear();
-            _searchLoading = false;
-            _profileSection = null;
-            _tab = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
+      bottomNavigationBar: _showRanking ? null : SafeArea(
+        top: false,
+        child: Container(
+          height: 54,
+          decoration: const BoxDecoration(
+            color: Color(0xF217181D),
+            border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.download_outlined),
-            selectedIcon: Icon(Icons.download),
-            label: 'Downloads',
+          child: Row(
+            children: [
+              _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
+              _bottomNavItem(1, Icons.download_outlined, Icons.download, 'Downloads'),
+              _bottomNavItem(2, Icons.person_outline, Icons.person, 'Me'),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Me',
-          ),
-        ],
+        ),
       ),
     );
   }
