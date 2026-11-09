@@ -2442,7 +2442,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   width: _slide == index ? 18 : 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: _slide == index ? ink : ink54,
+                    color: _slide == index ? gold : const Color(0x8AFFFFFF),
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
@@ -2982,7 +2982,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+          decoration: BoxDecoration(
+            color: panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: gold.withValues(alpha: 0.28)),
+          ),
+          child: Row(
+            children: [
+              _cineProfileStat('WATCHED', _watchHistory.length.toString()),
+              _cineProfileDivider(),
+              _cineProfileStat('MY LIST', _saved.length.toString()),
+              _cineProfileDivider(),
+              _cineProfileStat(
+                'DOWNLOADS',
+                _downloads.where((task) => task.status == 'Completed').length.toString(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
         _profileGroup([
           _profileTile(Icons.card_giftcard, 'Rewards Center',
               () => _openProfileSection('Rewards Center')),
@@ -3034,6 +3055,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
       ],
     );
+  }
+
+  Widget _cineProfileStat(String label, String value) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: gold,
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: ink54,
+              fontSize: 9,
+              letterSpacing: 0.8,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cineProfileDivider() {
+    return Container(width: 1, height: 34, color: ink12);
   }
 
   Widget _watchHistoryPreview() {
@@ -3418,7 +3470,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const categories = ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
     final movies = _rankingMovies();
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF24252B), child: ListView.builder(
+      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFFF0EEE8), child: ListView.builder(
         padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
         itemBuilder: (context, index) {
           final category = categories[index]; final selected = category == _rankingCategory;
