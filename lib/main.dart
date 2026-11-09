@@ -1921,8 +1921,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return GestureDetector(
             onTap: () => _openMovie(movie),
             child: Container(
-              width: 112,
-              margin: const EdgeInsets.symmetric(horizontal: 5),
+              width: 104,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -2042,13 +2042,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 setState(() => _slide = index);
               }
               if (_featuredCardsController.hasClients) {
-                final cardExtent = 248.0;
+                const cardWidth = 220.0;
+                const cardExtent = 228.0;
+                const leadingInset = 16.0;
                 final viewport = _featuredCardsController.position.viewportDimension;
-                final target = (index * cardExtent - (viewport - cardExtent) / 2)
+                final target = (leadingInset + index * cardExtent + cardWidth / 2 - viewport / 2)
                     .clamp(0.0, _featuredCardsController.position.maxScrollExtent);
                 _featuredCardsController.animateTo(
                   target,
-                  duration: const Duration(milliseconds: 300),
+                  duration: const Duration(milliseconds: 350),
                   curve: Curves.easeOutCubic,
                 );
               }
@@ -2117,19 +2119,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
-      height: 78,
+      height: 74,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
-          if (notification is ScrollUpdateNotification &&
+          if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
-            const cardExtent = 248.0;
+            const cardWidth = 220.0;
+            const cardExtent = 228.0;
+            const leadingInset = 16.0;
             final viewport = notification.metrics.viewportDimension;
-            final selected = ((notification.metrics.pixels + viewport / 2 - 12) / cardExtent)
+            final selected = ((notification.metrics.pixels + viewport / 2 -
+                        leadingInset - cardWidth / 2) /
+                    cardExtent)
                 .round()
                 .clamp(0, movies.length - 1);
             if (selected != _slide) {
-              _sliderController.jumpToPage(selected);
+              _sliderController.animateToPage(
+                selected,
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeInOut,
+              );
             }
           }
           return false;
@@ -2146,8 +2156,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return GestureDetector(
             onTap: () => _openMovie(movie),
             child: Container(
-              width: 238,
-              margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+              width: 220,
+              margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
               padding: const EdgeInsets.all(7),
               decoration: BoxDecoration(
                 color: panel,
@@ -2159,15 +2169,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     borderRadius: BorderRadius.circular(7),
                     child: movie.posterUrl.isEmpty
                         ? Container(
-                            width: 43,
-                            height: 64,
+                            width: 40,
+                            height: 60,
                             color: const Color(0xFF292929),
                             child: const Icon(Icons.movie, color: gold),
                           )
                         : CachedNetworkImage(
                             imageUrl: movie.posterUrl,
-                            width: 43,
-                            height: 64,
+                            width: 40,
+                            height: 60,
                             fit: BoxFit.cover,
                             placeholder: (_, __) => Container(
                               width: 43,
@@ -2175,8 +2185,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               color: const Color(0xFF292929),
                             ),
                             errorWidget: (_, __, ___) => Container(
-                              width: 48,
-                              height: 70,
+                              width: 40,
+                              height: 60,
                               color: const Color(0xFF292929),
                               child: const Icon(Icons.movie, color: gold),
                             ),
@@ -2214,7 +2224,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 7),
                   const CircleAvatar(
-                    radius: 15,
+                    radius: 14,
                     backgroundColor: Colors.greenAccent,
                     child: Icon(Icons.play_arrow, color: Colors.black, size: 21),
                   ),
@@ -3042,6 +3052,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
       appBar: AppBar(
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+        ),
         elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
         centerTitle: _showRanking,
         toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
