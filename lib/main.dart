@@ -2222,6 +2222,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.bookmark_outline, 'My List',
               () => _openProfileSection('My List'),
               trailingText: '${_saved.length}'),
+          _profileTile(Icons.favorite_outline, 'My Favourites',
+              () => _openProfileSection('My Favourites'),
+              trailingText: '${_favourites.length}'),
           _profileTile(Icons.notifications_none, 'Messages',
               () => _openProfileSection('Messages'),
               trailing: const Icon(Icons.chevron_right, color: Colors.white54)),
@@ -2680,7 +2683,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
-          : (!_online && _allMovies().isEmpty)
+          : (_tab == 0 && !_online && _allMovies().isEmpty)
               ? const NoInternetScreen()
               : _currentPage(),
       bottomNavigationBar: NavigationBar(
