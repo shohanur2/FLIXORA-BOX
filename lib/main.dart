@@ -697,8 +697,7 @@ class FlixoraMovieService {
   }
 }
 
-class DownloadTask {  final int movieId;
-  final String title;
+class DownloadTask {  final int movieId;  final String title;
   final String poster;
   final String videoUrl;
   double progress;
@@ -1397,8 +1396,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
-    final results = await Future.wait<List<Movie>>([
-      TmdbService.search(text).catchError((_) => <Movie>[]),
+    final results = await Future.wait<List<Movie>>([      TmdbService.search(text).catchError((_) => <Movie>[]),
       FlixoraMovieService.searchPublishedMovies(text)
           .catchError((_) => <Movie>[]),
     ]);
@@ -1764,6 +1762,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _playMovieFromPlayer(Movie movie) async {
+    if (!mounted) return;
+    // Close the current player before opening another one, avoiding stacked
+    // players or overlapping audio when a recommendation is selected.
+    Navigator.of(context).pop();
+    await _playMovie(movie);
+  }
+
   Future<void> _playMovie(Movie movie) async {
     final selectedMovie = await _resolveMovieForOpening(movie);
     if (!mounted) return;
@@ -1795,7 +1801,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
           recommendedMovies: _allMovies(),
-          onMovieSelected: _playMovie,
+          onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
           onViewDownloads: _openDownloadsTab,
@@ -1810,7 +1816,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (!_online || !await InternetService.isOnline()) {
+    final hasInternet = await InternetService.isOnline();
+    if (!hasInternet) {
       if (mounted) {
         setState(() {
           _online = false;
@@ -1822,12 +1829,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
+    if (!_online) {
+      setState(() => _online = true);
+    }
     _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
         movie: selectedMovie,
         recommendedMovies: _allMovies(),
-        onMovieSelected: _playMovie,
+        onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
         onViewDownloads: _openDownloadsTab,
@@ -2097,8 +2107,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           Positioned(
             left: 0,
-            right: 0,
-            bottom: 28,
+            right: 0,            bottom: 28,
             child: _featuredQuickCards(slides),
           ),
           Positioned(
@@ -2797,8 +2806,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               TextField(
                 controller: passwordController,
-                obscureText: true,
-                style: const TextStyle(color: white),
+                obscureText: true,                style: const TextStyle(color: white),
                 decoration: const InputDecoration(labelText: 'Password'),
               ),
               if (errorText != null) ...[
@@ -3497,8 +3505,7 @@ class MovieDetailsScreen extends StatelessWidget {
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
+                        begin: Alignment.topCenter,                        end: Alignment.bottomCenter,
                         colors: [Colors.transparent, bg],
                       ),
                     ),
@@ -4197,8 +4204,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_resumeKey, position.inSeconds);
-    } catch (_) {}
-  }
+    } catch (_) {}  }
 
   Future<void> _clearResumePosition() async {
     try {
@@ -4897,8 +4903,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         color: gold,
                         fontWeight: FontWeight.bold,
                       ),
-                    ),
-                    const SizedBox(height: 10),
+                    ),                    const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -5597,7 +5602,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       ),
     );
   }
-
   Widget _detailAction(IconData icon, String label, VoidCallback? onPressed) {
     return OutlinedButton.icon(
       onPressed: onPressed,
