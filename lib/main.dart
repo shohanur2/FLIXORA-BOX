@@ -4578,7 +4578,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       }
     }
 
-    if (nextSource == null) {
+    final selectedNextSource = nextSource;
+    if (selectedNextSource == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No more available provider streams. Choose another stream below.')),
       );
@@ -4586,12 +4587,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     setState(() {
-      _selectedProviderSource = nextSource;
+      _selectedProviderSource = selectedNextSource;
       _errorMessage = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${failedSource.name} failed to load. Trying ${nextSource.name}...'),
+        content: Text('${failedSource.name} failed to load. Trying ${selectedNextSource.name}...'),
         duration: const Duration(seconds: 2),
       ),
     );
