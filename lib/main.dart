@@ -47,21 +47,22 @@ Future<void> main() async {
   runApp(const FlixoraApp());
 }
 
-// FLIXORA app surfaces: warm white with a restrained gold accent.
-const Color bg = Color(0xFFFAF9F6);
-const Color panel = Color(0xFFFFFFFF);
-const Color gold = Color(0xFFB8892D);
-const Color goldLight = Color(0xFF8D6A1F);
-const Color white = Color(0xFF191919);
-const Color ink = Color(0xFF191919);
-const Color ink70 = Color(0xB3191919);
-const Color ink60 = Color(0x99191919);
-const Color ink58 = Color(0x94191919);
-const Color ink54 = Color(0x8A191919);
-const Color ink38 = Color(0x61191919);
-const Color ink24 = Color(0x3D191919);
-const Color ink12 = Color(0x1F191919);
-const Color ink10 = Color(0x1A191919);
+// FLIXORA cinematic surfaces: Netflix-inspired black, red and premium gold.
+const Color bg = Color(0xFF080808);
+const Color panel = Color(0xFF181818);
+const Color gold = Color(0xFFE50914); // Primary Netflix red accent.
+const Color goldLight = Color(0xFFFF4652);
+const Color premiumGold = Color(0xFFD6AD45);
+const Color white = Color(0xFFFFFFFF);
+const Color ink = Color(0xFFFFFFFF);
+const Color ink70 = Color(0xB3FFFFFF);
+const Color ink60 = Color(0x99FFFFFF);
+const Color ink58 = Color(0x94FFFFFF);
+const Color ink54 = Color(0x8AFFFFFF);
+const Color ink38 = Color(0x61FFFFFF);
+const Color ink24 = Color(0x3DFFFFFF);
+const Color ink12 = Color(0x1FFFFFFF);
+const Color ink10 = Color(0x1AFFFFFF);
 const Color playerBg = Color(0xFF080808);
 const Color playerPanel = Color(0xFF191919);
 const Color playerGold = Color(0xFFD6AD45);
@@ -953,15 +954,15 @@ class FlixoraApp extends StatelessWidget {
       theme: ThemeData(
         fontFamily: GoogleFonts.robotoSlab().fontFamily,
         textTheme: GoogleFonts.robotoSlabTextTheme(
-          ThemeData.light().textTheme,
+          ThemeData.dark().textTheme,
         ),
-        brightness: Brightness.light,
+        brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
           seedColor: gold,
-          brightness: Brightness.light,
+          brightness: Brightness.dark,
           primary: gold,
-          secondary: goldLight,
+          secondary: premiumGold,
           surface: panel,
         ),
         appBarTheme: const AppBarTheme(
@@ -969,7 +970,7 @@ class FlixoraApp extends StatelessWidget {
           foregroundColor: white,
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: Colors.white,
+          backgroundColor: panel,
           indicatorColor: gold.withValues(alpha: 0.16),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             return TextStyle(
@@ -2344,7 +2345,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      const Icon(Icons.star, color: gold, size: 12),
+                      const Icon(Icons.star, color: premiumGold, size: 12),
                       const SizedBox(width: 3),
                       Text(movie.rating.toStringAsFixed(1),
                           style: const TextStyle(color: ink60, fontSize: 10)),
@@ -2553,7 +2554,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               const CircleAvatar(
                                 radius: 12,
                                 backgroundColor: gold,
-                                child: Icon(Icons.play_arrow, color: Colors.black, size: 18),
+                                child: Icon(Icons.play_arrow, color: Colors.white, size: 18),
                               ),
                             ],
                           ),
@@ -3148,7 +3149,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
           ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.black, size: 21))),
+          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
         ]);
       },
     );
@@ -3490,7 +3491,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(movie.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 14, fontWeight: FontWeight.w700)),
               const Spacer(),
-              Row(children: [const Icon(Icons.star, color: gold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: gold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
+              Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
             IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
@@ -3602,8 +3603,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
         systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
-          statusBarIconBrightness: _tab == 0 ? Brightness.light : Brightness.dark,
-          statusBarBrightness: _tab == 0 ? Brightness.dark : Brightness.light,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
         ),
         elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
         centerTitle: _showRanking,
@@ -3719,7 +3720,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
-        color: Colors.white,
+        color: panel,
         child: SafeArea(
           top: false,
           maintainBottomViewPadding: true,
@@ -3805,7 +3806,7 @@ class NoInternetScreen extends StatelessWidget {
               FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: gold,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                 ),
                 onPressed: () => _openWifiSettings(context),
                 icon: const Icon(Icons.settings),
@@ -4268,7 +4269,7 @@ class MovieDetailsScreen extends StatelessWidget {
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(
                           backgroundColor: gold,
-                          foregroundColor: Colors.black,
+                          foregroundColor: Colors.white,
                         ),
                         onPressed: onWatch,
                         icon: const Icon(
