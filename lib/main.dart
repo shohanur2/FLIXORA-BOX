@@ -1868,7 +1868,88 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  String _homeCategory = 'All';
+
+  List<Movie> _moviesForHomeCategory(String category) {
+    switch (category) {
+      case 'Movies':
+        return _deduplicateMovies([
+          ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
+        ].where((movie) => movie.mediaType == 'movie').toList());
+      case 'TV Series':
+        return _deduplicateMovies([
+          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
+        ]);
+      case 'Anime':
+        return anime;
+      case 'Korean Drama':
+        return koreanDrama;
+      case 'Bengali':
+        return [...bengaliMovies, ...bengaliTv];
+      case 'Flixora Originals':
+        return flixoraMovies;
+      default:
+        return [];
+    }
+  }
+
+  Widget _homeCategoryStrip() {
+    const categories = [
+      'All', 'Movies', 'TV Series', 'Anime',
+      'Korean Drama', 'Bengali', 'Flixora Originals',
+    ];
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: categories.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final category = categories[index];
+          return ChoiceChip(
+            label: Text(category),
+            selected: _homeCategory == category,
+            selectedColor: gold,
+            backgroundColor: panel,
+            labelStyle: TextStyle(
+              color: _homeCategory == category ? Colors.black : white,
+              fontWeight: FontWeight.w600,
+            ),
+            onSelected: (_) => setState(() => _homeCategory = category),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _homeContent() {
+    if (_homeCategory != 'All') {
+      final movies = _moviesForHomeCategory(_homeCategory);
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Expanded(child: Text(
+                  _homeCategory,
+                  style: const TextStyle(
+                    color: white, fontSize: 20, fontWeight: FontWeight.bold,
+                  ),
+                )),
+                TextButton(
+                  onPressed: () => setState(() => _homeCategory = 'All'),
+                  child: const Text('Show all'),
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: _collectionContent(_homeCategory, movies)),
+        ],
+      );
+    }
+
     return RefreshIndicator(
       color: gold,
       backgroundColor: panel,
@@ -1876,11 +1957,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: ListView(
         children: [
           _featuredSlider(),
+          _sectionTitle('Categories'),
+          _homeCategoryStrip(),
           if (flixoraMovies.isNotEmpty) ...[
-            _sectionTitle(
-              'Flixora Originals',
-              subtitle: 'Movies published by Flixora',
-            ),
+            _sectionTitle('Flixora Originals'),
             _movieRow(flixoraMovies),
           ],
           _sectionTitle('Trending Movies'),
