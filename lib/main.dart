@@ -1017,11 +1017,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => SimpleDialog(
         backgroundColor: panel,
         title: const Text('Watch Options', style: TextStyle(color: white)),
-        children: qualities.map((quality) => RadioListTile<String>(
-          value: quality, groupValue: _preferredQuality, activeColor: gold,
-          title: Text(quality, style: const TextStyle(color: white)),
-          onChanged: (value) => Navigator.pop(dialogContext, value),
-        )).toList(),
+        children: [
+          RadioGroup<String>(
+            groupValue: _preferredQuality,
+            onChanged: (value) {
+              if (value != null) Navigator.pop(dialogContext, value);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: qualities.map((quality) => RadioListTile<String>(
+                value: quality,
+                activeColor: gold,
+                title: Text(quality, style: const TextStyle(color: white)),
+              )).toList(),
+            ),
+          ),
+        ],
       ),
     );
     if (selected == null) return;
