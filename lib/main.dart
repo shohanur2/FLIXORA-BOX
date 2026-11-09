@@ -5009,6 +5009,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!mounted || _isDisposed || online == _playerIsOnline) return;
 
     setState(() => _playerIsOnline = online);
+    if (online &&
+        widget.localFilePath == null &&
+        !_validVideoUrl &&
+        _selectedProviderSource == null) {
+      unawaited(_movieDetailsFuture.then((_) {
+        if (mounted && !_isDisposed) _selectDefaultProviderIfNeeded();
+      }));
+    }
   }
 
   // Listeners are attached once. Retrying playback will not create
