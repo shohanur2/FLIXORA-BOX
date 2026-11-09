@@ -2030,8 +2030,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Positioned(
             left: 0,
             right: 0,
-            bottom: 0,
+            bottom: 28,
             child: _featuredQuickCards(slides),
+          ),
+          Positioned(
+            bottom: 8,
+            right: 18,
+            child: Row(
+              children: List.generate(
+                slides.length,
+                (index) => Container(
+                  margin: const EdgeInsets.only(left: 5),
+                  width: _slide == index ? 18 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: _slide == index ? Colors.white : Colors.white54,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -2048,8 +2066,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
-            const cardWidth = 198.0;
-            const cardExtent = 206.0;
+            const cardWidth = 238.0;
+            const cardExtent = 248.0;
             const leadingInset = 16.0;
             final viewport = notification.metrics.viewportDimension;
             final selected = ((notification.metrics.pixels + viewport / 2 -
@@ -2085,8 +2103,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             return GestureDetector(
               onTap: () => _openMovie(movie),
               child: Container(
-                width: 198,
-                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 238,
+                margin: const EdgeInsets.symmetric(horizontal: 5),
                 child: SizedBox(
                   height: 52,
                   child: Stack(
