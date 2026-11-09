@@ -766,6 +766,7 @@ class FlixoraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flixora',
       theme: ThemeData(
+        fontFamily: 'sans-serif-rounded',
         brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
@@ -1777,7 +1778,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: 390,
+      height: 255,
       child: Stack(
         children: [
           PageView.builder(
@@ -1789,133 +1790,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             itemBuilder: (context, index) {
               final movie = slides[index];
 
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  movie.backdropUrl.isEmpty
-                      ? Container(color: panel)
-                      : CachedNetworkImage(
-                          imageUrl: movie.backdropUrl,
-                          fit: BoxFit.cover,
-                          errorWidget: (_, __, ___) => Container(
-                            color: panel,
+              return GestureDetector(
+                onTap: () => _openMovie(movie),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    movie.backdropUrl.isEmpty
+                        ? Container(color: panel)
+                        : CachedNetworkImage(
+                            imageUrl: movie.backdropUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => Container(color: panel),
+                            errorWidget: (_, __, ___) => Container(color: panel),
                           ),
-                        ),
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          Color(0xDD080808),
-                          bg,
-                        ],
-                        stops: [0.1, 0.65, 1],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 20,
-                    right: 20,
-                    bottom: 38,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'FEATURED',
-                          style: TextStyle(
-                            color: gold,
-                            fontSize: 12,
-                            letterSpacing: 2,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          movie.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 27,
-                            color: white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 7),
-                        Row(
-                          children: [
-                            const Icon(
-                              Icons.star,
-                              color: gold,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              movie.rating.toStringAsFixed(1),
-                              style: const TextStyle(color: white),
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              movie.year,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                              ),
-                            ),
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Color(0x12000000),
+                            Colors.transparent,
+                            Color(0x66000000),
                           ],
                         ),
-                        const SizedBox(height: 13),
-                        FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: gold,
-                            foregroundColor: Colors.black,
-                          ),
-                          onPressed: () => _openMovie(movie),
-                          icon: const Icon(Icons.info_outline),
-                          label: const Text('View Details'),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               );
             },
           ),
           Positioned(
-            top: 15,
-            right: 20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 6,
-              ),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                'FLIXORA',
-                style: TextStyle(
-                  color: goldLight,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 2,
-                  fontSize: 11,
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 15,
-            right: 20,
+            bottom: 12,
+            right: 18,
             child: Row(
               children: List.generate(
                 slides.length,
                 (index) => Container(
                   margin: const EdgeInsets.only(left: 5),
-                  width: _slide == index ? 19 : 6,
+                  width: _slide == index ? 18 : 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: _slide == index ? gold : Colors.white54,
+                    color: _slide == index ? Colors.white : Colors.white54,
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
@@ -1927,10 +1844,111 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  String _homeCategory = 'All';
+  Widget _featuredQuickCards(List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 86,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        itemCount: movies.length,
+        itemBuilder: (context, index) {
+          final movie = movies[index];
+          final typeLabel = movie.mediaType == 'tv' ? 'TV Series' : 'Movie';
+
+          return GestureDetector(
+            onTap: () => _openMovie(movie),
+            child: Container(
+              width: 265,
+              margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: panel,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(7),
+                    child: movie.posterUrl.isEmpty
+                        ? Container(
+                            width: 48,
+                            height: 70,
+                            color: const Color(0xFF292929),
+                            child: const Icon(Icons.movie, color: gold),
+                          )
+                        : CachedNetworkImage(
+                            imageUrl: movie.posterUrl,
+                            width: 48,
+                            height: 70,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => Container(
+                              width: 48,
+                              height: 70,
+                              color: const Color(0xFF292929),
+                            ),
+                            errorWidget: (_, __, ___) => Container(
+                              width: 48,
+                              height: 70,
+                              color: const Color(0xFF292929),
+                              child: const Icon(Icons.movie, color: gold),
+                            ),
+                          ),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          movie.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '$typeLabel  •  ${movie.year}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white60,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  const CircleAvatar(
+                    radius: 15,
+                    backgroundColor: Colors.greenAccent,
+                    child: Icon(Icons.play_arrow, color: Colors.black, size: 21),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  String _homeCategory = 'Trending';  String _homeCategory = 'All';
 
   List<Movie> _moviesForHomeCategory(String category) {
     switch (category) {
+      case 'Trending':
+        return _deduplicateMovies([
+          ...flixoraMovies, ...trending, ...trendingTv,
+        ]);
       case 'Movies':
         return _deduplicateMovies([
           ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
@@ -1954,28 +1972,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _homeCategoryStrip() {
     const categories = [
-      'All', 'Movies', 'TV Series', 'Anime',
+      'Trending', 'Anime', 'Movies', 'TV Series',
       'Korean Drama', 'Bengali', 'Flixora Originals',
     ];
+
     return SizedBox(
       height: 48,
       child: ListView.separated(
         padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
         itemCount: categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, __) => const SizedBox(width: 20),
         itemBuilder: (context, index) {
           final category = categories[index];
-          return ChoiceChip(
-            label: Text(category),
-            selected: _homeCategory == category,
-            selectedColor: gold,
-            backgroundColor: panel,
-            labelStyle: TextStyle(
-              color: _homeCategory == category ? Colors.black : white,
-              fontWeight: FontWeight.w600,
+          final selected = _homeCategory == category;
+
+          return GestureDetector(
+            onTap: () => setState(() => _homeCategory = category),
+            child: Center(
+              child: Text(
+                category,
+                style: TextStyle(
+                  color: selected ? white : Colors.white60,
+                  fontSize: 15,
+                  fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
+                  fontFamily: 'sans-serif-rounded',
+                ),
+              ),
             ),
-            onSelected: (_) => setState(() => _homeCategory = category),
           );
         },
       ),
@@ -1983,7 +2007,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _homeContent() {
-    if (_homeCategory != 'All') {
+    if (_homeCategory != 'Trending') {
       final movies = _moviesForHomeCategory(_homeCategory);
       return Column(
         children: [
@@ -2017,6 +2041,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeCategoryStrip(),
           _featuredSlider(),
+          _featuredQuickCards(_withoutFlixoraDuplicates(trending).take(5).toList()),
           if (flixoraMovies.isNotEmpty) ...[
             _sectionTitle('Flixora Originals'),
             _movieRow(flixoraMovies),
@@ -2616,75 +2641,113 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        toolbarHeight: _tab == 0 ? 68 : kToolbarHeight,
+        titleSpacing: _tab == 0 ? 8 : 16,
         leading: _tab == 2 && _profileSection != null
             ? IconButton(
                 onPressed: () => setState(() => _profileSection = null),
                 icon: const Icon(Icons.arrow_back),
               )
             : null,
-        title: Text(
-          _pageTitle(),
-          style: const TextStyle(
-            color: gold,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 2,
-          ),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: Tooltip(
-              message: _online ? 'Internet connected' : 'No internet connection',
-              child: Icon(
-                _online ? Icons.wifi_rounded : Icons.wifi_off_rounded,
-                color: _online ? Colors.greenAccent : Colors.redAccent,
-              ),
-            ),
-          ),
-          if (_tab == 0)
-            IconButton(
-              onPressed: loadHome,
-              icon: const Icon(Icons.refresh),
-            ),
-        ],
-        bottom: _tab == 0 ? PreferredSize(
-          preferredSize: const Size.fromHeight(58),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(15, 0, 15, 10),
-            child: TextField(
-              controller: _searchController,
-              onChanged: _onSearchChanged,
-              style: const TextStyle(color: white),
-              decoration: InputDecoration(
-                hintText: 'Search movies...',
-                hintStyle: const TextStyle(color: Colors.white38),
-                prefixIcon: const Icon(
-                  Icons.search,
-                  color: gold,
-                ),
-                suffixIcon: _searchController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        onPressed: () {
-                          _searchController.clear();
-                          _onSearchChanged('');
-                        },
-                        icon: const Icon(
-                          Icons.close,
-                          color: Colors.white54,
+        title: _tab == 0
+            ? Row(
+                children: [
+                  Image.asset(
+                    'assets/app_icon.png',
+                    width: 43,
+                    height: 43,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Container(
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF292929),
+                        borderRadius: BorderRadius.circular(11),
+                      ),
+                      child: TextField(
+                        controller: _searchController,
+                        onChanged: _onSearchChanged,
+                        onSubmitted: _onSearchChanged,
+                        style: const TextStyle(color: white, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: 'Search movies & series...',
+                          hintStyle: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 13,
+                          ),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: Colors.white70,
+                            size: 21,
+                          ),
+                          suffixIcon: _searchController.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    _onSearchChanged('');
+                                  },
+                                  icon: const Icon(
+                                    Icons.close,
+                                    color: Colors.white54,
+                                    size: 18,
+                                  ),
+                                ),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 13,
+                            horizontal: 8,
+                          ),
                         ),
                       ),
-                filled: true,
-                fillColor: panel,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      FocusScope.of(context).unfocus();
+                      _onSearchChanged(_searchController.text);
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.greenAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: const Text(
+                      'Search',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : Text(
+                _pageTitle(),
+                style: const TextStyle(
+                  color: gold,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.2,
+                  fontFamily: 'sans-serif-rounded',
                 ),
               ),
-            ),
-          ),
-        ) : null,
+        actions: _tab == 0
+            ? const []
+            : [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Tooltip(
+                    message: _online
+                        ? 'Internet connected'
+                        : 'No internet connection',
+                    child: Icon(
+                      _online ? Icons.wifi_rounded : Icons.wifi_off_rounded,
+                      color: _online ? Colors.greenAccent : Colors.redAccent,
+                    ),
+                  ),
+                ),
+              ],
       ),
       body: !_connectionKnown
           ? const Center(
