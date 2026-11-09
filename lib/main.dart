@@ -2827,6 +2827,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   double _volume = 100;
   double _screenBrightness = 0.5;
 
+  double _videoZoom = 1.0;
+  String? _gestureMode;
+  String _gestureFeedback = '';
+  Offset? _gestureStartPoint;
+  Duration _gestureStartPosition = Duration.zero;
+  Duration? _gesturePreviewPosition;
+  double _gestureStartBrightness = 0.5;
+  double _gestureStartVolume = 100;
+  double _gestureStartZoom = 1.0;
+  Timer? _gestureFeedbackTimer;
+
   Timer? _hideTimer;
 
   Tracks _tracks = Tracks(
@@ -3227,6 +3238,133 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _player.play();
     }
 
+    _startHideTimer();
+  }
+
+  void _handlePlayerGestureStart(ScaleStartDetails details) {
+    _gestureFeedbackTimer?.cancel();
+    _gestureStartPoint = details.localFocalPoint;
+    _gestureStartPosition = _position;
+    _gestureStartBrightness = _screenBrightness;
+    _gestureStartVolume = _volume;
+    _gestureStartZoom = _videoZoom;
+    _gestureMode = null;
+    _gesturePreviewPosition = null;
+  }
+
+  void _handlePlayerGestureUpdate(ScaleUpdateDetails details) {
+    if (!_initialized || _isLocked || _errorMessage != null) return;
+
+    // Two-finger pinch controls video zoom without changing the stream.
+    if (details.pointerCount >= 2) {
+      if (_gestureMode != 'zoom') {
+        _cancelHideTimer();
+        setState(() {
+          _gestureMode = 'zoom';
+        });
+      }
+
+      final nextZoom =
+          (_gestureStartZoom * details.scale).clamp(1.0, 3.0).toDouble();
+      if ((nextZoom - _videoZoom).abs() > 0.005) {
+        setState(() {
+          _videoZoom = nextZoom;
+          _gestureFeedback = '${(nextZoom * 100).round()}%';
+        });
+      }
+      return;
+    }
+
+    // Once a pinch has started, lifting one finger must not turn it into a
+    // brightness, volume, or seek gesture.
+    if (_gestureMode == 'zoom') return;
+
+    final start = _gestureStartPoint;
+    if (start == null) return;
+
+    final delta = details.localFocalPoint - start;
+    if (_gestureMode == null) {
+      if (delta.distance < 10) return;
+
+      final mode = delta.dx.abs() >= delta.dy.abs()
+          ? 'seek'
+          : (start.dx < MediaQuery.of(context).size.width / 2
+              ? 'brightness'
+              : 'volume');
+
+      _cancelHideTimer();
+      setState(() {
+        _gestureMode = mode;
+      });
+    }
+
+    if (_gestureMode == 'seek') {
+      if (_duration.inMilliseconds <= 0) return;
+
+      // A full player-width drag represents up to two minutes of seeking.
+      final width = MediaQuery.of(context).size.width;
+      final secondsDelta = (delta.dx / width * 120).round();
+      final targetMilliseconds = (_gestureStartPosition.inMilliseconds +
+              (delta.dx / width * 120000).round())
+          .clamp(0, _duration.inMilliseconds)
+          .toInt();
+
+      setState(() {
+        _gesturePreviewPosition =
+            Duration(milliseconds: targetMilliseconds);
+        _gestureFeedback =
+            '${secondsDelta >= 0 ? '+' : ''}${secondsDelta}s';
+      });
+    } else if (_gestureMode == 'brightness') {
+      final height = MediaQuery.of(context).size.height;
+      final brightness = (_gestureStartBrightness - delta.dy / height)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      _changeApplicationBrightness(brightness);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _gestureFeedback = '${(brightness * 100).round()}%';
+        });
+      }
+    } else if (_gestureMode == 'volume') {
+      final height = MediaQuery.of(context).size.height;
+      final volume = (_gestureStartVolume - delta.dy / height * 100)
+          .clamp(0.0, 100.0)
+          .toDouble();
+      _changeVolume(volume);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _gestureFeedback = '${volume.round()}%';
+        });
+      }
+    }
+  }
+
+  Future<void> _handlePlayerGestureEnd(ScaleEndDetails details) async {
+    final mode = _gestureMode;
+    final previewPosition = _gesturePreviewPosition;
+
+    if (mode == 'seek' && previewPosition != null) {
+      await _player.seek(previewPosition);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _position = previewPosition;
+        });
+      }
+    }
+
+    _gestureStartPoint = null;
+    _gestureFeedbackTimer?.cancel();
+
+    if (!mounted || _isDisposed) return;
+    _gestureFeedbackTimer = Timer(const Duration(milliseconds: 850), () {
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _gestureMode = null;
+        _gestureFeedback = '';
+        _gesturePreviewPosition = null;
+      });
+    });
     _startHideTimer();
   }
 
@@ -3882,22 +4020,35 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
               ),
               Expanded(
-                child: Slider(
-                  value: current,
-                  min: 0,
-                  max: max > 0 ? max : 1,
-                  activeColor: gold,
-                  inactiveColor: Colors.white30,
-                  onChanged: max > 0
-                      ? (value) {
-                          setState(() {
-                            _position = Duration(
-                              milliseconds: value.round(),
-                            );
-                          });
-                        }
-                      : null,
-                  onChangeEnd: max > 0 ? _seekTo : null,
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 2.5,
+                    activeTrackColor: gold,
+                    inactiveTrackColor: Colors.white30,
+                    thumbColor: white,
+                    overlayColor: gold.withValues(alpha: 0.16),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 5.5,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 10,
+                    ),
+                  ),
+                  child: Slider(
+                    value: current,
+                    min: 0,
+                    max: max > 0 ? max : 1,
+                    onChanged: max > 0
+                        ? (value) {
+                            setState(() {
+                              _position = Duration(
+                                milliseconds: value.round(),
+                              );
+                            });
+                          }
+                        : null,
+                    onChangeEnd: max > 0 ? _seekTo : null,
+                  ),
                 ),
               ),
               Text(
@@ -4100,10 +4251,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       alignment: Alignment.center,
       children: [
         Positioned.fill(
-          child: Video(
-            controller: _videoController,
-            fit: BoxFit.contain,
-            controls: NoVideoControls,
+          child: ClipRect(
+            child: Transform.scale(
+              scale: _videoZoom,
+              child: Video(
+                controller: _videoController,
+                fit: BoxFit.contain,
+                controls: NoVideoControls,
+              ),
+            ),
           ),
         ),
         if (_isBuffering)
@@ -4140,6 +4296,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
+              onScaleStart: _handlePlayerGestureStart,
+              onScaleUpdate: _handlePlayerGestureUpdate,
+              onScaleEnd: _handlePlayerGestureEnd,
               onTap: _toggleControls,
               onDoubleTapDown: (details) {
                 final width = MediaQuery.of(context).size.width;
@@ -4201,6 +4360,58 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               ),
             ),
           ),
+        if (_gestureMode != null && _gestureFeedback.isNotEmpty && !_isLocked)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 13,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: gold.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _gestureMode == 'brightness'
+                            ? Icons.brightness_6
+                            : _gestureMode == 'volume'
+                                ? Icons.volume_up
+                                : _gestureMode == 'zoom'
+                                    ? Icons.zoom_in
+                                    : (_gestureFeedback.startsWith('-')
+                                        ? Icons.fast_rewind
+                                        : Icons.fast_forward),
+                        color: gold,
+                        size: 25,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        _gestureMode == 'seek' &&
+                                _gesturePreviewPosition != null
+                            ? '${_formatDuration(_gesturePreviewPosition!)}  ($_gestureFeedback)'
+                            : _gestureMode == 'brightness'
+                                ? 'Brightness  $_gestureFeedback'
+                                : _gestureMode == 'volume'
+                                    ? 'Volume  $_gestureFeedback'
+                                    : 'Zoom  $_gestureFeedback',
+                        style: const TextStyle(
+                          color: white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -4208,6 +4419,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   void dispose() {
     _isDisposed = true;
+    _gestureFeedbackTimer?.cancel();
     _playerConnectionTimer?.cancel();
     unawaited(_resetApplicationBrightness());
     _cancelHideTimer();
