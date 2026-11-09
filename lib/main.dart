@@ -3092,20 +3092,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ? const NoInternetScreen()
               : _currentPage(),
       extendBody: true,
-      bottomNavigationBar: _showRanking ? null : SafeArea(
-        top: false,
-        child: Container(
-          height: 54,
-          decoration: const BoxDecoration(
-            color: Color(0xF217181D),
-            border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
-          ),
-          child: Row(
-            children: [
-              _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-              _bottomNavItem(1, Icons.download_outlined, Icons.download, 'Downloads'),
-              _bottomNavItem(2, Icons.person_outline, Icons.person, 'Me'),
-            ],
+      bottomNavigationBar: _showRanking ? null : Container(
+        color: const Color(0xF217181D),
+        child: SafeArea(
+          top: false,
+          child: Container(
+            height: 44,
+            decoration: const BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
+            ),
+            child: Row(
+              children: [
+                _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
+                _bottomNavItem(1, Icons.download_outlined, Icons.download, 'Downloads'),
+                _bottomNavItem(2, Icons.person_outline, Icons.person, 'Me'),
+              ],
+            ),
           ),
         ),
       ),
