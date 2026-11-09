@@ -4175,6 +4175,7 @@ class MoviePlayerScreen extends StatefulWidget {
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   late final Player _player;
   late final VideoController _videoController;
+  late Future<Map<String, dynamic>> _movieDetailsFuture;
 
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
@@ -4274,6 +4275,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
+    _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
 
@@ -4281,6 +4283,147 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
     _prepareAndInitializePlayer();
+  }
+
+  Future<Map<String, dynamic>> _loadPlayerMovieDetails() async {
+    final id = widget.movie.tmdbId;
+    if (id <= 0) return {};
+    try {
+      return await TmdbService.details(
+        id,
+        mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+      );
+    } catch (e) {
+      debugPrint('Could not load player movie metadata: $e');
+      return {};
+    }
+  }
+
+  String _formatPlayerReleaseDate(String value) {
+    final date = DateTime.tryParse(value.trim());
+    if (date == null) return value;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+
+  Widget _playerMetadataItem(IconData icon, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: goldLight, size: 14),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white87,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _playerMetadata() {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _movieDetailsFuture,
+      builder: (context, snapshot) {
+        final details = snapshot.data ?? const <String, dynamic>{};
+
+        final rawDate = (details['release_date'] ??
+                details['first_air_date'] ??
+                widget.movie.releaseDate)
+            .toString()
+            .trim();
+        final releaseDate = rawDate.isNotEmpty
+            ? _formatPlayerReleaseDate(rawDate)
+            : (widget.movie.year.isNotEmpty && widget.movie.year != 'N/A'
+                ? widget.movie.year
+                : '');
+
+        final rawRating = details['vote_average'];
+        final rating = widget.movie.rating > 0
+            ? widget.movie.rating
+            : (rawRating is num ? rawRating.toDouble() : 0.0);
+
+        final countries = <String>[];
+        final rawCountries = details['production_countries'];
+        if (rawCountries is List) {
+          for (final item in rawCountries.whereType<Map>()) {
+            final country =
+                (item['name'] ?? item['iso_3166_1'] ?? '').toString().trim();
+            if (country.isNotEmpty && !countries.contains(country)) {
+              countries.add(country);
+            }
+          }
+        }
+        if (countries.isEmpty && details['origin_country'] is List) {
+          countries.addAll(
+            (details['origin_country'] as List)
+                .map((item) => item.toString().trim())
+                .where((item) => item.isNotEmpty),
+          );
+        }
+        if (countries.isEmpty && widget.movie.originCountry.isNotEmpty) {
+          countries.add(widget.movie.originCountry);
+        }
+
+        final genres = <String>[];
+        final rawGenres = details['genres'];
+        if (rawGenres is List) {
+          for (final item in rawGenres.whereType<Map>()) {
+            final genre = (item['name'] ?? '').toString().trim();
+            if (genre.isNotEmpty && !genres.contains(genre)) {
+              genres.add(genre);
+            }
+          }
+        }
+        if (genres.isEmpty) genres.addAll(widget.movie.genres);
+
+        final items = <Widget>[];
+        if (rating > 0) {
+          items.add(_playerMetadataItem(
+            Icons.star_rounded,
+            'TMDB ${rating.toStringAsFixed(1)}/10',
+          ));
+        }
+        if (releaseDate.isNotEmpty) {
+          items.add(_playerMetadataItem(
+            Icons.calendar_today_rounded,
+            releaseDate,
+          ));
+        }
+        if (countries.isNotEmpty) {
+          items.add(_playerMetadataItem(
+            Icons.public_rounded,
+            countries.take(2).join(', '),
+          ));
+        }
+        items.add(_playerMetadataItem(
+          Icons.movie_filter_outlined,
+          widget.movie.mediaType == 'tv' ? 'TV Series' : 'Movie',
+        ));
+        if (genres.isNotEmpty) {
+          items.add(_playerMetadataItem(
+            Icons.local_offer_outlined,
+            genres.take(3).join(' • '),
+          ));
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(top: 3, bottom: 10),
+          child: Wrap(
+            spacing: 13,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: items,
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _prepareAndInitializePlayer() async {
@@ -6070,10 +6213,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       widget.movie.tmdbId,
       mediaType: mediaType,
     );
-    final detailsFuture = TmdbService.details(
-      widget.movie.tmdbId,
-      mediaType: mediaType,
-    );
+    final detailsFuture = _movieDetailsFuture;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -6500,36 +6640,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                   ],
                 ),
-                if (widget.movie.year.isNotEmpty || widget.movie.rating > 0) ...[
-                  const SizedBox(height: 1),
-                  Row(
-                    children: [
-                      if (widget.movie.year.isNotEmpty)
-                        Text(
-                          widget.movie.year,
-                          style: const TextStyle(
-                            color: Colors.white87,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      if (widget.movie.year.isNotEmpty && widget.movie.rating > 0)
-                        const SizedBox(width: 12),
-                      if (widget.movie.rating > 0) ...[
-                        const Icon(Icons.star_rounded, color: goldLight, size: 15),
-                        const SizedBox(width: 3),
-                        Text(
-                          widget.movie.rating.toStringAsFixed(1),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
+                _playerMetadata(),
                 const SizedBox(height: 13),
                 Wrap(
                   spacing: 8,
