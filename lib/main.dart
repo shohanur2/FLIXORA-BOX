@@ -1892,7 +1892,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox(height: 8);
 
     return SizedBox(
-      height: 184,
+      height: 198,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1902,8 +1902,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return GestureDetector(
             onTap: () => _openMovie(movie),
             child: Container(
-              width: 90,
-              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: 104,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
