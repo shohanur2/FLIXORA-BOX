@@ -4438,6 +4438,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   List<ProviderEmbedSource> _providerSources = [];
   ProviderEmbedSource? _selectedProviderSource;
   int _providerAttemptIndex = -1;
+  final Set<String> _failedProviderIds = <String>{};
 
   String? _errorMessage;
 
@@ -4551,48 +4552,92 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<void> _selectProviderSource(ProviderEmbedSource source) async {
     if (!source.isAvailable || !_playerIsOnline || _isDisposed) return;
     _cancelHideTimer();
+
+    // Release the native decoder before mounting an embedded provider. The
+    // last position is already persisted by the position listener.
     try {
       await _player.pause();
+      await _player.stop();
     } catch (_) {}
+
     if (!mounted || _isDisposed) return;
+    _failedProviderIds.clear();
     setState(() {
       _selectedProviderSource = source;
-      _providerAttemptIndex = _providerSources.indexWhere((item) => item.id == source.id);
+      _providerAttemptIndex =
+          _providerSources.indexWhere((item) => item.id == source.id);
       _errorMessage = null;
+      _showControls = false;
+      _initialized = false;
+    });
+  }
+
+  void _selectDefaultProviderIfNeeded() {
+    if (!mounted ||
+        _isDisposed ||
+        widget.localFilePath != null ||
+        _validVideoUrl ||
+        _selectedProviderSource != null) {
+      return;
+    }
+
+    // Match the reference project's Play4U-first policy. If this movie has no
+    // IMDb ID, select the first usable TMDB-based provider instead.
+    final preferred = _providerSources.where(
+      (source) => source.id == 'play4u' && source.isAvailable,
+    );
+    final fallback = preferred.isNotEmpty
+        ? preferred.first
+        : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
+              (source) => source?.isAvailable == true,
+              orElse: () => null,
+            );
+
+    if (fallback == null) return;
+    setState(() {
+      _selectedProviderSource = fallback;
+      _providerAttemptIndex =
+          _providerSources.indexWhere((item) => item.id == fallback.id);
       _showControls = false;
     });
   }
 
   void _tryNextProvider(ProviderEmbedSource failedSource) {
-    if (!mounted || _isDisposed) return;
-    final failedIndex = _providerSources.indexWhere((item) => item.id == failedSource.id);
-    final startIndex = failedIndex >= 0 ? failedIndex : _providerAttemptIndex;
-    ProviderEmbedSource? nextSource;
-
-    for (var index = startIndex + 1; index < _providerSources.length; index++) {
-      final candidate = _providerSources[index];
-      if (candidate.isAvailable) {
-        nextSource = candidate;
-        _providerAttemptIndex = index;
-        break;
-      }
+    if (!mounted ||
+        _isDisposed ||
+        _selectedProviderSource?.id != failedSource.id) {
+      return; // Ignore stale callbacks from a provider that is no longer active.
     }
 
-    final selectedNextSource = nextSource;
+    _failedProviderIds.add(failedSource.id);
+    final selectedNextSource = ProviderCatalog.nextAvailableAfter(
+      _providerSources,
+      failedSource.id,
+      excludedIds: _failedProviderIds,
+    );
+
     if (selectedNextSource == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No more available provider streams. Choose another stream below.')),
+        const SnackBar(
+          content: Text(
+            'No more available provider streams. Choose another stream below.',
+          ),
+        ),
       );
       return;
     }
 
+    _providerAttemptIndex =
+        _providerSources.indexWhere((item) => item.id == selectedNextSource.id);
     setState(() {
       _selectedProviderSource = selectedNextSource;
       _errorMessage = null;
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${failedSource.name} failed to load. Trying ${selectedNextSource.name}...'),
+        content: Text(
+          '${failedSource.name} failed to load. Trying ${selectedNextSource.name}...',
+        ),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -4810,7 +4855,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     // even when the legacy movies.video_url field is empty.
     await _loadVideoQualities();
     if (!mounted || _isDisposed) return;
+
+    // Admin-managed MP4/HLS always gets the first chance to play.
     await _initializePlayer();
+    if (!mounted || _isDisposed || _validVideoUrl ||
+        widget.localFilePath != null) {
+      return;
+    }
+
+    // Resolve the real IMDb ID before choosing the default provider. This
+    // avoids opening Play4U with a guessed or incomplete identifier.
+    await _movieDetailsFuture;
+    if (!mounted || _isDisposed) return;
+    _selectDefaultProviderIfNeeded();
   }
 
   Future<void> _loadVideoQualities() async {
