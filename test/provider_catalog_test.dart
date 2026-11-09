@@ -76,6 +76,37 @@ void main() {
     });
   });
 
+  group('ProviderCatalog fallback', () {
+    test('tries the next available provider and skips already failed providers', () {
+      final sources = ProviderCatalog.forMovie(
+        tmdbId: 157336,
+        imdbId: 'tt0816692',
+      );
+      final next = ProviderCatalog.nextAvailableAfter(
+        sources,
+        'play4u',
+        excludedIds: const <String>{'yapgrid'},
+      );
+
+      expect(next?.id, 'pvrplay');
+    });
+
+    test('does not wrap around or retry a failed provider automatically', () {
+      final sources = ProviderCatalog.forMovie(
+        tmdbId: 157336,
+        imdbId: 'tt0816692',
+      );
+      expect(
+        ProviderCatalog.nextAvailableAfter(
+          sources,
+          'nexstream',
+          excludedIds: const <String>{},
+        ),
+        isNull,
+      );
+    });
+  });
+
   group('ProviderCatalog.allowsNavigation', () {
     final source = ProviderCatalog.forMovie(
       tmdbId: 157336,
