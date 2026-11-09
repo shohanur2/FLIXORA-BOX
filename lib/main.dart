@@ -4546,7 +4546,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         Text(
           label,
           style: const TextStyle(
-            color: playerWhite.withValues(alpha: 0.7),
+            color: Color(0xB3FFFFFF),
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
@@ -5257,7 +5257,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             style: const TextStyle(color: playerWhite),
             decoration: const InputDecoration(
               hintText: 'Enter subtitle URL',
-              hintStyle: TextStyle(color: playerWhite.withValues(alpha: 0.38)),
+              hintStyle: TextStyle(color: Color(0x61FFFFFF)),
             ),
           ),
           actions: [
@@ -5350,7 +5350,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 if (audioTracks.isEmpty)
                   const Text(
                     'No audio tracks available.',
-                    style: TextStyle(color: playerWhite.withValues(alpha: 0.54)),
+                    style: TextStyle(color: Color(0x8AFFFFFF)),
                   ),
                 ...audioTracks.map((track) {
                   return ListTile(
@@ -5497,7 +5497,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               const SizedBox(height: 6),
               const Text(
                 'Changes the encoded resolution of this same movie.',
-                style: TextStyle(color: playerWhite.withValues(alpha: 0.6), fontSize: 12),
+                style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
               ),
               const SizedBox(height: 14),
               Wrap(
@@ -5607,7 +5607,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       data: SliderTheme.of(sheetContext).copyWith(
                         trackHeight: 4,
                         activeTrackColor: playerGold,
-                        inactiveTrackColor: playerWhite.withValues(alpha: 0.24),
+                        inactiveTrackColor: Color(0x3DFFFFFF),
                         thumbColor: playerWhite,
                         overlayColor: playerGold.withValues(alpha: 0.18),
                         showValueIndicator: ShowValueIndicator.never,
@@ -5636,8 +5636,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     const Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Dim', style: TextStyle(color: playerWhite.withValues(alpha: 0.54), fontSize: 11)),
-                        Text('Bright', style: TextStyle(color: playerWhite.withValues(alpha: 0.54), fontSize: 11)),
+                        Text('Dim', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
+                        Text('Bright', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -5685,7 +5685,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       ),
                       trailing: const Icon(
                         Icons.chevron_right,
-                        color: playerWhite.withValues(alpha: 0.54),
+                        color: Color(0x8AFFFFFF),
                       ),
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -5704,7 +5704,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       ),
                       trailing: const Icon(
                         Icons.chevron_right,
-                        color: playerWhite.withValues(alpha: 0.54),
+                        color: Color(0x8AFFFFFF),
                       ),
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -5789,7 +5789,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 2.5,
                     activeTrackColor: playerGold,
-                    inactiveTrackColor: playerWhite.withValues(alpha: 0.3),
+                    inactiveTrackColor: Color(0x4DFFFFFF),
                     thumbColor: playerWhite,
                     overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
@@ -5845,7 +5845,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
                     activeTrackColor: playerGold,
-                    inactiveTrackColor: playerWhite.withValues(alpha: 0.24),
+                    inactiveTrackColor: Color(0x3DFFFFFF),
                     thumbColor: playerWhite,
                     overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
@@ -5929,7 +5929,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               style: OutlinedButton.styleFrom(
                 foregroundColor: playerWhite,
                 side: BorderSide(
-                  color: _availableQualities.isNotEmpty ? playerGold : playerWhite.withValues(alpha: 0.3),
+                  color: _availableQualities.isNotEmpty ? playerGold : Color(0x4DFFFFFF),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
                 minimumSize: Size.zero,
@@ -6133,7 +6133,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               decoration: BoxDecoration(
                 color: Colors.black54,
                 shape: BoxShape.circle,
-                border: Border.all(color: playerWhite.withValues(alpha: 0.24)),
+                border: Border.all(color: Color(0x3DFFFFFF)),
               ),
               child: IconButton(
                 tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
@@ -6391,7 +6391,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         title: Text('Resources',
             style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
         subtitle: Text('No alternate audio languages are available.',
-            style: TextStyle(color: playerWhite.withValues(alpha: 0.6))),
+            style: TextStyle(color: Color(0x99FFFFFF))),
       );
     }
     final selectedIndex = _selectedAudioTrackIndex
@@ -6408,7 +6408,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     color: playerWhite, fontSize: 18, fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
                 Text('Select audio language', style: TextStyle(
-                    color: playerWhite.withValues(alpha: 0.6), fontSize: 12)),
+                    color: Color(0x99FFFFFF), fontSize: 12)),
               ],
             ),
           ),          DropdownButton<int>(
@@ -6552,7 +6552,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   child: Text(
                                     info.join('  •  '),
                                     style: const TextStyle(
-                                      color: playerWhite.withValues(alpha: 0.7),
+                                      color: Color(0xB3FFFFFF),
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -6578,7 +6578,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   const Text(
                                     'TMDB Rating',
                                     style: TextStyle(
-                                      color: playerWhite.withValues(alpha: 0.7),
+                                      color: Color(0xB3FFFFFF),
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -6591,7 +6591,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Country: ${widget.movie.originCountry}',
                                 style: const TextStyle(
-                                  color: playerWhite.withValues(alpha: 0.7),
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6602,7 +6602,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Original language: ${widget.movie.originalLanguage.toUpperCase()}',
                                 style: const TextStyle(
-                                  color: playerWhite.withValues(alpha: 0.7),
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6613,7 +6613,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 '${widget.movie.runtime!.round()} min',
                                 style: const TextStyle(
-                                  color: playerWhite.withValues(alpha: 0.7),
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6662,7 +6662,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? 'No description available.'
                         : widget.movie.overview,
                     style: const TextStyle(
-                      color: playerWhite.withValues(alpha: 0.7),
+                      color: Color(0xB3FFFFFF),
                       fontSize: 13,
                       height: 1.5,
                     ),
@@ -6704,7 +6704,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         return const Text(
                           'Cast photos are not available for this title.',
                           style: TextStyle(
-                            color: playerWhite.withValues(alpha: 0.7),
+                            color: Color(0xB3FFFFFF),
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -6766,7 +6766,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                       overflow: TextOverflow.ellipsis,
                                       textAlign: TextAlign.center,
                                       style: const TextStyle(
-                                        color: playerWhite.withValues(alpha: 0.7),
+                                        color: Color(0xB3FFFFFF),
                                         fontSize: 10,
                                       ),
                                     ),
