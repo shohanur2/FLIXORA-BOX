@@ -2857,13 +2857,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 label: Text(category),
                 selected: selected,
                 onSelected: (_) => setState(() => _ottCategory = category),
-                selectedColor: gold.withValues(alpha: 0.18),
-                backgroundColor: Colors.white,
+                selectedColor: gold,
+                backgroundColor: panel,
                 side: BorderSide(
-                  color: selected ? gold : ink12,
+                  color: selected ? gold : ink24,
                 ),
                 labelStyle: TextStyle(
-                  color: selected ? gold : ink60,
+                  color: selected ? white : ink70,
                   fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                 ),
               );
@@ -2928,11 +2928,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 label: Text(section),
                 selected: selected,
                 onSelected: (_) => setState(() => _librarySection = section),
-                selectedColor: gold.withValues(alpha: 0.18),
-                backgroundColor: Colors.white,
-                side: BorderSide(color: selected ? gold : ink12),
+                selectedColor: gold,
+                backgroundColor: panel,
+                side: BorderSide(color: selected ? gold : ink24),
                 labelStyle: TextStyle(
-                  color: selected ? gold : ink60,
+                  color: selected ? white : ink70,
                   fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
                 ),
               );
@@ -3625,9 +3625,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Container(
                       height: 46,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF2F0EA),
+                        color: Colors.transparent,
                         borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: ink12),
+                        border: Border.all(color: white.withValues(alpha: 0.24)),
                       ),
                       child: TextField(
                         controller: _searchController,
