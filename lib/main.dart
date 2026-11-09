@@ -3548,7 +3548,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
       appBar: AppBar(
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
-        systemOverlayStyle: const SystemUiOverlayStyle(
+        systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: _tab == 0 ? Brightness.light : Brightness.dark,
           statusBarBrightness: _tab == 0 ? Brightness.dark : Brightness.light,
