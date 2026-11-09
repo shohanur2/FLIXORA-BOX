@@ -1913,7 +1913,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             left: 0,
             right: 0,
             bottom: 28,
-            child: _featuredQuickCards(_withoutFlixoraDuplicates(trending).take(5).toList()),
+            child: _featuredQuickCards([
+              ..._withoutFlixoraDuplicates(trending).take(5).toList().skip(_slide),
+              ..._withoutFlixoraDuplicates(trending).take(5).toList().take(_slide),
+            ]),
           ),
           Positioned(
             bottom: 8,
@@ -2942,7 +2945,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           : (_tab == 0 && !_online && _allMovies().isEmpty)
               ? const NoInternetScreen()
               : _currentPage(),
+      extendBody: true,
       bottomNavigationBar: NavigationBar(
+        backgroundColor: const Color(0xCC17181D),
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.transparent,
+        indicatorColor: const Color(0x3322DCA0),
         selectedIndex: _tab,
         onDestinationSelected: (index) {
           FocusScope.of(context).unfocus();
