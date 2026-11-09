@@ -7,6 +7,9 @@ on:
     branches:
       - main
       - design/white-gold-cinematic
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
