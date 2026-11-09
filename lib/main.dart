@@ -810,6 +810,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final PageController _sliderController = PageController();
+  final ScrollController _featuredCardsController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
 
   Timer? _timer;
@@ -1189,6 +1190,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _searchTimer?.cancel();
     _connectivitySubscription?.cancel();
     _sliderController.dispose();
+    _featuredCardsController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -1972,7 +1974,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             controller: _sliderController,
             itemCount: slides.length,
             onPageChanged: (index) {
-              setState(() => _slide = index);
+              if (_slide != index && mounted) {
+                setState(() => _slide = index);
+              }
+              if (_featuredCardsController.hasClients) {
+                final cardExtent = 248.0;
+                final viewport = _featuredCardsController.position.viewportDimension;
+                final target = (index * cardExtent - (viewport - cardExtent) / 2)
+                    .clamp(0.0, _featuredCardsController.position.maxScrollExtent);
+                _featuredCardsController.animateTo(
+                  target,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                );
+              }
             },
             itemBuilder: (context, index) {
               final movie = slides[index];
@@ -2039,7 +2054,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return SizedBox(
       height: 78,
-      child: ListView.builder(
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification is ScrollUpdateNotification &&
+              notification.metrics.axis == Axis.horizontal &&
+              _sliderController.hasClients) {
+            const cardExtent = 248.0;
+            final viewport = notification.metrics.viewportDimension;
+            final selected = ((notification.metrics.pixels + viewport / 2 - 12) / cardExtent)
+                .round()
+                .clamp(0, movies.length - 1);
+            if (selected != _slide) {
+              _sliderController.jumpToPage(selected);
+            }
+          }
+          return false;
+        },
+        child: ListView.builder(
+        controller: _featuredCardsController,
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         itemCount: movies.length,
@@ -2048,13 +2080,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final typeLabel = movie.mediaType == 'tv' ? 'TV Series' : (movie.genres.any((g) => g.toLowerCase().contains('animation')) || movie.originalLanguage.toLowerCase() == 'ja' ? 'Anime' : 'Movie');
 
           return GestureDetector(
-            onTap: () {
-              final slideIndex = movies.indexWhere((item) => item.id == movie.id);
-              if (slideIndex >= 0 && _sliderController.hasClients) {
-                _sliderController.animateToPage(slideIndex, duration: const Duration(milliseconds: 320), curve: Curves.easeOutCubic);
-              }
-              setState(() => _slide = slideIndex < 0 ? _slide : slideIndex);
-            },
+            onTap: () => _openMovie(movie),
             child: Container(
               width: 238,
               margin: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
@@ -2133,6 +2159,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           );
         },
+      ),
       ),
     );
   }
