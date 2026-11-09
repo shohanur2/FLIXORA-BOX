@@ -1910,7 +1910,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: _homeCategoryStrip(),
           ),
           Positioned(
-            bottom: 12,
+            left: 0,
+            right: 0,
+            bottom: 28,
+            child: _featuredQuickCards(_withoutFlixoraDuplicates(trending).take(5).toList()),
+          ),
+          Positioned(
+            bottom: 8,
             right: 18,
             child: Row(
               children: List.generate(
@@ -2128,7 +2134,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: ListView(
         children: [
           _featuredSlider(),
-          _featuredQuickCards(_withoutFlixoraDuplicates(trending).take(5).toList()),
           if (flixoraMovies.isNotEmpty) ...[
             _sectionTitle('Flixora Originals'),
             _movieRow(flixoraMovies),
