@@ -820,6 +820,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _slide = 0;
   int _tab = 0;
+  bool _showRanking = false;
+  String _rankingCategory = 'Cinema';
 
   String _search = '';
   bool _searchLoading = false;
@@ -1915,7 +1917,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
           ),
           Positioned(
-            top: 72,
+            top: 48,
             left: 0,
             right: 0,
             child: _homeCategoryStrip(),
@@ -2084,34 +2086,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       'Korean Drama', 'Bengali', 'Flixora Originals',
     ];
 
-    return SizedBox(
-      height: 48,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        scrollDirection: Axis.horizontal,
-        itemCount: categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 20),
-        itemBuilder: (context, index) {
-          final category = categories[index];
-          final selected = _homeCategory == category;
-
-          return GestureDetector(
-            onTap: () => setState(() => _homeCategory = category),
-            child: Center(
-              child: Text(
-                category,
-                style: TextStyle(
-                  color: selected ? white : Colors.white60,
-                  fontSize: 15,
-                  fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
-                  fontFamily: 'sans-serif-condensed',
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
+    return SizedBox(height: 40, child: Row(children: [Expanded(child: ListView.separated(padding: const EdgeInsets.only(left: 16, right: 8), scrollDirection: Axis.horizontal, itemCount: categories.length, separatorBuilder: (_, __) => const SizedBox(width: 20), itemBuilder: (context, index) { final category = categories[index]; final selected = _homeCategory == category; return GestureDetector(onTap: () => setState(() => _homeCategory = category), child: Center(child: Text(category, style: TextStyle(color: selected ? white : Colors.white60, fontSize: 15, fontWeight: selected ? FontWeight.w900 : FontWeight.w600, fontFamily: 'sans-serif-condensed')))); })), TextButton(onPressed: () => setState(() { _showRanking = true; _rankingCategory = 'Cinema'; }), style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 10), minimumSize: const Size(42, 32), tapTargetSize: MaterialTapTargetSize.shrinkWrap), child: const Text('All', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)))]));
   }
 
   Widget _homeContent() {
@@ -2129,10 +2104,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     color: white, fontSize: 20, fontWeight: FontWeight.bold,
                   ),
                 )),
-                TextButton(
-                  onPressed: () => setState(() => _homeCategory = 'Trending'),
-                  child: const Text('Show all'),
-                ),
+                TextButton(onPressed: () => setState(() => _homeCategory = 'Trending'), style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(0, 30), tapTargetSize: MaterialTapTargetSize.shrinkWrap, visualDensity: VisualDensity.compact), child: const Text('Show all', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700))),
               ],
             ),
           ),
@@ -2771,7 +2743,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         : 'Study Mode disabled.');
   }
 
+  List<Movie> _rankingMovies() {
+    switch (_rankingCategory) {
+      case 'TOP Movies': return _deduplicateMovies([...topRated, ...popular, ...trending].where((m) => m.mediaType == 'movie').toList());
+      case 'New Bengali': return _deduplicateMovies(bengaliMovies);
+      case 'Bollywood': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && ['hi', 'ur'].contains(m.originalLanguage.toLowerCase())).toList());
+      case 'Hollywood': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && m.originalLanguage.toLowerCase() == 'en').toList());
+      case 'South Indian': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && ['ta', 'te', 'ml', 'kn'].contains(m.originalLanguage.toLowerCase())).toList());
+      case 'New Release': return _deduplicateMovies(_withoutFlixoraDuplicates(latest));
+      default: return _deduplicateMovies([...flixoraMovies, ...trending, ...popular, ...latest, ...topRated].where((m) => m.mediaType == 'movie').toList());
+    }
+  }
+
+  Widget _rankingContent() {
+    const categories = ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
+    final movies = _rankingMovies();
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF24252B), child: ListView.builder(
+        padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
+        itemBuilder: (context, index) {
+          final category = categories[index]; final selected = category == _rankingCategory;
+          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? const Color(0xFF22DCA0) : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
+        },
+      ))),
+      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: Colors.white54))) : ListView.builder(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), itemCount: movies.length,
+        itemBuilder: (context, index) {
+          final movie = movies[index];
+          return Padding(padding: const EdgeInsets.only(bottom: 18), child: SizedBox(height: 112, child: Row(children: [
+            ClipRRect(borderRadius: BorderRadius.circular(7), child: SizedBox(width: 76, height: 108, child: Stack(fit: StackFit.expand, children: [
+              movie.posterUrl.isEmpty ? Container(color: panel, child: const Icon(Icons.movie, color: gold)) : CachedNetworkImage(imageUrl: movie.posterUrl, fit: BoxFit.cover, errorWidget: (_, __, ___) => Container(color: panel, child: const Icon(Icons.movie, color: gold))),
+              Positioned(left: 0, top: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4), decoration: BoxDecoration(color: index == 0 ? const Color(0xFFE83E9B) : const Color(0xFF2787E8), borderRadius: const BorderRadius.only(bottomRight: Radius.circular(7))), child: Text((index + 1).toString().padLeft(2, '0'), style: const TextStyle(color: white, fontWeight: FontWeight.w900, fontSize: 12)))),
+            ]))),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(movie.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 14, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Row(children: [const Icon(Icons.star, color: gold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: gold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 11)))]),
+            ])),
+            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: Color(0xFF22DCA0), size: 34), tooltip: 'Play'),
+          ])));
+        },
+      )),
+    ]);
+  }
+
   Widget _currentPage() {
+    if (_showRanking) return _rankingContent();
     if (_search.isNotEmpty) return _searchContent();
 
     switch (_tab) {
@@ -2836,19 +2854,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: _tab == 0 && _search.isEmpty,
+      extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
       appBar: AppBar(
-        backgroundColor: _tab == 0 && _search.isEmpty ? Colors.transparent : bg,
+        backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
         elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
-        toolbarHeight: _tab == 0 ? 68 : kToolbarHeight,
-        titleSpacing: _tab == 0 ? 8 : 16,
-        leading: _tab == 2 && _profileSection != null
-            ? IconButton(
-                onPressed: () => setState(() => _profileSection = null),
-                icon: const Icon(Icons.arrow_back),
-              )
-            : null,
-        title: _tab == 0
+        toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
+        titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
+        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 2 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
+        title: _showRanking ? const Text('Ranking', style: TextStyle(color: white, fontWeight: FontWeight.w700)) : _tab == 0
             ? Row(
                 children: [
                   Image.asset(
@@ -2932,7 +2945,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   fontFamily: 'sans-serif-rounded',
                 ),
               ),
-        actions: _tab == 0
+        actions: _tab == 0 || _showRanking
             ? const []
             : [
                 Padding(
@@ -2957,7 +2970,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ? const NoInternetScreen()
               : _currentPage(),
       extendBody: true,
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: _showRanking ? null : NavigationBar(
+        height: 68,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         backgroundColor: const Color(0xCC17181D),
         elevation: 0,
         surfaceTintColor: Colors.transparent,
@@ -2968,6 +2983,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           FocusScope.of(context).unfocus();
           setState(() {
             _search = '';
+            _showRanking = false;
             _searchController.clear();
             _searchLoading = false;
             _profileSection = null;
