@@ -143,14 +143,18 @@ class ProviderCatalog {
   /// deterministic and never loops back to a provider that already failed.
   static ProviderEmbedSource? nextAvailableAfter(
     Iterable<ProviderEmbedSource> sources,
-    String failedSourceId,
-  ) {
+    String failedSourceId, {
+    Set<String> excludedIds = const <String>{},
+  }) {
     final items = sources.toList(growable: false);
     final failedIndex = items.indexWhere((item) => item.id == failedSourceId);
     if (failedIndex < 0) return null;
 
     for (var index = failedIndex + 1; index < items.length; index++) {
-      if (items[index].isAvailable) return items[index];
+      final candidate = items[index];
+      if (candidate.isAvailable && !excludedIds.contains(candidate.id)) {
+        return candidate;
+      }
     }
     return null;
   }
