@@ -4437,6 +4437,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   int _selectedAudioTrackIndex = 0;
   List<ProviderEmbedSource> _providerSources = [];
   ProviderEmbedSource? _selectedProviderSource;
+  int _providerAttemptIndex = -1;
 
   String? _errorMessage;
 
@@ -4556,9 +4557,44 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!mounted || _isDisposed) return;
     setState(() {
       _selectedProviderSource = source;
+      _providerAttemptIndex = _providerSources.indexWhere((item) => item.id == source.id);
       _errorMessage = null;
       _showControls = false;
     });
+  }
+
+  void _tryNextProvider(ProviderEmbedSource failedSource) {
+    if (!mounted || _isDisposed) return;
+    final failedIndex = _providerSources.indexWhere((item) => item.id == failedSource.id);
+    final startIndex = failedIndex >= 0 ? failedIndex : _providerAttemptIndex;
+    ProviderEmbedSource? nextSource;
+
+    for (var index = startIndex + 1; index < _providerSources.length; index++) {
+      final candidate = _providerSources[index];
+      if (candidate.isAvailable) {
+        nextSource = candidate;
+        _providerAttemptIndex = index;
+        break;
+      }
+    }
+
+    if (nextSource == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No more available provider streams. Choose another stream below.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _selectedProviderSource = nextSource;
+      _errorMessage = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${failedSource.name} failed to load. Trying ${nextSource.name}...'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _closeProviderSource() async {
@@ -6131,6 +6167,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
         source: providerSource,
         onClose: _closeProviderSource,
+        onFailure: () => _tryNextProvider(providerSource),
       );
     }
 
