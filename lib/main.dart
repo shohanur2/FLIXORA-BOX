@@ -3544,152 +3544,163 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           2.0,
         ];
 
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 25),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Playback Settings',
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 25),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.brightness_6_outlined, color: gold, size: 20),
-                    const SizedBox(width: 9),
-                    const Expanded(
-                      child: Text(
-                        'Screen Brightness',
-                        style: TextStyle(color: white, fontWeight: FontWeight.w600),
+                    const Text(
+                      'Playback Settings',
+                      style: TextStyle(
+                        color: white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: bg,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: gold.withValues(alpha: 0.45)),
-                      ),
-                      child: Text(
-                        '${(_screenBrightness * 100).round()}%',
-                        style: const TextStyle(
-                          color: goldLight,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        const Icon(Icons.brightness_6_outlined, color: gold, size: 20),
+                        const SizedBox(width: 9),
+                        const Expanded(
+                          child: Text(
+                            'Screen Brightness',
+                            style: TextStyle(color: white, fontWeight: FontWeight.w600),
+                          ),
                         ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: bg,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: gold.withValues(alpha: 0.45)),
+                          ),
+                          child: Text(
+                            '${(_screenBrightness * 100).round()}%',
+                            style: const TextStyle(
+                              color: goldLight,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    SliderTheme(
+                      data: SliderTheme.of(sheetContext).copyWith(
+                        trackHeight: 4,
+                        activeTrackColor: gold,
+                        inactiveTrackColor: Colors.white24,
+                        thumbColor: Colors.white,
+                        overlayColor: gold.withValues(alpha: 0.18),
+                        showValueIndicator: ShowValueIndicator.never,
+                        trackShape: const RoundedRectSliderTrackShape(),
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
                       ),
+                      child: Slider(
+                        value: _screenBrightness.clamp(0.0, 1.0),
+                        min: 0.0,
+                        max: 1.0,
+                        onChanged: (value) {
+                          // Update the modal sheet immediately while dragging.
+                          setSheetState(() {
+                            _screenBrightness =
+                                value.clamp(0.0, 1.0).toDouble();
+                          });
+                          _changeApplicationBrightness(value);
+                        },
+                      ),
+                    ),
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Dim', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        Text('Bright', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Playback Speed',
+                      style: TextStyle(
+                        color: gold,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: speeds.map((speed) {
+                        final selected = _speed == speed;
+
+                        return ChoiceChip(
+                          label: Text('${speed}x'),
+                          selected: selected,
+                          selectedColor: gold,
+                          backgroundColor: bg,
+                          labelStyle: TextStyle(
+                            color: selected ? Colors.black : white,
+                          ),
+                          onSelected: (_) async {
+                            await _changeSpeed(speed);
+
+                            if (sheetContext.mounted) {
+                              Navigator.pop(sheetContext);
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.audiotrack,
+                        color: gold,
+                      ),
+                      title: const Text(
+                        'Audio Track',
+                        style: TextStyle(color: white),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white54,
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showAudioTracks();
+                      },
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.subtitles,
+                        color: gold,
+                      ),
+                      title: const Text(
+                        'Subtitles',
+                        style: TextStyle(color: white),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Colors.white54,
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showSubtitleTracks();
+                      },
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 4,
-                    activeTrackColor: gold,
-                    inactiveTrackColor: Colors.white24,
-                    thumbColor: Colors.white,
-                    overlayColor: gold.withValues(alpha: 0.18),
-                    showValueIndicator: ShowValueIndicator.never,
-                    trackShape: const RoundedRectSliderTrackShape(),
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
-                  ),
-                  child: Slider(
-                    value: _screenBrightness.clamp(0.0, 1.0),
-                    min: 0.0,
-                    max: 1.0,
-                    onChanged: _changeApplicationBrightness,
-                  ),
-                ),
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Dim', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                    Text('Bright', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                const Text(
-                  'Playback Speed',
-                  style: TextStyle(
-                    color: gold,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: speeds.map((speed) {
-                    final selected = _speed == speed;
-
-                    return ChoiceChip(
-                      label: Text('${speed}x'),
-                      selected: selected,
-                      selectedColor: gold,
-                      backgroundColor: bg,
-                      labelStyle: TextStyle(
-                        color: selected ? Colors.black : white,
-                      ),
-                      onSelected: (_) async {
-                        await _changeSpeed(speed);
-
-                        if (context.mounted) {
-                          Navigator.pop(context);
-                        }
-                      },
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 20),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
-                    Icons.audiotrack,
-                    color: gold,
-                  ),
-                  title: const Text(
-                    'Audio Track',
-                    style: TextStyle(color: white),
-                  ),
-                  trailing: const Icon(
-                    Icons.chevron_right,
-                    color: Colors.white54,
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showAudioTracks();
-                  },
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(
-                    Icons.subtitles,
-                    color: gold,
-                  ),
-                  title: const Text(
-                    'Subtitles',
-                    style: TextStyle(color: white),
-                  ),
-                  trailing: const Icon(
-                    Icons.chevron_right,
-                    color: Colors.white54,
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showSubtitleTracks();
-                  },
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     ).whenComplete(_startHideTimer);
