@@ -6351,7 +6351,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
         foregroundColor: playerWhite,
-        side: const BorderSide(color: playerWhite.withValues(alpha: 0.24)),
+        side: const BorderSide(color: Color(0x3DFFFFFF)),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       ),
       icon: Icon(icon, color: playerGold, size: 18),
