@@ -6063,9 +6063,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _showMovieInfo() async {
     _cancelHideTimer();
+    final mediaType = widget.movie.mediaType == 'tv' ? 'tv' : 'movie';
     final castFuture = TmdbService.getCast(
       widget.movie.tmdbId,
-      mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+      mediaType: mediaType,
+    );
+    final detailsFuture = TmdbService.details(
+      widget.movie.tmdbId,
+      mediaType: mediaType,
     );
 
     await showModalBottomSheet<void>(
@@ -6138,6 +6143,51 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
                               ),
+                            ),
+                            FutureBuilder<Map<String, dynamic>>(
+                              future: detailsFuture,
+                              builder: (context, snapshot) {
+                                final data = snapshot.data;
+                                if (data == null) return const SizedBox.shrink();
+                                final countries = <String>[];
+                                final rawCountries = data['production_countries'];
+                                if (rawCountries is List) {
+                                  for (final item in rawCountries.whereType<Map>()) {
+                                    final name = (item['name'] ?? item['iso_3166_1'] ?? '').toString().trim();
+                                    if (name.isNotEmpty && !countries.contains(name)) {
+                                      countries.add(name);
+                                    }
+                                  }
+                                }
+                                if (countries.isEmpty && data['origin_country'] is List) {
+                                  countries.addAll(
+                                    (data['origin_country'] as List)
+                                        .map((item) => item.toString())
+                                        .where((item) => item.isNotEmpty),
+                                  );
+                                }
+                                final runtime = _toInt(data['runtime'] ?? data['episode_run_time'] is List
+                                    ? ((data['episode_run_time'] as List).isNotEmpty
+                                        ? data['episode_run_time'][0]
+                                        : 0)
+                                    : data['runtime']);
+                                final info = <String>[
+                                  if (countries.isNotEmpty) 'Country: ${countries.join(', ')}',
+                                  if (runtime > 0) '${runtime} min',
+                                ];
+                                if (info.isEmpty) return const SizedBox.shrink();
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    info.join('  •  '),
+                                    style: const TextStyle(
+                                      color: Colors.white87,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                             if (widget.movie.rating > 0) ...[
                               const SizedBox(height: 9),
