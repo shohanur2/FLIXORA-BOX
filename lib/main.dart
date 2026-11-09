@@ -13,6 +13,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -1521,6 +1522,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           isOnline: _online,
           isFavourite: isFavourite,
           isSaved: isSaved,
+          onShare: () => Share.share(
+            '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
+          ),
           onFavourite: () => _toggleFavourite(selectedMovie),
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
@@ -2656,6 +2660,7 @@ class MovieDetailsScreen extends StatelessWidget {
   final bool isOnline;
   final bool isFavourite;
   final bool isSaved;
+  final VoidCallback onShare;
   final VoidCallback onFavourite;
   final VoidCallback onSave;
   final VoidCallback onDownload;
@@ -2667,6 +2672,7 @@ class MovieDetailsScreen extends StatelessWidget {
     required this.isOnline,
     required this.isFavourite,
     required this.isSaved,
+    required this.onShare,
     required this.onFavourite,
     required this.onSave,
     required this.onDownload,
@@ -2752,6 +2758,16 @@ class MovieDetailsScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 9),
                             Text(
+                              movie.mediaType == 'tv' ? 'TV SERIES' : 'MOVIE',
+                              style: const TextStyle(
+                                color: gold,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
                               movie.year,
                               style: const TextStyle(
                                 color: Colors.white60,
@@ -2775,6 +2791,20 @@ class MovieDetailsScreen extends StatelessWidget {
                                 ),
                               ],
                             ),
+                            if (movie.originCountry.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                'Country: ${movie.originCountry}',
+                                style: const TextStyle(color: Colors.white60),
+                              ),
+                            ],
+                            if (movie.originalLanguage.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Language: ${movie.originalLanguage.toUpperCase()}',
+                                style: const TextStyle(color: Colors.white60),
+                              ),
+                            ],
                             if (movie.runtime != null &&
                                 movie.runtime! > 0) ...[
                               const SizedBox(height: 8),
@@ -2862,6 +2892,26 @@ class MovieDetailsScreen extends StatelessWidget {
                       ),
                     ),
                   const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: onSave,
+                          icon: const Icon(Icons.playlist_add, color: gold),
+                          label: const Text('Add to list', style: TextStyle(color: white)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: onShare,
+                          icon: const Icon(Icons.share_outlined, color: gold),
+                          label: const Text('Share', style: TextStyle(color: white)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   Row(
                     children: [
                       Expanded(
