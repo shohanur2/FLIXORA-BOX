@@ -11,10 +11,12 @@ class ProviderEmbedPlayer extends StatefulWidget {
     super.key,
     required this.source,
     required this.onClose,
+    required this.onFailure,
   });
 
   final ProviderEmbedSource source;
   final VoidCallback onClose;
+  final VoidCallback onFailure;
 
   @override
   State<ProviderEmbedPlayer> createState() => _ProviderEmbedPlayerState();
@@ -25,6 +27,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   bool _isLoading = true;
   int _progress = 0;
   bool _showingFullscreenWidget = false;
+  bool _failureReported = false;
   String? _errorMessage;
 
   @override
@@ -61,11 +64,9 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
           },
           onWebResourceError: (error) {
             if (!mounted || error.isForMainFrame == false) return;
-            setState(() {
-              _isLoading = false;
-              _errorMessage =
-                  'This provider page could not load. Check your internet connection or try another stream.';
-            });
+            _reportProviderFailure(
+              'This provider page could not load. Check your internet connection or try another stream.',
+            );
           },
           onNavigationRequest: (request) {
             final uri = Uri.tryParse(request.url);
@@ -119,14 +120,23 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
       }
 
       await _controller.loadRequest(Uri.parse(widget.source.url));
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Could not start ' +
-            widget.source.name +
-            '. Try another available stream.';
-      });
+      _reportProviderFailure(
+        'Could not start ' + widget.source.name + '. Try another available stream.',
+      );
+    }
+  }
+
+  void _reportProviderFailure(String message) {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      _errorMessage = message;
+    });
+    if (!_failureReported) {
+      _failureReported = true;
+      widget.onFailure();
     }
   }
 
@@ -136,6 +146,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
       _isLoading = true;
       _progress = 0;
       _errorMessage = null;
+      _failureReported = false;
     });
     try {
       await _controller.reload();
