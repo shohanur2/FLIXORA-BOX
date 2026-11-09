@@ -3039,7 +3039,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _settingSwitch({required String title, required String subtitle, required bool value, required ValueChanged<bool> onChanged}) {
     return SwitchListTile(
       value: value, onChanged: onChanged, activeThumbColor: ink,
-      activeTrackColor: const gold, inactiveThumbColor: ink,
+      activeTrackColor: gold, inactiveThumbColor: ink,
       inactiveTrackColor: ink24,
       title: Text(title, style: const TextStyle(color: white, fontSize: 15, fontStyle: FontStyle.italic)),
       subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: ink60, fontSize: 12, height: 1.3))),
@@ -3053,7 +3053,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.notifications_none, 'Notifications', () => _saveBoolSetting('flixora_notifications', !_notificationsEnabled, (x) => _notificationsEnabled = x),
-            trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: ink, activeTrackColor: const gold)),
+            trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: ink, activeTrackColor: gold)),
           _profileTile(Icons.language, 'Language', _showLanguagePicker, trailingText: _appLanguage),
           _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
           _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
@@ -3282,7 +3282,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
         itemBuilder: (context, index) {
           final category = categories[index]; final selected = category == _rankingCategory;
-          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? const gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? const gold : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
+          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? gold : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
         },
       ))),
       Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
@@ -3382,9 +3382,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 22, color: selected ? const gold : ink60),
+              Icon(selected ? activeIcon : icon, size: 22, color: selected ? gold : ink60),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? const gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+              Text(label, style: TextStyle(color: selected ? gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
             ],          ),
         ),
       ),
