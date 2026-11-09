@@ -57,6 +57,25 @@ int _toInt(dynamic value) {
   return int.tryParse(value?.toString() ?? '') ?? 0;
 }
 
+List<String> _tmdbGenreNames(dynamic raw) {
+  const names = <int, String>{
+    28: 'Action', 12: 'Adventure', 16: 'Animation', 35: 'Comedy',
+    80: 'Crime', 99: 'Documentary', 18: 'Drama', 10751: 'Family',
+    14: 'Fantasy', 36: 'History', 27: 'Horror', 10402: 'Music',
+    9648: 'Mystery', 10749: 'Romance', 878: 'Sci-Fi', 10770: 'TV Movie',
+    53: 'Thriller', 10752: 'War', 37: 'Western', 10759: 'Action & Adventure',
+    10762: 'Kids', 10763: 'News', 10764: 'Reality', 10765: 'Sci-Fi & Fantasy',
+    10766: 'Soap', 10767: 'Talk', 10768: 'War & Politics',
+  };
+  if (raw is List) {
+    return raw.map((item) {
+      if (item is Map) return (item['name'] ?? '').toString();
+      return names[_toInt(item)] ?? '';
+    }).where((name) => name.isNotEmpty).toList();
+  }
+  return [];
+}
+
 class Movie {
   final int id;
   final int tmdbId;
@@ -147,6 +166,7 @@ class Movie {
       poster: (json['poster_path'] ?? '').toString(),
       backdrop: (json['backdrop_path'] ?? '').toString(),
       rating: (json['vote_average'] as num?)?.toDouble() ?? 0,
+      genres: _tmdbGenreNames(json['genre_ids'] ?? json['genres']),
       mediaType: mediaType ?? (json['media_type'] ?? 'movie').toString(),
       originalLanguage: (json['original_language'] ?? '').toString(),
       originCountry: ((json['origin_country'] is List && (json['origin_country'] as List).isNotEmpty)
@@ -1427,7 +1447,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final client = supabaseClient;
 
     if (!_online || client == null) {
-      return requested.isFlixora
+      return requested.isFlixora || requested.mediaType == 'tv'
           ? requested
           : (_cachedFlixoraMatch(requested) ?? requested);
     }
@@ -1440,7 +1460,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .select()
             .eq('id', requested.sourceId)
             .limit(1);
-      } else if (requested.tmdbId > 0) {
+      } else if (requested.tmdbId > 0 && requested.mediaType == 'movie') {
         response = await client
             .from('movies')
             .select()
@@ -1466,6 +1486,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (requested.isFlixora) return null;
+      if (requested.mediaType == 'tv') return requested;
       return _cachedFlixoraMatch(requested) ?? requested;
     } catch (e) {
       debugPrint('Could not resolve Admin movie record: $e');
