@@ -19,6 +19,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
+import 'streaming/provider_catalog.dart';
+import 'streaming/provider_embed_player.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -595,6 +597,7 @@ class TmdbService {
     if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
     final uri = Uri.parse('$base/$mediaType/$id').replace(queryParameters: {
       'api_key': apiKey, 'language': 'en-US',
+      'append_to_response': 'external_ids',
     });
     final response = await http.get(uri).timeout(const Duration(seconds: 20));
     if (response.statusCode != 200) throw Exception('Could not load title details.');
@@ -4432,6 +4435,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
   int _selectedAudioTrackIndex = 0;
+  List<ProviderEmbedSource> _providerSources = [];
+  ProviderEmbedSource? _selectedProviderSource;
 
   String? _errorMessage;
 
@@ -4504,6 +4509,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
+    _providerSources = ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
@@ -4518,14 +4524,121 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final id = widget.movie.tmdbId;
     if (id <= 0) return {};
     try {
-      return await TmdbService.details(
+      final details = await TmdbService.details(
         id,
         mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
       );
+      final externalIds = details['external_ids'];
+      final imdbId = externalIds is Map
+          ? (externalIds['imdb_id'] ?? '').toString()
+          : '';
+      if (mounted && !_isDisposed && widget.movie.mediaType != 'tv') {
+        setState(() {
+          _providerSources = ProviderCatalog.forMovie(
+            tmdbId: id,
+            imdbId: imdbId,
+          );
+        });
+      }
+      return details;
     } catch (e) {
       debugPrint('Could not load player movie metadata: $e');
       return {};
     }
+  }
+
+  Future<void> _selectProviderSource(ProviderEmbedSource source) async {
+    if (!source.isAvailable || !_playerIsOnline || _isDisposed) return;
+    _cancelHideTimer();
+    try {
+      await _player.pause();
+    } catch (_) {}
+    if (!mounted || _isDisposed) return;
+    setState(() {
+      _selectedProviderSource = source;
+      _errorMessage = null;
+      _showControls = false;
+    });
+  }
+
+  Future<void> _closeProviderSource() async {
+    if (!mounted || _isDisposed) return;
+    setState(() {
+      _selectedProviderSource = null;
+      _errorMessage = null;
+      _showControls = true;
+    });
+    if (widget.localFilePath != null || _resolveInitialNetworkUrl().isNotEmpty) {
+      await _initializePlayer();
+    }
+  }
+
+  Widget _providerSelector() {
+    if (widget.localFilePath != null || widget.movie.mediaType == 'tv' ||
+        widget.movie.tmdbId <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    if (_providerSources.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Available Streams',
+          style: TextStyle(
+            color: playerWhite,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _playerIsOnline
+              ? 'Choose a stream to play inside FLIXORA'
+              : 'Connect to the internet to use online streams',
+          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _providerSources.map((source) {
+            final selected = _selectedProviderSource?.id == source.id;
+            final label = source.name.replaceFirst(RegExp(r'^STREAM \\d+ · '), '');
+            return ChoiceChip(
+              label: Text(label),
+              selected: selected,
+              onSelected: source.isAvailable && _playerIsOnline
+                  ? (_) => _selectProviderSource(source)
+                  : null,
+              selectedColor: playerGold.withValues(alpha: 0.24),
+              backgroundColor: playerPanel,
+              disabledColor: playerPanel.withValues(alpha: 0.55),
+              side: BorderSide(
+                color: selected ? playerGold : const Color(0x3DFFFFFF),
+              ),
+              labelStyle: TextStyle(
+                color: source.isAvailable ? playerWhite : const Color(0x66FFFFFF),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+              avatar: Icon(
+                source.isAvailable ? Icons.play_circle_outline : Icons.info_outline,
+                size: 16,
+                color: source.isAvailable ? playerGoldLight : const Color(0x66FFFFFF),
+              ),
+            );
+          }).toList(),
+        ),
+        if (_selectedProviderSource != null) ...[
+          const SizedBox(height: 7),
+          Text(
+            'Playing with ${_selectedProviderSource!.name}',
+            style: const TextStyle(color: playerGoldLight, fontSize: 11),
+          ),
+        ],
+      ],
+    );
   }
 
   String _formatPlayerReleaseDate(String value) {
@@ -4872,7 +4985,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!_validVideoUrl) {
       if (mounted) {
         setState(() {
-          _errorMessage = 'Invalid or unavailable video URL.';
+          _errorMessage = null;
+          _initialized = false;
         });
       }
       return;
@@ -6011,6 +6125,40 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerBody() {
+    final providerSource = _selectedProviderSource;
+    if (providerSource != null) {
+      return ProviderEmbedPlayer(
+        key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
+        source: providerSource,
+        onClose: _closeProviderSource,
+      );
+    }
+
+    if (widget.localFilePath == null && !_validVideoUrl) {
+      return Container(
+        color: Colors.black,
+        padding: const EdgeInsets.all(22),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.play_circle_outline_rounded,
+                  color: playerGold, size: 48),
+              SizedBox(height: 10),
+              Text('Choose a stream below',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: playerWhite,
+                      fontSize: 15, fontWeight: FontWeight.w800)),
+              SizedBox(height: 5),
+              Text('Select an available provider to start playback inside FLIXORA.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Stack(
       fit: StackFit.expand,
       alignment: Alignment.center,
@@ -6385,6 +6533,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerResources() {
+    if (_selectedProviderSource != null) {
+      return const ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.language, color: playerGold),
+        title: Text('Audio tracks',
+            style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
+        subtitle: Text('Use the selected provider player to change audio language.',
+            style: TextStyle(color: Color(0x99FFFFFF))),
+      );
+    }
     if (_tracks.audio.isEmpty) {
       return const ListTile(
         contentPadding: EdgeInsets.zero,
@@ -6870,6 +7028,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ],
                 ),
                 _playerMetadata(),
+                const SizedBox(height: 16),
+                _providerSelector(),
                 const SizedBox(height: 13),
                 Wrap(
                   spacing: 8,
