@@ -25,6 +25,8 @@ SupabaseClient? supabaseClient;
 const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String supabaseAnonKey =
     String.fromEnvironment('SUPABASE_ANON_KEY');
+const String authRedirectUrl =
+    'com.flixora.flixora://login-callback/';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -988,6 +990,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _searchTimer;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  StreamSubscription<AuthState>? _authSubscription;
 
   int _slide = 0;
   int _tab = 0;
@@ -1067,6 +1070,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    final authClient = supabaseClient;
+    if (authClient != null) {
+      _authSubscription = authClient.auth.onAuthStateChange.listen(
+        (_) {
+          if (mounted) setState(() {});
+        },
+        onError: (error, stackTrace) {
+          debugPrint('Auth state listener error: $error');
+        },
+      );
+    }
 
     _initializeApp();
     _listenToConnectivity();
@@ -1358,6 +1372,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _networkTimer?.cancel();
     _searchTimer?.cancel();
     _connectivitySubscription?.cancel();
+    _authSubscription?.cancel();
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
@@ -3124,7 +3139,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 try {
                   if (isSignUp) {
                     final response = await client.auth.signUp(
-                      email: email, password: password,
+                      email: email,
+                      password: password,
+                      emailRedirectTo: authRedirectUrl,
                     );
                     if (dialogContext.mounted) Navigator.pop(dialogContext);
                     if (mounted) {
