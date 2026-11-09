@@ -2047,7 +2047,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const leadingInset = 16.0;
                 final viewport = _featuredCardsController.position.viewportDimension;
                 final target = (leadingInset + index * cardExtent + cardWidth / 2 - viewport / 2)
-                    .clamp(0.0, _featuredCardsController.position.maxScrollExtent);
+                    .clamp(0.0, _featuredCardsController.position.maxScrollExtent)
+                    .toDouble();
                 _featuredCardsController.animateTo(
                   target,
                   duration: const Duration(milliseconds: 350),
@@ -2133,7 +2134,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         leadingInset - cardWidth / 2) /
                     cardExtent)
                 .round()
-                .clamp(0, movies.length - 1);
+                .clamp(0, movies.length - 1)
+                .toInt();
             if (selected != _slide) {
               _sliderController.animateToPage(
                 selected,
