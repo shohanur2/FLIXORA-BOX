@@ -1888,129 +1888,69 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  String _languageLabel(String code) {
-    const labels = {
-      'en':'English','hi':'Hindi','bn':'Bangla','ja':'Japanese','ko':'Korean',
-      'zh':'Chinese','ta':'Tamil','te':'Telugu','ml':'Malayalam','kn':'Kannada',
-      'ur':'Urdu','es':'Spanish','fr':'French','ar':'Arabic','th':'Thai',
-      'pt':'Portuguese','ru':'Russian','de':'German','it':'Italian','tr':'Turkish',
-    };
-    return labels[code.toLowerCase()] ?? (code.isEmpty ? '' : code.toUpperCase());
-  }
-
-  List<String> _posterLanguageLabels(Movie movie) {
-    if (movie.audioLanguages.isNotEmpty) return movie.audioLanguages.take(3).toList();
-    final original = _languageLabel(movie.originalLanguage);
-    return original.isEmpty ? const [] : [original];
-  }
-
   Widget _movieRow(List<Movie> movies) {
-    if (movies.isEmpty) {
-      return const SizedBox(height: 8);
-    }
+    if (movies.isEmpty) return const SizedBox(height: 8);
 
     return SizedBox(
-      height: 198,
+      height: 184,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
-
           return GestureDetector(
             onTap: () => _openMovie(movie),
             child: Container(
-              width: 104,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
+              width: 90,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(9),
                       child: SizedBox(
                         width: double.infinity,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            movie.posterUrl.isEmpty
-                                ? Container(
-                                    color: panel,
-                                    child: const Icon(Icons.movie, color: gold, size: 35),
-                                  )
-                                : CachedNetworkImage(
-                                    imageUrl: movie.posterUrl,
-                                    fit: BoxFit.cover,
-                                    placeholder: (_, __) => Container(
-                                      color: panel,
-                                      child: const Center(
-                                        child: CircularProgressIndicator(color: gold, strokeWidth: 2),
-                                      ),
-                                    ),
-                                    errorWidget: (_, __, ___) => Container(
-                                      color: panel,
-                                      child: const Icon(Icons.movie, color: gold),
-                                    ),
-                                  ),
-                            if (_posterLanguageLabels(movie).isNotEmpty)
-                              Positioned(
-                                top: 6,
-                                left: 6,
-                                right: 6,
-                                child: Align(
-                                  alignment: Alignment.topLeft,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black.withValues(alpha: 0.82),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      _posterLanguageLabels(movie).join(' • '),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w800),
-                                    ),
+                        child: movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(Icons.movie, color: gold, size: 32),
+                              )
+                            : CachedNetworkImage(
+                                imageUrl: movie.posterUrl,
+                                fit: BoxFit.cover,
+                                placeholder: (_, __) => Container(
+                                  color: panel,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
                                   ),
                                 ),
+                                errorWidget: (_, __, ___) => Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                ),
                               ),
-                          ],
-                        ),
-                      )
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 7),
+                  const SizedBox(height: 6),
                   Text(
                     movie.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w600),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 2),
                   Row(
                     children: [
-                      const Icon(Icons.star, color: gold, size: 13),
+                      const Icon(Icons.star, color: gold, size: 12),
                       const SizedBox(width: 3),
-                      Text(
-                        movie.rating.toStringAsFixed(1),
-                        style: const TextStyle(
-                          color: Colors.white60,
-                          fontSize: 11,
-                        ),
-                      ),
-                      const SizedBox(width: 7),
-                      Text(
-                        movie.year,
-                        style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 11,
-                        ),
-                      ),
+                      Text(movie.rating.toStringAsFixed(1),
+                          style: const TextStyle(color: Colors.white60, fontSize: 10)),
+                      const SizedBox(width: 6),
+                      Text(movie.year,
+                          style: const TextStyle(color: Colors.white54, fontSize: 10)),
                     ],
                   ),
                 ],
@@ -2030,7 +1970,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return SizedBox(
-      height: MediaQuery.of(context).size.height * 0.46,
+      height: MediaQuery.of(context).size.height * 0.41,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -2042,8 +1982,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 setState(() => _slide = index);
               }
               if (_featuredCardsController.hasClients) {
-                const cardWidth = 220.0;
-                const cardExtent = 228.0;
+                const cardWidth = 198.0;
+                const cardExtent = 206.0;
                 const leadingInset = 16.0;
                 final viewport = _featuredCardsController.position.viewportDimension;
                 final target = (leadingInset + index * cardExtent + cardWidth / 2 - viewport / 2)
@@ -2090,26 +2030,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Positioned(
             left: 0,
             right: 0,
-            bottom: 28,
+            bottom: 0,
             child: _featuredQuickCards(slides),
-          ),
-          Positioned(
-            bottom: 8,
-            right: 18,
-            child: Row(
-              children: List.generate(
-                slides.length,
-                (index) => Container(
-                  margin: const EdgeInsets.only(left: 5),
-                  width: _slide == index ? 18 : 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: _slide == index ? Colors.white : Colors.white54,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-              ),
-            ),
           ),
         ],
       ),
@@ -2120,14 +2042,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
-      height: 74,
+      height: 52,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
-            const cardWidth = 220.0;
-            const cardExtent = 228.0;
+            const cardWidth = 198.0;
+            const cardExtent = 206.0;
             const leadingInset = 16.0;
             final viewport = notification.metrics.viewportDimension;
             final selected = ((notification.metrics.pixels + viewport / 2 -
@@ -2147,95 +2069,119 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return false;
         },
         child: ListView.builder(
-        controller: _featuredCardsController,
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        itemCount: movies.length,
-        itemBuilder: (context, index) {
-          final movie = movies[index];
-          final typeLabel = movie.mediaType == 'tv' ? 'TV Series' : (movie.genres.any((g) => g.toLowerCase().contains('animation')) || movie.originalLanguage.toLowerCase() == 'ja' ? 'Anime' : 'Movie');
+          controller: _featuredCardsController,
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          itemCount: movies.length,
+          itemBuilder: (context, index) {
+            final movie = movies[index];
+            final typeLabel = movie.mediaType == 'tv'
+                ? 'TV Series'
+                : (movie.genres.any((g) => g.toLowerCase().contains('animation')) ||
+                        movie.originalLanguage.toLowerCase() == 'ja'
+                    ? 'Anime'
+                    : 'Movie');
 
-          return GestureDetector(
-            onTap: () => _openMovie(movie),
-            child: Container(
-              width: 220,
-              margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: panel,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(7),
-                    child: movie.posterUrl.isEmpty
-                        ? Container(
-                            width: 40,
-                            height: 60,
-                            color: const Color(0xFF292929),
-                            child: const Icon(Icons.movie, color: gold),
-                          )
-                        : CachedNetworkImage(
-                            imageUrl: movie.posterUrl,
-                            width: 40,
-                            height: 60,
-                            fit: BoxFit.cover,
-                            placeholder: (_, __) => Container(
-                              width: 43,
-                              height: 64,
-                              color: const Color(0xFF292929),
-                            ),
-                            errorWidget: (_, __, ___) => Container(
-                              width: 40,
-                              height: 60,
-                              color: const Color(0xFF292929),
-                              child: const Icon(Icons.movie, color: gold),
-                            ),
+            return GestureDetector(
+              onTap: () => _openMovie(movie),
+              child: Container(
+                width: 198,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                child: SizedBox(
+                  height: 52,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 12,
+                        bottom: 0,
+                        child: Container(
+                          padding: const EdgeInsets.only(left: 44, right: 6),
+                          decoration: BoxDecoration(
+                            color: panel,
+                            borderRadius: BorderRadius.circular(9),
                           ),
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          movie.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '$typeLabel  •  ${movie.releaseDate.isNotEmpty ? movie.releaseDate : movie.year}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white60,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      movie.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '$typeLabel  •  ${movie.releaseDate.isNotEmpty ? movie.releaseDate : movie.year}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white60,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              const CircleAvatar(
+                                radius: 12,
+                                backgroundColor: Colors.greenAccent,
+                                child: Icon(Icons.play_arrow, color: Colors.black, size: 18),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      Positioned(
+                        left: 6,
+                        top: 0,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: movie.posterUrl.isEmpty
+                              ? Container(
+                                  width: 34,
+                                  height: 46,
+                                  color: const Color(0xFF292929),
+                                  child: const Icon(Icons.movie, color: gold, size: 18),
+                                )
+                              : CachedNetworkImage(
+                                  imageUrl: movie.posterUrl,
+                                  width: 34,
+                                  height: 46,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => Container(
+                                    width: 34,
+                                    height: 46,
+                                    color: const Color(0xFF292929),
+                                  ),
+                                  errorWidget: (_, __, ___) => Container(
+                                    width: 34,
+                                    height: 46,
+                                    color: const Color(0xFF292929),
+                                    child: const Icon(Icons.movie, color: gold, size: 18),
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 7),
-                  const CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Colors.greenAccent,
-                    child: Icon(Icons.play_arrow, color: Colors.black, size: 21),
-                  ),
-                ],
+                ),
               ),
-            ),
-          );
-        },
-      ),
+            );
+          },
+        ),
       ),
     );
   }
