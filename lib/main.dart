@@ -4572,14 +4572,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     });
   }
 
-  void _selectDefaultProviderIfNeeded() {
+  Future<void> _selectDefaultProviderIfNeeded({bool force = false}) async {
     if (!mounted ||
         _isDisposed ||
+        !_playerIsOnline ||
         widget.localFilePath != null ||
-        _validVideoUrl ||
+        (!force && _validVideoUrl) ||
         _selectedProviderSource != null) {
       return;
     }
+
+    // Resolve IMDb metadata before choosing Play4U. This is also important
+    // when a direct Admin source fails before the metadata request completes.
+    await _movieDetailsFuture;
+    if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
     // Match the reference project's Play4U-first policy. If this movie has no
     // IMDb ID, select the first usable TMDB-based provider instead.
@@ -4594,11 +4600,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             );
 
     if (fallback == null) return;
+
+    // Stop the native engine before the WebView is mounted, releasing its
+    // decoder and network request while retaining the saved resume position.
+    try {
+      await _saveResumePosition(_position);
+      await _player.pause();
+      await _player.stop();
+    } catch (_) {}
+    if (!mounted || _isDisposed || _selectedProviderSource != null) return;
+
     setState(() {
       _selectedProviderSource = fallback;
       _providerAttemptIndex =
           _providerSources.indexWhere((item) => item.id == fallback.id);
       _showControls = false;
+      _initialized = false;
+      _errorMessage = null;
     });
   }
 
@@ -4867,7 +4885,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     // avoids opening Play4U with a guessed or incomplete identifier.
     await _movieDetailsFuture;
     if (!mounted || _isDisposed) return;
-    _selectDefaultProviderIfNeeded();
+    await _selectDefaultProviderIfNeeded();
   }
 
   Future<void> _loadVideoQualities() async {
@@ -5013,8 +5031,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         widget.localFilePath == null &&
         !_validVideoUrl &&
         _selectedProviderSource == null) {
-      unawaited(_movieDetailsFuture.then((_) {
-        if (mounted && !_isDisposed) _selectDefaultProviderIfNeeded();
+      unawaited(_movieDetailsFuture.then((_) async {
+        if (mounted && !_isDisposed) {
+          await _selectDefaultProviderIfNeeded();
+        }
       }));
     }
   }
@@ -5057,6 +5077,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _errorMessage = value);
+      if (value.trim().isNotEmpty &&
+          widget.localFilePath == null &&
+          _selectedProviderSource == null &&
+          _playerIsOnline) {
+        // A broken Admin direct stream should not strand the viewer. Keep it
+        // first priority, then fall back to the reference provider sequence.
+        unawaited(_selectDefaultProviderIfNeeded(force: true));
+      }
     });
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
@@ -5130,6 +5158,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
+      if (widget.localFilePath == null && _playerIsOnline) {
+        unawaited(_selectDefaultProviderIfNeeded(force: true));
+      }
     } finally {
       _isOpening = false;
     }
