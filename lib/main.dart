@@ -697,8 +697,7 @@ class FlixoraMovieService {
   }
 }
 
-class DownloadTask {
-  final int movieId;
+class DownloadTask {  final int movieId;
   final String title;
   final String poster;
   final String videoUrl;
@@ -1398,7 +1397,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
-
     final results = await Future.wait<List<Movie>>([
       TmdbService.search(text).catchError((_) => <Movie>[]),
       FlixoraMovieService.searchPublishedMovies(text)
@@ -1766,6 +1764,78 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _playMovie(Movie movie) async {
+    final selectedMovie = await _resolveMovieForOpening(movie);
+    if (!mounted) return;
+
+    if (selectedMovie == null) {
+      _showMessage('This movie is currently unavailable.');
+      return;
+    }
+
+    // Prefer a completed local download so it can play without internet.
+    DownloadTask? downloaded;
+    for (final task in _downloads) {
+      final matchesMovie = task.movieId == selectedMovie.id ||
+          task.movieId == movie.id ||
+          (selectedMovie.tmdbId > 0 && task.movieId == selectedMovie.tmdbId);
+      if (matchesMovie &&
+          task.status == 'Completed' &&
+          task.filePath != null &&
+          File(task.filePath!).existsSync()) {
+        downloaded = task;
+        break;
+      }
+    }
+
+    if (downloaded != null) {
+      _recordWatch(selectedMovie);
+      Navigator.push(context, MaterialPageRoute(
+        builder: (_) => MoviePlayerScreen(
+          movie: selectedMovie,
+          localFilePath: downloaded!.filePath,
+          recommendedMovies: _allMovies(),
+          onMovieSelected: _playMovie,
+          onSave: () => _toggleSaved(selectedMovie),
+          onDownload: () => addDownload(selectedMovie),
+          onViewDownloads: _openDownloadsTab,
+          isOnline: _online,
+        ),
+      ));
+      return;
+    }
+
+    if (!selectedMovie.hasPlayableVideoUrl) {
+      _showMessage('This title is not currently available to stream on FLIXORA.');
+      return;
+    }
+
+    if (!_online || !await InternetService.isOnline()) {
+      if (mounted) {
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
+        _showMessage('Connect to the internet to stream this movie.');
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    _recordWatch(selectedMovie);
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => MoviePlayerScreen(
+        movie: selectedMovie,
+        recommendedMovies: _allMovies(),
+        onMovieSelected: _playMovie,
+        onSave: () => _toggleSaved(selectedMovie),
+        onDownload: () => addDownload(selectedMovie),
+        onViewDownloads: _openDownloadsTab,
+        isOnline: _online,
+      ),
+    ));
+  }
+
   void _openRanking([String category = 'Cinema']) {
     setState(() {
       _showRanking = true;
@@ -1891,7 +1961,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox(height: 8);
 
     return SizedBox(
-      height: 198,
+      height: 205,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1899,9 +1969,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         itemBuilder: (context, index) {
           final movie = movies[index];
           return GestureDetector(
-            onTap: () => _openMovie(movie),
+            onTap: () => _playMovie(movie),
             child: Container(
-              width: 104,
+              width: 110,
               margin: const EdgeInsets.symmetric(horizontal: 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1998,7 +2068,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             itemBuilder: (context, index) {
               final movie = slides[index];
               return GestureDetector(
-                onTap: () => _openMovie(movie),
+                onTap: () => _playMovie(movie),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -2097,9 +2167,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         movie.originalLanguage.toLowerCase() == 'ja'
                     ? 'Anime'
                     : 'Movie');
-
             return GestureDetector(
-              onTap: () => _openMovie(movie),
+              onTap: () => _playMovie(movie),
               child: Container(
                 width: 238,
                 margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -2304,7 +2373,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final movie = movies[index];
 
         return GestureDetector(
-          onTap: () => _openMovie(movie),
+          onTap: () => _playMovie(movie),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2797,7 +2866,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     emailController.dispose();
     passwordController.dispose();
   }
-
   Future<void> _signOutVisitor() async {
     try {
       await supabaseClient?.auth.signOut();
@@ -2982,13 +3050,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           });
         },
         child: SizedBox(
-          height: 44,
+          height: 56,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 18, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
+              Icon(selected ? activeIcon : icon, size: 22, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 9, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
             ],          ),
         ),
       ),
@@ -3132,8 +3200,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         color: const Color(0xF217181D),
         child: SafeArea(
           top: false,
+          maintainBottomViewPadding: true,
           child: Container(
-            height: 44,
+            height: 56,
             decoration: const BoxDecoration(
               border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
             ),
@@ -3497,8 +3566,7 @@ class MovieDetailsScreen extends StatelessWidget {
                               style: const TextStyle(
                                 color: Colors.white60,
                               ),
-                            ),
-                            const SizedBox(height: 8),
+                            ),                            const SizedBox(height: 8),
                             Row(
                               children: [
                                 const Icon(
@@ -4197,8 +4265,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (details.pointerCount >= 2) {
       if (_gestureMode != 'zoom') {
         _cancelHideTimer();
-        setState(() {
-          _gestureMode = 'zoom';
+        setState(() {          _gestureMode = 'zoom';
         });
       }
 
@@ -4897,8 +4964,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                   ],
                 ),
-              ),
-            );
+              ),            );
           },
         );
       },
@@ -5597,8 +5663,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     color: Colors.white60, fontSize: 12)),
               ],
             ),
-          ),
-          DropdownButton<int>(
+          ),          DropdownButton<int>(
             value: selectedIndex,
             dropdownColor: panel,
             style: const TextStyle(color: white),
