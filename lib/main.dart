@@ -2218,10 +2218,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _profileGroup([
           _profileTile(Icons.history, 'Watch History',
               () => _openProfileSection('Watch History'),
-              trailingText: '\${_watchHistory.length}'),
+              trailingText: '${_watchHistory.length}'),
           _profileTile(Icons.bookmark_outline, 'My List',
               () => _openProfileSection('My List'),
-              trailingText: '\${_saved.length}'),
+              trailingText: '${_saved.length}'),
           _profileTile(Icons.notifications_none, 'Messages',
               () => _openProfileSection('Messages'),
               trailing: const Icon(Icons.chevron_right, color: Colors.white54)),
@@ -5126,7 +5126,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (language.isNotEmpty) {
       return languageNames[language.toLowerCase()] ?? language;
     }
-    return index == 0 ? 'Original / Auto' : 'Audio \${index + 1}';
+    return index == 0 ? 'Original / Auto' : 'Audio ${index + 1}';
   }
 
   Widget _playerResources() {
