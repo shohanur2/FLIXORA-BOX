@@ -3544,6 +3544,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           2.0,
         ];
 
+        // Keep the modal slider state independent for immediate drag feedback.
+        double sheetBrightness =
+            _screenBrightness.clamp(0.0, 1.0).toDouble();
+
         return StatefulBuilder(
           builder: (sheetContext, setSheetState) {
             return SafeArea(
@@ -3580,7 +3584,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                             border: Border.all(color: gold.withValues(alpha: 0.45)),
                           ),
                           child: Text(
-                            '${(_screenBrightness * 100).round()}%',
+                            '${(sheetBrightness * 100).round()}%',
                             style: const TextStyle(
                               color: goldLight,
                               fontSize: 12,
@@ -3604,16 +3608,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
                       ),
                       child: Slider(
-                        value: _screenBrightness.clamp(0.0, 1.0),
+                        value: sheetBrightness,
                         min: 0.0,
                         max: 1.0,
                         onChanged: (value) {
-                          // Update the modal sheet immediately while dragging.
+                          final nextBrightness =
+                              value.clamp(0.0, 1.0).toDouble();
+
+                          // Update the thumb, active track, and percentage immediately.
                           setSheetState(() {
-                            _screenBrightness =
-                                value.clamp(0.0, 1.0).toDouble();
+                            sheetBrightness = nextBrightness;
                           });
-                          _changeApplicationBrightness(value);
+
+                          // Apply the selected value to the actual app brightness.
+                          _changeApplicationBrightness(nextBrightness);
                         },
                       ),
                     ),
