@@ -997,8 +997,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         loading = false;
         if (_allMovies().isEmpty) homeError = 'offline';
       });
-    }
-  }
+    }  }
 
   Future<void> _loadAppSettings() async {
     try {
@@ -1998,7 +1997,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             itemBuilder: (context, index) {
               final movie = slides[index];
-
               return GestureDetector(
                 onTap: () => _openMovie(movie),
                 child: Stack(
@@ -2444,7 +2442,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             TextButton(
               onPressed: user == null ? _showVisitorLogin : _signOutVisitor,
-              child: Text(user == null ? 'Login' : 'Logout'),
+              child: Text(user == null ? 'Login / Sign Up' : 'Logout'),
             ),
           ],
         ),
@@ -2654,7 +2652,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _settingsContent() {
-    final user = supabaseClient?.auth.currentUser;
     return Column(children: [
       Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 14, 12, 16), children: [
         const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: Colors.white70, fontSize: 13))),
@@ -2677,11 +2674,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.description_outlined, 'User Agreement', () => _showSettingsInfo('User Agreement', 'The user agreement page will be added before release.')),
         ]),
       ])),
-      Padding(padding: const EdgeInsets.fromLTRB(12, 6, 12, 10), child: SizedBox(width: double.infinity, height: 54, child: DecoratedBox(
-        decoration: BoxDecoration(gradient: const LinearGradient(colors: [Color(0xFF20B9F2), Color(0xFF21E99A)]), borderRadius: BorderRadius.circular(9)),
-        child: TextButton(onPressed: user == null ? _showVisitorLogin : _signOutVisitor,
-          child: Text(user == null ? 'Log in/Sign up' : 'Log out', style: const TextStyle(color: Color(0xFF06110E), fontSize: 17, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))),
-      ))),
     ]);
   }
 
@@ -2997,8 +2989,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               Icon(selected ? activeIcon : icon, size: 18, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
               const SizedBox(height: 2),
               Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 9, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
-            ],
-          ),
+            ],          ),
         ),
       ),
     );
@@ -3998,7 +3989,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
       if (!mounted || _isDisposed) return;
-
       setState(() => _position = value);
 
       if (_duration.inSeconds > 0) {
@@ -4997,8 +4987,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   child: Slider(
                     value: current,
                     min: 0,
-                    max: max > 0 ? max : 1,
-                    onChanged: max > 0
+                    max: max > 0 ? max : 1,                    onChanged: max > 0
                         ? (value) {
                             setState(() {
                               _position = Duration(
