@@ -94,6 +94,36 @@ class Movie {
 
   bool get isFlixora => source == 'flixora';
 
+  bool get hasPlayableVideoUrl {
+    final uri = Uri.tryParse(videoUrl.trim());
+    return uri != null &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty;
+  }
+
+  Movie withFallbackMetadata(Movie fallback) => Movie(
+        id: id,
+        tmdbId: tmdbId > 0 ? tmdbId : fallback.tmdbId,
+        sourceId: sourceId,
+        source: source,
+        title: title.trim().isNotEmpty && title != 'Unknown Movie'
+            ? title
+            : fallback.title,
+        year: year != 'N/A' ? year : fallback.year,
+        overview: overview.trim().isNotEmpty &&
+                overview != 'No description available.'
+            ? overview
+            : fallback.overview,
+        poster: poster.isNotEmpty ? poster : fallback.poster,
+        backdrop: backdrop.isNotEmpty ? backdrop : fallback.backdrop,
+        rating: rating > 0 ? rating : fallback.rating,
+        releaseDate: releaseDate.isNotEmpty ? releaseDate : fallback.releaseDate,
+        genres: genres.isNotEmpty ? genres : fallback.genres,
+        runtime: runtime ?? fallback.runtime,
+        videoUrl: videoUrl.isNotEmpty ? videoUrl : fallback.videoUrl,
+        downloadUrl: downloadUrl.isNotEmpty ? downloadUrl : fallback.downloadUrl,
+      );
+
   factory Movie.fromJson(Map<String, dynamic> json) {
     final date = (json['release_date'] ?? '').toString();
     final movieId = _toInt(json['id']);
@@ -521,6 +551,77 @@ class TmdbService {
 }
 
 class FlixoraMovieService {
+  static bool _isHttpUrl(String value) {
+    final uri = Uri.tryParse(value.trim());
+    return uri != null &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty;
+  }
+
+  /// Resolve Admin records to a real video URL before showing them as playable.
+  /// Quality rows are keyed by the Supabase movies.id, not the TMDB ID.
+  static Future<List<Movie>> mapPlayableRows(
+    SupabaseClient client,
+    List<dynamic> rawRows,
+  ) async {
+    final rows = rawRows
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+    final movieIds = rows
+        .map((row) => _toInt(row['id']))
+        .where((id) => id > 0)
+        .toList();
+    final qualityFallbacks = <int, Map<String, String>>{};
+
+    if (movieIds.isNotEmpty) {
+      try {
+        final qualityRows = await client
+            .from('movie_video_qualities')
+            .select('movie_id, quality, video_url')
+            .inFilter('movie_id', movieIds);
+
+        for (final item in (qualityRows as List).whereType<Map>()) {
+          final row = Map<String, dynamic>.from(item);
+          final movieId = _toInt(row['movie_id']);
+          final quality = (row['quality'] ?? '').toString().trim();
+          final url = (row['video_url'] ?? '').toString().trim();
+          if (movieId <= 0 || quality.isEmpty || !_isHttpUrl(url)) continue;
+
+          final current = qualityFallbacks[movieId];
+          final currentQuality = current?['quality'] ?? '';
+          final is720p = quality.toLowerCase() == '720p';
+          final currentIs720p = currentQuality.toLowerCase() == '720p';
+          final shouldReplace = current == null ||
+              (is720p && !currentIs720p) ||
+              (!currentIs720p &&
+                  !is720p &&
+                  VideoQualityService.rank(quality) >
+                      VideoQualityService.rank(currentQuality));
+
+          if (shouldReplace) {
+            qualityFallbacks[movieId] = {
+              'quality': quality,
+              'video_url': url,
+            };
+          }
+        }
+      } catch (e) {
+        debugPrint('Could not resolve Admin video qualities: $e');
+      }
+    }
+
+    return rows.map((row) {
+      final movieId = _toInt(row['id']);
+      final legacyUrl = (row['video_url'] ?? '').toString();
+      if (!_isHttpUrl(legacyUrl)) {
+        final fallbackUrl = qualityFallbacks[movieId]?['video_url'] ?? '';
+        if (_isHttpUrl(fallbackUrl)) row['video_url'] = fallbackUrl;
+      }
+      return Movie.fromSupabase(row);
+    }).where((movie) => movie.sourceId > 0 && movie.hasPlayableVideoUrl).toList();
+  }
+
   static Future<List<Movie>> getPublishedMovies() async {
     final client = supabaseClient;
     if (client == null) return [];
@@ -532,15 +633,7 @@ class FlixoraMovieService {
           .eq('is_published', true)
           .order('created_at', ascending: false);
 
-      return (response as List)
-          .whereType<Map>()
-          .map(
-            (row) => Movie.fromSupabase(
-              Map<String, dynamic>.from(row),
-            ),
-          )
-          .where((movie) => movie.sourceId > 0)
-          .toList();
+      return mapPlayableRows(client, response as List);
     } catch (e) {
       debugPrint('Could not load published movies: $e');
       return [];
@@ -559,14 +652,7 @@ class FlixoraMovieService {
           .ilike('title', '%${query.trim()}%')
           .order('created_at', ascending: false);
 
-      return (response as List)
-          .whereType<Map>()
-          .map(
-            (row) => Movie.fromSupabase(
-              Map<String, dynamic>.from(row),
-            ),
-          )
-          .toList();
+      return mapPlayableRows(client, response as List);
     } catch (e) {
       debugPrint('Movie search failed: $e');
       return [];
@@ -1330,7 +1416,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final row = Map<String, dynamic>.from(response.first as Map);
         // An Admin record takes priority even when it is unpublished.
         if (row['is_published'] != true) return null;
-        return Movie.fromSupabase(row);
+
+        final playable = await FlixoraMovieService.mapPlayableRows(
+          client,
+          [row],
+        );
+        if (playable.isEmpty) return null;
+
+        // Keep the Admin source/status, but fill missing catalogue metadata
+        // from TMDB so incomplete Admin fields do not blank the details page.
+        return playable.first.withFallbackMetadata(requested);
       }
 
       if (requested.isFlixora) return null;
@@ -2583,7 +2678,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 25),
-                  if (movie.videoUrl.trim().isNotEmpty || movie.isFlixora)
+                  if (movie.hasPlayableVideoUrl)
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -2604,6 +2699,14 @@ class MovieDetailsScreen extends StatelessWidget {
                             letterSpacing: 1,
                           ),
                         ),
+                      ),
+                    )
+                  else
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text(
+                        'This title is not currently available to stream on FLIXORA.',
+                        style: TextStyle(color: Colors.white60, fontSize: 13),
                       ),
                     ),
                   const SizedBox(height: 12),
