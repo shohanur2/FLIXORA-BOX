@@ -5086,6 +5086,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (!mounted || _isDisposed) return;
       setState(() => _errorMessage = value);
       if (value.trim().isNotEmpty &&
+          !_isOpening &&
           widget.localFilePath == null &&
           _selectedProviderSource == null &&
           _playerIsOnline) {
