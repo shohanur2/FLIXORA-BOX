@@ -365,6 +365,7 @@ class MovieCache {
   static const String flixoraKey = 'flixora_published';
   static const String favouritesKey = 'flixora_favourites';
   static const String savedKey = 'flixora_saved';
+  static const String historyKey = 'flixora_watch_history';
   static const String downloadsKey = 'flixora_downloads';
   static const String trendingTvKey = 'flixora_trending_tv';
   static const String popularTvKey = 'flixora_popular_tv';
@@ -846,7 +847,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
+  final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
+  String? _profileSection;
+  bool _studyMode = false;
 
   Set<int> get _flixoraTmdbIds {
     return flixoraMovies
@@ -916,9 +920,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _initializeApp() async {
     await _loadCachedMovies();
     await _loadSavedPreferences();
+    final savedHistory = await MovieCache.getList(MovieCache.historyKey);
+    final prefs = await SharedPreferences.getInstance();
+    final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
     final savedDownloads = await MovieCache.getDownloads();
     if (mounted) {
       setState(() {
+        _watchHistory
+          ..clear()
+          ..addAll(savedHistory);
+        _studyMode = savedStudyMode;
         _downloads
           ..clear()
           ..addAll(savedDownloads);
@@ -1434,6 +1445,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList();
   }
 
+  void _recordWatch(Movie movie) {
+    _watchHistory.removeWhere((item) =>
+        item.id == movie.id ||
+        (movie.tmdbId > 0 && item.tmdbId == movie.tmdbId));
+    _watchHistory.insert(0, movie);
+    if (_watchHistory.length > 30) {
+      _watchHistory.removeRange(30, _watchHistory.length);
+    }
+    unawaited(MovieCache.saveList(MovieCache.historyKey, _watchHistory));
+    if (mounted) setState(() {});
+  }
+
+  void _openDownloadsTab() {
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    if (!mounted) return;
+    setState(() {
+      _tab = 1;
+      _profileSection = null;
+      _search = '';
+      _searchController.clear();
+      _searchLoading = false;
+    });
+  }
+
+  void _openProfileSection(String section) {
+    setState(() => _profileSection = section);
+  }
+
   Movie? _cachedFlixoraMatch(Movie movie) {
     if (movie.tmdbId <= 0) return null;
     for (final candidate in [...flixoraMovies, ...searchResults]) {
@@ -1531,6 +1571,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
           onWatch: () async {
+            _recordWatch(selectedMovie);
             DownloadTask? downloaded;
             for (final task in _downloads) {
               final matchesMovie = task.movieId == selectedMovie.id ||
@@ -1557,8 +1598,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   onDownload: () => addDownload(selectedMovie),
                   onViewDownloads: () {
                     if (!mounted) return;
-                    Navigator.pop(context);
-                    setState(() => _tab = 5);
+                    _openDownloadsTab();
                   },
                   isOnline: _online,
                 ),
@@ -1585,8 +1625,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 onDownload: () => addDownload(selectedMovie),
                 onViewDownloads: () {
                   if (!mounted) return;
-                  Navigator.pop(context);
-                  setState(() => _tab = 5);
+                  _openDownloadsTab();
                 },
                 isOnline: _online,
               ),
@@ -2137,80 +2176,368 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _profileContent() {
+    final user = supabaseClient?.auth.currentUser;
     return ListView(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
       children: [
-        const SizedBox(height: 15),
-        const CircleAvatar(
-          radius: 42,
-          backgroundColor: panel,
-          child: Icon(
-            Icons.movie_creation_outlined,
-            color: gold,
-            size: 42,
-          ),
+        Row(
+          children: [
+            const CircleAvatar(
+              radius: 29,
+              backgroundColor: panel,
+              child: Icon(Icons.person, color: gold, size: 32),
+            ),
+            const SizedBox(width: 13),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user?.email ?? 'FLIXORA Visitor',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white, fontSize: 17, fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    user == null ? 'Sign in to sync your account' : 'Visitor account',
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: user == null ? _showVisitorLogin : _signOutVisitor,
+              child: Text(user == null ? 'Login' : 'Logout'),
+            ),
+          ],
         ),
-        const SizedBox(height: 15),
+        const SizedBox(height: 20),
+        _profileGroup([
+          _profileTile(Icons.history, 'Watch History',
+              () => _openProfileSection('Watch History'),
+              trailingText: '\${_watchHistory.length}'),
+          _profileTile(Icons.bookmark_outline, 'My List',
+              () => _openProfileSection('My List'),
+              trailingText: '\${_saved.length}'),
+          _profileTile(Icons.notifications_none, 'Messages',
+              () => _openProfileSection('Messages'),
+              trailing: const Icon(Icons.chevron_right, color: Colors.white54)),
+          _profileTile(Icons.live_tv_outlined, 'TV Download & Web Link',
+              () => _openProfileSection('TV Download & Web Link'),
+              trailing: const Text('NEW', style: TextStyle(
+                color: white, backgroundColor: Colors.red, fontSize: 10,
+              ))),
+        ]),
+        const SizedBox(height: 14),
+        _profileGroup([
+          _profileTile(Icons.groups_outlined, 'Community',
+              () => _openProfileSection('Community')),
+          _profileTile(Icons.chat_bubble_outline, 'My Activity',
+              () => _openProfileSection('My Activity')),
+        ]),
+        const SizedBox(height: 14),
+        _profileGroup([
+          _profileTile(Icons.settings_outlined, 'Settings',
+              () => _openProfileSection('Settings')),
+          _profileTile(Icons.lock_outline, 'Parental PIN',
+              _showParentalPinDialog, trailingText: 'Set up'),
+          _profileTile(Icons.school_outlined, 'Study Mode',
+              _toggleStudyMode, trailingText: _studyMode ? 'On' : 'Off'),
+          _profileTile(Icons.feedback_outlined, 'Feedback', () {
+            Share.share('I would like to share feedback about FLIXORA.');
+          }),
+        ]),
+        const SizedBox(height: 18),
         const Center(
           child: Text(
-            'FLIXORA',
-            style: TextStyle(
-              color: gold,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 3,
-            ),
+            'FLIXORA  •  Movies, made simple.',
+            style: TextStyle(color: Colors.white38, fontSize: 12),
           ),
         ),
-        const SizedBox(height: 25),
-        _profileTile(
-          Icons.favorite_outline,
-          'My Favourites',
-          () => setState(() => _tab = 3),
-        ),
-        _profileTile(
-          Icons.bookmark_outline,
-          'Saved Movies',
-          () => setState(() => _tab = 4),
-        ),
-        _profileTile(
-          Icons.download_outlined,
-          'Downloads',
-          () => setState(() => _tab = 5),
-        ),
-        _profileTile(
-          Icons.refresh,
-          'Refresh Movies',
-          loadHome,
-        ),
-        const SizedBox(height: 25),
-        const Text(
-          'Flixora — Movies, made simple.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white38, fontSize: 12),
-        ),
       ],
+    );
+  }
+
+  Widget _profileGroup(List<Widget> children) {
+    return Card(
+      color: panel,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+      child: Column(children: children),
     );
   }
 
   Widget _profileTile(
     IconData icon,
     String title,
-    VoidCallback onTap,
-  ) {
-    return Card(
-      color: panel,
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        leading: Icon(icon, color: gold),
-        title: Text(title, style: const TextStyle(color: white)),
-        trailing: const Icon(
-          Icons.chevron_right,
-          color: Colors.white54,
+    VoidCallback onTap, {
+    String? trailingText,
+    Widget? trailing,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white70),
+      title: Text(title, style: const TextStyle(
+        color: white, fontWeight: FontWeight.w600,
+      )),
+      trailing: trailing ?? Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (trailingText != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Text(trailingText,
+                  style: const TextStyle(color: Colors.white54)),
+            ),
+          const Icon(Icons.chevron_right, color: Colors.white54),
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+
+  Widget _profileSectionContent() {
+    switch (_profileSection) {
+      case 'Watch History':
+        return _collectionContent('Watch History', _watchHistory);
+      case 'My List':
+        return _collectionContent('My List', _moviesForIds(_saved));
+      case 'My Favourites':
+        return _collectionContent('My Favourites', _moviesForIds(_favourites));
+      case 'My Activity':
+        return _collectionContent('My Activity', _watchHistory);
+      case 'Settings':
+        final user = supabaseClient?.auth.currentUser;
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _profileGroup([
+              _profileTile(Icons.person_outline,
+                  user?.email ?? 'Visitor Login',
+                  user == null ? _showVisitorLogin : _signOutVisitor,
+                  trailingText: user == null ? 'Login' : 'Logout'),
+              _profileTile(Icons.refresh, 'Refresh Movies', loadHome),
+            ]),
+            const SizedBox(height: 12),
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Account sign-in uses the FLIXORA Supabase account service. '
+                'Your saved list and watch history are currently stored on this device.',
+                style: TextStyle(color: Colors.white54, height: 1.45),
+              ),
+            ),
+          ],
+        );
+      case 'Messages':
+        return _profileMessagePage(
+          Icons.notifications_none, 'No new messages',
+          'You are all caught up. FLIXORA messages will appear here.',
+        );
+      case 'TV Download & Web Link':
+        return _profileMessagePage(
+          Icons.live_tv_outlined, 'TV links are not connected yet',
+          'This section is reserved for verified TV download and web links.',
+        );
+      case 'Community':
+        return _profileMessagePage(
+          Icons.groups_outlined, 'Community is coming soon',
+          'Community features are not connected in this version.',
+        );
+      default:
+        return _profileContent();
+    }
+  }
+
+  Widget _profileMessagePage(IconData icon, String title, String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: gold, size: 54),
+            const SizedBox(height: 14),
+            Text(title, textAlign: TextAlign.center,
+                style: const TextStyle(color: white, fontSize: 18,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text(message, textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white54, height: 1.4)),
+          ],
         ),
-        onTap: onTap,
       ),
     );
+  }
+
+  Future<void> _showVisitorLogin() async {
+    final client = supabaseClient;
+    if (client == null) {
+      _showMessage('Visitor login is unavailable until the account service is configured.');
+      return;
+    }
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+    var isSignUp = false;
+    var busy = false;
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          backgroundColor: panel,
+          title: Text(isSignUp ? 'Create visitor account' : 'Visitor Login',
+              style: const TextStyle(color: white)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: emailController,
+                keyboardType: TextInputType.emailAddress,
+                style: const TextStyle(color: white),
+                decoration: const InputDecoration(labelText: 'Email'),
+              ),
+              TextField(
+                controller: passwordController,
+                obscureText: true,
+                style: const TextStyle(color: white),
+                decoration: const InputDecoration(labelText: 'Password'),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 8),
+                Text(errorText!, style: const TextStyle(color: Colors.redAccent)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => setDialogState(() {
+                isSignUp = !isSignUp;
+                errorText = null;
+              }),
+              child: Text(isSignUp ? 'I have an account' : 'Create account'),
+            ),
+            FilledButton(
+              onPressed: busy ? null : () async {
+                final email = emailController.text.trim();
+                final password = passwordController.text;
+                if (!email.contains('@') || password.length < 6) {
+                  setDialogState(() => errorText =
+                      'Enter a valid email and a password of at least 6 characters.');
+                  return;
+                }
+                setDialogState(() { busy = true; errorText = null; });
+                try {
+                  if (isSignUp) {
+                    final response = await client.auth.signUp(
+                      email: email, password: password,
+                    );
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                    if (mounted) {
+                      setState(() {});
+                      _showMessage(response.session == null
+                          ? 'Account created. Check your email if verification is required.'
+                          : 'Visitor account created and signed in.');
+                    }
+                  } else {
+                    await client.auth.signInWithPassword(
+                      email: email, password: password,
+                    );
+                    if (dialogContext.mounted) Navigator.pop(dialogContext);
+                    if (mounted) {
+                      setState(() {});
+                      _showMessage('Visitor login successful.');
+                    }
+                  }
+                } catch (error) {
+                  setDialogState(() {
+                    busy = false;
+                    errorText = error.toString().replaceFirst('Exception: ', '');
+                  });
+                }
+              },
+              child: busy
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(isSignUp ? 'Create account' : 'Login'),
+            ),
+          ],
+        ),
+      ),
+    );
+    emailController.dispose();
+    passwordController.dispose();
+  }
+
+  Future<void> _signOutVisitor() async {
+    try {
+      await supabaseClient?.auth.signOut();
+      if (mounted) {
+        setState(() {});
+        _showMessage('Logged out.');
+      }
+    } catch (error) {
+      _showMessage('Could not log out: $error');
+    }
+  }
+
+  Future<void> _showParentalPinDialog() async {
+    final controller = TextEditingController();
+    final prefs = await SharedPreferences.getInstance();
+    final existingPin = prefs.getString('flixora_parental_pin');
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panel,
+        title: Text(existingPin == null ? 'Set Parental PIN' : 'Change Parental PIN',
+            style: const TextStyle(color: white)),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          maxLength: 6,
+          style: const TextStyle(color: white),
+          decoration: const InputDecoration(
+            labelText: '4–6 digit PIN',
+            counterStyle: TextStyle(color: Colors.white54),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final pin = controller.text.trim();
+              if (!RegExp(r'^\d{4,6}$').hasMatch(pin)) {
+                _showMessage('PIN must contain 4 to 6 digits.');
+                return;
+              }
+              await prefs.setString('flixora_parental_pin', pin);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
+              if (mounted) _showMessage('Parental PIN saved on this device.');
+            },
+            child: const Text('Save PIN'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+  }
+
+  Future<void> _toggleStudyMode() async {
+    final nextValue = !_studyMode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('flixora_study_mode', nextValue);
+    if (!mounted) return;
+    setState(() => _studyMode = nextValue);
+    _showMessage(nextValue
+        ? 'Study Mode enabled.'
+        : 'Study Mode disabled.');
   }
 
   Widget _currentPage() {
@@ -2257,23 +2584,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _homeContent();
 
       case 1:
-        return _collectionContent('All Movies', _allMovies());
-      case 2:
-        return _collectionContent('Flixora Originals', flixoraMovies);
-      case 3:
-        return _collectionContent(
-          'My Favourites',
-          _moviesForIds(_favourites),
-        );
-      case 4:
-        return _collectionContent(
-          'Saved Movies',
-          _moviesForIds(_saved),
-        );
-      case 5:
         return _downloadsContent();
-      case 6:
-        return _profileContent();
+      case 2:
+        return _profileSection == null
+            ? _profileContent()
+            : _profileSectionContent();
       default:
         return _homeContent();
     }
@@ -2282,30 +2597,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
-    switch (_tab) {
-      case 0:
-        return 'FLIXORA';
-      case 1:
-        return 'All Movies';
-      case 2:
-        return 'Flixora Originals';
-      case 3:
-        return 'Favourites';
-      case 4:
-        return 'Saved';
-      case 5:
-        return 'Downloads';
-      case 6:
-        return 'Profile';
-      default:
-        return 'FLIXORA';
-    }
+    if (_tab == 1) return 'Downloads';
+    if (_tab == 2) return _profileSection ?? 'Profile';
+    return 'FLIXORA';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: _tab == 2 && _profileSection != null
+            ? IconButton(
+                onPressed: () => setState(() => _profileSection = null),
+                icon: const Icon(Icons.arrow_back),
+              )
+            : null,
         title: Text(
           _pageTitle(),
           style: const TextStyle(
@@ -2325,24 +2631,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
-          if (_tab == 0 || _tab == 1 || _tab == 2)
+          if (_tab == 0)
             IconButton(
-              onPressed: () {
-                setState(() {
-                  _tab = 0;
-                  _search = '';
-                  _searchController.clear();
-                });
-                FocusScope.of(context).unfocus();
-              },
-              icon: const Icon(Icons.home_outlined),
+              onPressed: loadHome,
+              icon: const Icon(Icons.refresh),
             ),
-          IconButton(
-            onPressed: loadHome,
-            icon: const Icon(Icons.refresh),
-          ),
         ],
-        bottom: PreferredSize(
+        bottom: _tab == 0 ? PreferredSize(
           preferredSize: const Size.fromHeight(58),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(15, 0, 15, 10),
@@ -2379,7 +2674,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
           ),
-        ),
+        ) : null,
       ),
       body: !_connectionKnown
           ? const Center(
@@ -2396,6 +2691,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _search = '';
             _searchController.clear();
             _searchLoading = false;
+            _profileSection = null;
             _tab = index;
           });
         },
@@ -2404,26 +2700,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             icon: Icon(Icons.home_outlined),
             selectedIcon: Icon(Icons.home),
             label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.movie_outlined),
-            selectedIcon: Icon(Icons.movie),
-            label: 'Movies',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.stars_outlined),
-            selectedIcon: Icon(Icons.stars),
-            label: 'Originals',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.favorite_border),
-            selectedIcon: Icon(Icons.favorite),
-            label: 'Liked',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.bookmark_border),
-            selectedIcon: Icon(Icons.bookmark),
-            label: 'Saved',
           ),
           NavigationDestination(
             icon: Icon(Icons.download_outlined),
@@ -3043,6 +3319,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String? _selectedQuality;
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
+  int _selectedAudioTrackIndex = 0;
 
   String? _errorMessage;
 
@@ -3316,7 +3593,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() => _tracks = value);
+      setState(() {
+        _tracks = value;
+        if (_selectedAudioTrackIndex >= value.audio.length) {
+          _selectedAudioTrackIndex = 0;
+        }
+      });
     });
 
     _completedSubscription = _player.stream.completed.listen((completed) {
@@ -3682,11 +3964,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     setState(() => _isFullscreen = !_isFullscreen);
   }
 
-  Future<void> _selectAudioTrack(AudioTrack track) async {
-    await _player.setAudioTrack(track);
-
-    if (mounted) Navigator.pop(context);
-    _startHideTimer();
+  Future<void> _selectAudioTrack(
+    AudioTrack track, {bool closeSheet = true}
+  ) async {
+    try {
+      await _player.setAudioTrack(track);
+      if (!mounted) return;
+      final index = _tracks.audio.indexOf(track);
+      setState(() => _selectedAudioTrackIndex = index < 0 ? 0 : index);
+      if (closeSheet) Navigator.pop(context);
+      _startHideTimer();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not change audio language: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
@@ -4485,8 +4779,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ),
         ),
-        if (_isBuffering)
-          const CircularProgressIndicator(color: gold),
+        if ((_isBuffering || !_initialized) && _errorMessage == null)
+          const IgnorePointer(
+            child: Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  color: gold,
+                  strokeWidth: 2.2,
+                ),
+              ),
+            ),
+          ),
         if (_errorMessage != null)
           Positioned.fill(
             child: Container(
@@ -4494,8 +4799,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               child: _playerError(),
             ),
           ),
-        if (!_initialized && _errorMessage == null)
-          const CircularProgressIndicator(color: gold),
         if (_isLocked)
           Positioned(
             left: 15,
@@ -4802,23 +5105,43 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
+  String _audioTrackLabel(AudioTrack track, int index) {
+    final title = track.title?.trim() ?? '';
+    final language = track.language?.trim() ?? '';
+    if (title.isNotEmpty) return title;
+    const languageNames = <String, String>{
+      'en': 'English', 'eng': 'English',
+      'hi': 'Hindi', 'hin': 'Hindi',
+      'bn': 'Bengali', 'ben': 'Bengali',
+      'ta': 'Tamil', 'tam': 'Tamil',
+      'te': 'Telugu', 'tel': 'Telugu',
+      'kn': 'Kannada', 'kan': 'Kannada',
+      'ml': 'Malayalam', 'mal': 'Malayalam',
+      'ja': 'Japanese', 'jpn': 'Japanese',
+      'ko': 'Korean', 'kor': 'Korean',
+      'zh': 'Chinese', 'zho': 'Chinese',
+      'es': 'Spanish', 'spa': 'Spanish',
+      'fr': 'French', 'fra': 'French',
+    };
+    if (language.isNotEmpty) {
+      return languageNames[language.toLowerCase()] ?? language;
+    }
+    return index == 0 ? 'Original / Auto' : 'Audio \${index + 1}';
+  }
+
   Widget _playerResources() {
-    if (widget.localFilePath != null) {
+    if (_tracks.audio.isEmpty) {
       return const ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.download_done, color: gold),
-        title: Text('Resources', style: TextStyle(color: white, fontWeight: FontWeight.bold)),
-        subtitle: Text('Playing downloaded file', style: TextStyle(color: Colors.white60)),
+        leading: Icon(Icons.language, color: gold),
+        title: Text('Resources',
+            style: TextStyle(color: white, fontWeight: FontWeight.bold)),
+        subtitle: Text('No alternate audio languages are available.',
+            style: TextStyle(color: Colors.white60)),
       );
     }
-    if (_availableQualities.isEmpty) {
-      return const ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.video_settings_outlined, color: gold),
-        title: Text('Resources', style: TextStyle(color: white, fontWeight: FontWeight.bold)),
-        subtitle: Text('Quality options appear when provided by FLIXORA Admin', style: TextStyle(color: Colors.white60)),
-      );
-    }
+    final selectedIndex = _selectedAudioTrackIndex
+        .clamp(0, _tracks.audio.length - 1);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -4827,27 +5150,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Resources', style: TextStyle(color: white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Text('Resources', style: TextStyle(
+                    color: white, fontSize: 18, fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
-                Text('Available video quality', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                Text('Select audio language', style: TextStyle(
+                    color: Colors.white60, fontSize: 12)),
               ],
             ),
           ),
-          DropdownButton<String>(
-            value: _availableQualities.any((item) => item['quality'] == _selectedQuality)
-                ? _selectedQuality
-                : _availableQualities.first['quality'],
+          DropdownButton<int>(
+            value: selectedIndex,
             dropdownColor: panel,
             style: const TextStyle(color: white),
             underline: Container(height: 1, color: gold),
-            items: _availableQualities.map((item) => DropdownMenuItem<String>(
-              value: item['quality'],
-              child: Text(item['quality'] ?? 'Auto'),
-            )).toList(),
-            onChanged: (quality) {
-              if (quality == null) return;
-              final item = _availableQualities.firstWhere((entry) => entry['quality'] == quality);
-              _changeVideoQuality(item);
+            items: _tracks.audio.asMap().entries.map((entry) =>
+              DropdownMenuItem<int>(
+                value: entry.key,
+                child: Text(_audioTrackLabel(entry.value, entry.key)),
+              ),
+            ).toList(),
+            onChanged: (index) {
+              if (index == null || index < 0 || index >= _tracks.audio.length) {
+                return;
+              }
+              _selectAudioTrack(_tracks.audio[index], closeSheet: false);
             },
           ),
         ],
