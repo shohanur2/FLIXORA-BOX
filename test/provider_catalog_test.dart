@@ -99,6 +99,14 @@ void main() {
       );
     });
 
+    test('allows the reference PVRPlay long subdomain', () {
+      final pvr = ProviderCatalog.forMovie(tmdbId: 157336)[2];
+      final uri = Uri.parse(pvr.url);
+
+      expect(uri.host.endsWith('.pvrplay.fun'), isTrue);
+      expect(ProviderCatalog.allowsNavigation(pvr, uri), isTrue);
+    });
+
     test('blocks HTTP, credentials, and unrelated domains', () {
       expect(
         ProviderCatalog.allowsNavigation(
