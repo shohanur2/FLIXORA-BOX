@@ -96,6 +96,7 @@ class Movie {
   final String mediaType;
   final String originalLanguage;
   final String originCountry;
+  final List<String> audioLanguages;
 
   const Movie({
     required this.id,
@@ -116,6 +117,7 @@ class Movie {
     this.mediaType = 'movie',
     this.originalLanguage = '',
     this.originCountry = '',
+    this.audioLanguages = const [],
   });
 
   bool get isFlixora => source == 'flixora';
@@ -151,6 +153,7 @@ class Movie {
         mediaType: mediaType,
         originalLanguage: originalLanguage.isNotEmpty ? originalLanguage : fallback.originalLanguage,
         originCountry: originCountry.isNotEmpty ? originCountry : fallback.originCountry,
+        audioLanguages: audioLanguages.isNotEmpty ? audioLanguages : fallback.audioLanguages,
       );
 
   factory Movie.fromJson(Map<String, dynamic> json, {String? mediaType}) {
@@ -235,6 +238,7 @@ class Movie {
       mediaType: (json['mediaType'] ?? 'movie').toString(),
       originalLanguage: (json['originalLanguage'] ?? '').toString(),
       originCountry: (json['originCountry'] ?? '').toString(),
+      audioLanguages: (json['audioLanguages'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     );
   }
 
@@ -257,6 +261,7 @@ class Movie {
         'mediaType': mediaType,
         'originalLanguage': originalLanguage,
         'originCountry': originCountry,
+        'audioLanguages': audioLanguages,
       };
 
   bool _isFullUrl(String value) {
@@ -579,8 +584,24 @@ class FlixoraMovieService {
         .where((id) => id > 0)
         .toList();
     final qualityFallbacks = <int, Map<String, String>>{};
+    final audioLanguagesByMovie = <int, List<String>>{};
 
     if (movieIds.isNotEmpty) {
+      try {
+        final audioRows = await client.from('movie_languages')
+            .select('movie_id, languages(name,code)')
+            .inFilter('movie_id', movieIds);
+        for (final item in (audioRows as List).whereType<Map>()) {
+          final row = Map<String, dynamic>.from(item);
+          final movieId = _toInt(row['movie_id']);
+          final rawLanguage = row['languages'];
+          if (movieId <= 0 || rawLanguage is! Map) continue;
+          final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
+          if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+        }
+      } catch (e) {
+        debugPrint('Could not load movie audio languages: $e');
+      }
       try {
         final qualityRows = await client
             .from('movie_video_qualities')
@@ -624,7 +645,17 @@ class FlixoraMovieService {
         final fallbackUrl = qualityFallbacks[movieId]?['video_url'] ?? '';
         if (_isHttpUrl(fallbackUrl)) row['video_url'] = fallbackUrl;
       }
-      return Movie.fromSupabase(row);
+      final movie = Movie.fromSupabase(row);
+      return Movie(
+        id: movie.id, tmdbId: movie.tmdbId, sourceId: movie.sourceId,
+        source: movie.source, title: movie.title, year: movie.year,
+        overview: movie.overview, poster: movie.poster, backdrop: movie.backdrop,
+        rating: movie.rating, releaseDate: movie.releaseDate, genres: movie.genres,
+        runtime: movie.runtime, videoUrl: movie.videoUrl, downloadUrl: movie.downloadUrl,
+        mediaType: movie.mediaType, originalLanguage: movie.originalLanguage,
+        originCountry: movie.originCountry,
+        audioLanguages: audioLanguagesByMovie[movieId] ?? const [],
+      );
     }).where((movie) => movie.sourceId > 0 && movie.hasPlayableVideoUrl).toList();
   }
 
@@ -1857,6 +1888,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  String _languageLabel(String code) {
+    const labels = {
+      'en':'English','hi':'Hindi','bn':'Bangla','ja':'Japanese','ko':'Korean',
+      'zh':'Chinese','ta':'Tamil','te':'Telugu','ml':'Malayalam','kn':'Kannada',
+      'ur':'Urdu','es':'Spanish','fr':'French','ar':'Arabic','th':'Thai',
+      'pt':'Portuguese','ru':'Russian','de':'German','it':'Italian','tr':'Turkish',
+    };
+    return labels[code.toLowerCase()] ?? (code.isEmpty ? '' : code.toUpperCase());
+  }
+
+  List<String> _posterLanguageLabels(Movie movie) {
+    if (movie.audioLanguages.isNotEmpty) return movie.audioLanguages.take(3).toList();
+    final original = _languageLabel(movie.originalLanguage);
+    return original.isEmpty ? const [] : [original];
+  }
+
   Widget _movieRow(List<Movie> movies) {
     if (movies.isEmpty) {
       return const SizedBox(height: 8);
@@ -1884,36 +1931,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       borderRadius: BorderRadius.circular(10),
                       child: SizedBox(
                         width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(
-                                  Icons.movie,
-                                  color: gold,
-                                  size: 35,
-                                ),
-                              )
-                            : CachedNetworkImage(
-                                imageUrl: movie.posterUrl,
-                                fit: BoxFit.cover,
-                                placeholder: (_, __) => Container(
-                                  color: panel,
-                                  child: const Center(
-                                    child: CircularProgressIndicator(
-                                      color: gold,
-                                      strokeWidth: 2,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            movie.posterUrl.isEmpty
+                                ? Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold, size: 35),
+                                  )
+                                : CachedNetworkImage(
+                                    imageUrl: movie.posterUrl,
+                                    fit: BoxFit.cover,
+                                    placeholder: (_, __) => Container(
+                                      color: panel,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+                                      ),
+                                    ),
+                                    errorWidget: (_, __, ___) => Container(
+                                      color: panel,
+                                      child: const Icon(Icons.movie, color: gold),
+                                    ),
+                                  ),
+                            if (_posterLanguageLabels(movie).isNotEmpty)
+                              Positioned(
+                                top: 6,
+                                left: 6,
+                                right: 6,
+                                child: Align(
+                                  alignment: Alignment.topLeft,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withValues(alpha: 0.82),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      _posterLanguageLabels(movie).join(' • '),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w800),
                                     ),
                                   ),
                                 ),
-                                errorWidget: (_, __, ___) => Container(
-                                  color: panel,
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                  ),
-                                ),
                               ),
-                      ),
+                          ],
+                        ),
+                      )
                     ),
                   ),
                   const SizedBox(height: 7),
