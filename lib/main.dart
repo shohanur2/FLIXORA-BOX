@@ -1009,6 +1009,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _slide = 0;
   int _tab = 0;
+  String _ottCategory = 'All Series';
+  String _librarySection = 'Downloads';
   bool _showRanking = false;
   String _rankingCategory = 'Cinema';
 
@@ -1906,7 +1908,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Navigator.of(context).popUntil((route) => route.isFirst);
     if (!mounted) return;
     setState(() {
-      _tab = 1;
+      _tab = 2;
+      _librarySection = 'Downloads';
       _profileSection = null;
       _search = '';
       _searchController.clear();
@@ -2803,6 +2806,143 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  List<Movie> _ottMovies() {
+    switch (_ottCategory) {
+      case 'Trending':
+        return _deduplicateMovies([...trendingTv, ...popularTv]);
+      case 'Anime':
+        return _deduplicateMovies(anime);
+      case 'Asian Drama':
+        return _deduplicateMovies(koreanDrama);
+      case 'Bengali':
+        return _deduplicateMovies(bengaliTv);
+      case 'Top Rated':
+        return _deduplicateMovies(topRatedTv);
+      case 'All Series':
+      default:
+        return _deduplicateMovies([
+          ...trendingTv, ...popularTv, ...topRatedTv,
+          ...anime, ...koreanDrama, ...bengaliTv,
+        ]);
+    }
+  }
+
+  Widget _ottContent() {
+    const categories = [
+      'All Series', 'Trending', 'Top Rated', 'Anime', 'Asian Drama', 'Bengali',
+    ];
+    final movies = _ottMovies();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 5),
+          child: Text(
+            'Explore series, anime & originals',
+            style: TextStyle(color: ink60, fontSize: 13),
+          ),
+        ),
+        SizedBox(
+          height: 48,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            scrollDirection: Axis.horizontal,
+            itemCount: categories.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final category = categories[index];
+              final selected = category == _ottCategory;
+              return ChoiceChip(
+                label: Text(category),
+                selected: selected,
+                onSelected: (_) => setState(() => _ottCategory = category),
+                selectedColor: gold.withValues(alpha: 0.18),
+                backgroundColor: Colors.white,
+                side: BorderSide(
+                  color: selected ? gold : ink12,
+                ),
+                labelStyle: TextStyle(
+                  color: selected ? gold : ink60,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              );
+            },
+          ),
+        ),
+        Expanded(
+          child: movies.isEmpty
+              ? const Center(
+                  child: Text(
+                    'Series will appear here when the catalogue loads.',
+                    style: TextStyle(color: ink54),
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              : _collectionContent(_ottCategory, movies),
+        ),
+      ],
+    );
+  }
+
+  Widget _libraryContent() {
+    const sections = ['Downloads', 'My List', 'Favourites', 'History'];
+    Widget content;
+    switch (_librarySection) {
+      case 'My List':
+        content = _collectionContent('My List', _moviesForIds(_saved));
+        break;
+      case 'Favourites':
+        content = _collectionContent('Favourites', _moviesForIds(_favourites));
+        break;
+      case 'History':
+        content = _watchHistoryPage();
+        break;
+      case 'Downloads':
+      default:
+        content = _downloadsContent();
+        break;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 2),
+          child: Text(
+            'Everything you keep, in one place.',
+            style: TextStyle(color: ink60, fontSize: 13),
+          ),
+        ),
+        SizedBox(
+          height: 48,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            scrollDirection: Axis.horizontal,
+            itemCount: sections.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final section = sections[index];
+              final selected = section == _librarySection;
+              return ChoiceChip(
+                label: Text(section),
+                selected: selected,
+                onSelected: (_) => setState(() => _librarySection = section),
+                selectedColor: gold.withValues(alpha: 0.18),
+                backgroundColor: Colors.white,
+                side: BorderSide(color: selected ? gold : ink12),
+                labelStyle: TextStyle(
+                  color: selected ? gold : ink60,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              );
+            },
+          ),
+        ),
+        Expanded(child: content),
+      ],
+    );
+  }
+
   Widget _profileContent() {
     final user = supabaseClient?.auth.currentUser;
     return ListView(
@@ -3352,8 +3492,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _homeContent();
 
       case 1:
-        return _downloadsContent();
+        return _ottContent();
       case 2:
+        return _libraryContent();
+      case 3:
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
@@ -3394,8 +3536,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
-    if (_tab == 1) return 'Downloads';
-    if (_tab == 2) return _profileSection ?? 'Me';
+    if (_tab == 1) return 'OTT';
+    if (_tab == 2) return 'Library';
+    if (_tab == 3) return _profileSection ?? 'CineProfile';
     return 'FLIXORA';
   }
 
@@ -3407,14 +3550,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
         systemOverlayStyle: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
-          statusBarIconBrightness: Brightness.light,
-          statusBarBrightness: Brightness.dark,
+          statusBarIconBrightness: _tab == 0 ? Brightness.light : Brightness.dark,
+          statusBarBrightness: _tab == 0 ? Brightness.dark : Brightness.light,
         ),
         elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
         centerTitle: _showRanking,
         toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
         titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
-        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 2 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
+        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 3 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
         title: _showRanking ? const Text('Ranking', style: TextStyle(color: white, fontWeight: FontWeight.w700)) : _tab == 0
             ? Row(
                 children: [
@@ -3536,8 +3679,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.download_outlined, Icons.download, 'Downloads'),
-                _bottomNavItem(2, Icons.person_outline, Icons.person, 'Me'),
+                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
+                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
+                _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
               ],
             ),
           ),
