@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
@@ -28,7 +31,24 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   int _progress = 0;
   bool _showingFullscreenWidget = false;
   bool _failureReported = false;
+  bool _disposed = false;
+  Timer? _loadTimeout;
   String? _errorMessage;
+
+  void _startLoadTimeout() {
+    _loadTimeout?.cancel();
+    _loadTimeout = Timer(const Duration(seconds: 30), () {
+      if (!mounted || _disposed || _failureReported) return;
+      _reportProviderFailure(
+        'This provider took too long to open. Trying another available stream.',
+      );
+    });
+  }
+
+  void _cancelLoadTimeout() {
+    _loadTimeout?.cancel();
+    _loadTimeout = null;
+  }
 
   @override
   void initState() {
@@ -56,14 +76,15 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
             });
           },
           onPageFinished: (_) {
-            if (!mounted) return;
+            if (!mounted || _disposed || _failureReported) return;
+            _cancelLoadTimeout();
             setState(() {
               _isLoading = false;
               _progress = 100;
             });
           },
           onWebResourceError: (error) {
-            if (!mounted || error.isForMainFrame == false) return;
+            if (!mounted || _disposed || error.isForMainFrame == false) return;
             _reportProviderFailure(
               'This provider page could not load. Check your internet connection or try another stream.',
             );
@@ -101,30 +122,55 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
         await platformController.setMediaPlaybackRequiresUserGesture(false);
         await platformController.setCustomWidgetCallbacks(
           onShowCustomWidget: (customWidget, onCustomWidgetHidden) {
-            if (!mounted || _showingFullscreenWidget) return;
+            if (!mounted || _disposed || _showingFullscreenWidget) {
+              onCustomWidgetHidden();
+              return;
+            }
             _showingFullscreenWidget = true;
+            unawaited(SystemChrome.setPreferredOrientations([
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]));
+            unawaited(SystemChrome.setEnabledSystemUIMode(
+              SystemUiMode.immersiveSticky,
+            ));
             Navigator.of(context)
                 .push(
                   MaterialPageRoute<void>(
                     fullscreenDialog: true,
                     builder: (_) => Scaffold(
                       backgroundColor: Colors.black,
-                      body: SafeArea(child: customWidget),
+                      body: SizedBox.expand(child: customWidget),
                     ),
                   ),
                 )
                 .whenComplete(() {
                   _showingFullscreenWidget = false;
+                  unawaited(SystemChrome.setPreferredOrientations([
+                    DeviceOrientation.portraitUp,
+                  ]));
+                  unawaited(SystemChrome.setEnabledSystemUIMode(
+                    SystemUiMode.edgeToEdge,
+                  ));
+                  // Notify Android that the custom video view is now removed.
+                  onCustomWidgetHidden();
                 });
           },
           onHideCustomWidget: () {
             if (!mounted || !_showingFullscreenWidget) return;
             _showingFullscreenWidget = false;
             Navigator.of(context).maybePop();
+            unawaited(SystemChrome.setPreferredOrientations([
+              DeviceOrientation.portraitUp,
+            ]));
+            unawaited(SystemChrome.setEnabledSystemUIMode(
+              SystemUiMode.edgeToEdge,
+            ));
           },
         );
       }
 
+      _startLoadTimeout();
       await _controller.loadRequest(Uri.parse(widget.source.url));
     } catch (_) {
       if (!mounted) return;
@@ -135,15 +181,14 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   }
 
   void _reportProviderFailure(String message) {
-    if (!mounted) return;
+    if (!mounted || _disposed || _failureReported) return;
+    _cancelLoadTimeout();
     setState(() {
       _isLoading = false;
       _errorMessage = message;
     });
-    if (!_failureReported) {
-      _failureReported = true;
-      widget.onFailure();
-    }
+    _failureReported = true;
+    widget.onFailure();
   }
 
   Future<void> _retry() async {
@@ -154,6 +199,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
       _errorMessage = null;
       _failureReported = false;
     });
+    _startLoadTimeout();
     try {
       await _controller.reload();
     } catch (_) {
@@ -163,6 +209,13 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
         _errorMessage = 'Retry failed. Please choose another stream.';
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _cancelLoadTimeout();
+    super.dispose();
   }
 
   @override
