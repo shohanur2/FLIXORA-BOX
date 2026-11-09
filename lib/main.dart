@@ -5213,10 +5213,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         Positioned.fill(
           child: ClipRect(
             child: Transform.scale(
+              alignment: Alignment.center,
               scale: _videoZoom,
               child: Video(
                 controller: _videoController,
-                fit: _videoZoom > 1.01 ? BoxFit.cover : BoxFit.contain,
+                // Fullscreen always fills both landscape edges, including
+                // the camera-cutout side. Outside fullscreen, preserve the
+                // complete frame without cropping.
+                fit: _isFullscreen
+                    ? BoxFit.cover
+                    : (_videoZoom > 1.01
+                        ? BoxFit.cover
+                        : BoxFit.contain),
                 controls: NoVideoControls,
               ),
             ),
