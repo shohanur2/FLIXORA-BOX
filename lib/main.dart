@@ -47,11 +47,27 @@ Future<void> main() async {
   runApp(const FlixoraApp());
 }
 
+// FLIXORA cinematic surfaces: Netflix-inspired black, red and premium gold.
 const Color bg = Color(0xFF080808);
-const Color panel = Color(0xFF191919);
-const Color gold = Color(0xFFD6AD45);
-const Color goldLight = Color(0xFFFFE5A3);
-const Color white = Colors.white;
+const Color panel = Color(0xFF181818);
+const Color gold = Color(0xFFE50914); // Primary Netflix red accent.
+const Color goldLight = Color(0xFFFF4652);
+const Color premiumGold = Color(0xFFD6AD45);
+const Color white = Color(0xFFFFFFFF);
+const Color ink = Color(0xFFFFFFFF);
+const Color ink70 = Color(0xB3FFFFFF);
+const Color ink60 = Color(0x99FFFFFF);
+const Color ink58 = Color(0x94FFFFFF);
+const Color ink54 = Color(0x8AFFFFFF);
+const Color ink38 = Color(0x61FFFFFF);
+const Color ink24 = Color(0x3DFFFFFF);
+const Color ink12 = Color(0x1FFFFFFF);
+const Color ink10 = Color(0x1AFFFFFF);
+const Color playerBg = Color(0xFF080808);
+const Color playerPanel = Color(0xFF191919);
+const Color playerGold = Color(0xFFD6AD45);
+const Color playerGoldLight = Color(0xFFFFE5A3);
+const Color playerWhite = Colors.white;
 
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
@@ -946,7 +962,7 @@ class FlixoraApp extends StatelessWidget {
           seedColor: gold,
           brightness: Brightness.dark,
           primary: gold,
-          secondary: goldLight,
+          secondary: premiumGold,
           surface: panel,
         ),
         appBarTheme: const AppBarTheme(
@@ -954,13 +970,13 @@ class FlixoraApp extends StatelessWidget {
           foregroundColor: white,
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFF111111),
-          indicatorColor: gold.withValues(alpha: 0.18),
+          backgroundColor: panel,
+          indicatorColor: gold.withValues(alpha: 0.16),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             return TextStyle(
               color: states.contains(WidgetState.selected)
                   ? gold
-                  : Colors.white54,
+                  : ink58,
               fontWeight: FontWeight.bold,
               fontSize: 12,
             );
@@ -994,6 +1010,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _slide = 0;
   int _tab = 0;
+  String _ottCategory = 'All Series';
+  String _librarySection = 'Downloads';
   bool _showRanking = false;
   String _rankingCategory = 'Cinema';
 
@@ -1233,7 +1251,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: panel,
         title: Text(title, style: const TextStyle(color: white)),
-        content: Text(message, style: const TextStyle(color: Colors.white70, height: 1.45)),
+        content: Text(message, style: const TextStyle(color: ink70, height: 1.45)),
         actions: [TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close'))],
       ),
     );
@@ -1697,7 +1715,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: Colors.white70,
+                    color: ink70,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1717,7 +1735,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         child: ListTile(
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                            side: const BorderSide(color: Colors.white12),
+                            side: const BorderSide(color: ink12),
                           ),
                           leading: const Icon(
                             Icons.high_quality_rounded,
@@ -1734,7 +1752,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           subtitle: Text(
                             'File size: ${item['size_label']}',
                             style: const TextStyle(
-                              color: Colors.white70,
+                              color: ink70,
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                             ),
@@ -1824,7 +1842,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: panel,
         title: const Text('Delete Download?', style: TextStyle(color: white)),
-        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: Colors.white70)),
+        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: ink70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
           TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete', style: TextStyle(color: Colors.redAccent))),
@@ -1857,7 +1875,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           content: Text(
             message,
             style: const TextStyle(
-              color: Colors.white,
+              color: ink,
               fontSize: 14,
               fontWeight: FontWeight.w700,
             ),
@@ -1891,7 +1909,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Navigator.of(context).popUntil((route) => route.isFirst);
     if (!mounted) return;
     setState(() {
-      _tab = 1;
+      _tab = 2;
+      _librarySection = 'Downloads';
       _profileSection = null;
       _search = '';
       _searchController.clear();
@@ -2260,7 +2279,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => setState(() => _sectionFilters[title] = value),
-                  child: Center(child: Text(value, style: TextStyle(color: active ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                  child: Center(child: Text(value, style: TextStyle(color: active ? gold : ink60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
                 );
               },
             ),
@@ -2326,13 +2345,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      const Icon(Icons.star, color: gold, size: 12),
+                      const Icon(Icons.star, color: premiumGold, size: 12),
                       const SizedBox(width: 3),
                       Text(movie.rating.toStringAsFixed(1),
-                          style: const TextStyle(color: Colors.white60, fontSize: 10)),
+                          style: const TextStyle(color: ink60, fontSize: 10)),
                       const SizedBox(width: 6),
                       Text(movie.year,
-                          style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                          style: const TextStyle(color: ink54, fontSize: 10)),
                     ],
                   ),
                 ],
@@ -2424,7 +2443,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   width: _slide == index ? 18 : 6,
                   height: 6,
                   decoration: BoxDecoration(
-                    color: _slide == index ? Colors.white : Colors.white54,
+                    color: _slide == index ? gold : const Color(0x8AFFFFFF),
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
@@ -2523,7 +2542,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
-                                        color: Colors.white60,
+                                        color: ink60,
                                         fontSize: 10,
                                         fontWeight: FontWeight.w600,
                                       ),
@@ -2534,8 +2553,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               const SizedBox(width: 5),
                               const CircleAvatar(
                                 radius: 12,
-                                backgroundColor: Colors.greenAccent,
-                                child: Icon(Icons.play_arrow, color: Colors.black, size: 18),
+                                backgroundColor: gold,
+                                child: Icon(Icons.play_arrow, color: Colors.white, size: 18),
                               ),
                             ],
                           ),
@@ -2667,7 +2686,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return Center(
         child: Text(
           'No $title available.',
-          style: const TextStyle(color: Colors.white54),
+          style: const TextStyle(color: ink54),
         ),
       );
     }
@@ -2730,7 +2749,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               Text(
                 movie.year,
                 style: const TextStyle(
-                  color: Colors.white54,
+                  color: ink54,
                   fontSize: 10,
                 ),
               ),
@@ -2752,7 +2771,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return Center(
         child: Text(
           _searchError ?? 'Search for a movie.',
-          style: const TextStyle(color: Colors.white54),
+          style: const TextStyle(color: ink54),
         ),
       );
     }
@@ -2788,6 +2807,143 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  List<Movie> _ottMovies() {
+    switch (_ottCategory) {
+      case 'Trending':
+        return _deduplicateMovies([...trendingTv, ...popularTv]);
+      case 'Anime':
+        return _deduplicateMovies(anime);
+      case 'Asian Drama':
+        return _deduplicateMovies(koreanDrama);
+      case 'Bengali':
+        return _deduplicateMovies(bengaliTv);
+      case 'Top Rated':
+        return _deduplicateMovies(topRatedTv);
+      case 'All Series':
+      default:
+        return _deduplicateMovies([
+          ...trendingTv, ...popularTv, ...topRatedTv,
+          ...anime, ...koreanDrama, ...bengaliTv,
+        ]);
+    }
+  }
+
+  Widget _ottContent() {
+    const categories = [
+      'All Series', 'Trending', 'Top Rated', 'Anime', 'Asian Drama', 'Bengali',
+    ];
+    final movies = _ottMovies();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 5),
+          child: Text(
+            'Explore series, anime & originals',
+            style: TextStyle(color: ink60, fontSize: 13),
+          ),
+        ),
+        SizedBox(
+          height: 48,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            scrollDirection: Axis.horizontal,
+            itemCount: categories.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final category = categories[index];
+              final selected = category == _ottCategory;
+              return ChoiceChip(
+                label: Text(category),
+                selected: selected,
+                onSelected: (_) => setState(() => _ottCategory = category),
+                selectedColor: gold,
+                backgroundColor: panel,
+                side: BorderSide(
+                  color: selected ? gold : ink24,
+                ),
+                labelStyle: TextStyle(
+                  color: selected ? white : ink70,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              );
+            },
+          ),
+        ),
+        Expanded(
+          child: movies.isEmpty
+              ? const Center(
+                  child: Text(
+                    'Series will appear here when the catalogue loads.',
+                    style: TextStyle(color: ink54),
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              : _collectionContent(_ottCategory, movies),
+        ),
+      ],
+    );
+  }
+
+  Widget _libraryContent() {
+    const sections = ['Downloads', 'My List', 'Favourites', 'History'];
+    Widget content;
+    switch (_librarySection) {
+      case 'My List':
+        content = _collectionContent('My List', _moviesForIds(_saved));
+        break;
+      case 'Favourites':
+        content = _collectionContent('Favourites', _moviesForIds(_favourites));
+        break;
+      case 'History':
+        content = _watchHistoryPage();
+        break;
+      case 'Downloads':
+      default:
+        content = _downloadsContent();
+        break;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 2),
+          child: Text(
+            'Everything you keep, in one place.',
+            style: TextStyle(color: ink60, fontSize: 13),
+          ),
+        ),
+        SizedBox(
+          height: 48,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+            scrollDirection: Axis.horizontal,
+            itemCount: sections.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final section = sections[index];
+              final selected = section == _librarySection;
+              return ChoiceChip(
+                label: Text(section),
+                selected: selected,
+                onSelected: (_) => setState(() => _librarySection = section),
+                selectedColor: gold,
+                backgroundColor: panel,
+                side: BorderSide(color: selected ? gold : ink24),
+                labelStyle: TextStyle(
+                  color: selected ? white : ink70,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              );
+            },
+          ),
+        ),
+        Expanded(child: content),
+      ],
+    );
+  }
+
   Widget _profileContent() {
     final user = supabaseClient?.auth.currentUser;
     return ListView(
@@ -2816,7 +2972,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 4),
                   Text(
                     user == null ? 'Sign in to sync your account' : 'Visitor account',
-                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    style: const TextStyle(color: ink54, fontSize: 12),
                   ),
                 ],
               ),
@@ -2827,7 +2983,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+          decoration: BoxDecoration(
+            color: panel,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: gold.withValues(alpha: 0.28)),
+          ),
+          child: Row(
+            children: [
+              _cineProfileStat('WATCHED', _watchHistory.length.toString()),
+              _cineProfileDivider(),
+              _cineProfileStat('MY LIST', _saved.length.toString()),
+              _cineProfileDivider(),
+              _cineProfileStat(
+                'DOWNLOADS',
+                _downloads.where((task) => task.status == 'Completed').length.toString(),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
         _profileGroup([
           _profileTile(Icons.card_giftcard, 'Rewards Center',
               () => _openProfileSection('Rewards Center')),
@@ -2844,7 +3021,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               trailingText: '${_favourites.length}'),
           _profileTile(Icons.notifications_none, 'Messages',
               () => _openProfileSection('Messages'),
-              trailing: const Icon(Icons.chevron_right, color: Colors.white54)),
+              trailing: const Icon(Icons.chevron_right, color: ink54)),
           _profileTile(Icons.live_tv_outlined, 'TV Download & Web Link',
               () => _openProfileSection('TV Download & Web Link'),
               trailing: const Text('NEW', style: TextStyle(
@@ -2874,11 +3051,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const Center(
           child: Text(
             'FLIXORA  •  Movies, made simple.',
-            style: TextStyle(color: Colors.white38, fontSize: 12),
+            style: TextStyle(color: ink38, fontSize: 12),
           ),
         ),
       ],
     );
+  }
+
+  Widget _cineProfileStat(String label, String value) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: gold,
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: ink54,
+              fontSize: 9,
+              letterSpacing: 0.8,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cineProfileDivider() {
+    return Container(width: 1, height: 34, color: ink12);
   }
 
   Widget _watchHistoryPreview() {
@@ -2886,15 +3094,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       Padding(
         padding: const EdgeInsets.fromLTRB(4, 2, 2, 10),
         child: Row(children: [
-          const Icon(Icons.history, color: Colors.white70, size: 20),
+          const Icon(Icons.history, color: ink70, size: 20),
           const SizedBox(width: 9),
           const Expanded(child: Text('Watch History', style: TextStyle(color: white, fontSize: 17, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic))),
-          Text('${_watchHistory.length}', style: const TextStyle(color: Colors.white54)),
-          IconButton(tooltip: 'View all watch history', onPressed: () => _openProfileSection('Watch History'), icon: const Icon(Icons.chevron_right, color: Colors.white70, size: 25)),
+          Text('${_watchHistory.length}', style: const TextStyle(color: ink54)),
+          IconButton(tooltip: 'View all watch history', onPressed: () => _openProfileSection('Watch History'), icon: const Icon(Icons.chevron_right, color: ink70, size: 25)),
         ]),
       ),
       if (_watchHistory.isEmpty)
-        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 12), child: Text('Movies you play will appear here.', style: TextStyle(color: Colors.white54)))
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 12), child: Text('Movies you play will appear here.', style: TextStyle(color: ink54)))
       else
         SizedBox(height: 112, child: ListView.separated(
           scrollDirection: Axis.horizontal, itemCount: _watchHistory.length,
@@ -2929,10 +3137,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
             const SizedBox(height: 7),
-            const Text('Recently watched', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+            const Text('Recently watched', style: TextStyle(color: ink60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
           ])),
           PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: Colors.white60), color: panel,
+            icon: const Icon(Icons.more_vert, color: ink60), color: panel,
             onSelected: (value) async {
               if (value == 'remove') {
                 setState(() => _watchHistory.removeWhere((item) => item.id == movie.id));
@@ -2941,7 +3149,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
           ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: Colors.white70, child: Icon(Icons.play_arrow, color: Colors.black, size: 21))),
+          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
         ]);
       },
     );
@@ -2964,7 +3172,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Widget? trailing,
   }) {
     return ListTile(
-      leading: Icon(icon, color: Colors.white70),
+      leading: Icon(icon, color: ink70),
       title: Text(title, style: const TextStyle(
         color: white, fontWeight: FontWeight.w600,
       )),
@@ -2975,9 +3183,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Padding(
               padding: const EdgeInsets.only(right: 6),
               child: Text(trailingText,
-                  style: const TextStyle(color: Colors.white54)),
+                  style: const TextStyle(color: ink54)),
             ),
-          const Icon(Icons.chevron_right, color: Colors.white54),
+          const Icon(Icons.chevron_right, color: ink54),
         ],
       ),
       onTap: onTap,
@@ -3023,11 +3231,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _settingSwitch({required String title, required String subtitle, required bool value, required ValueChanged<bool> onChanged}) {
     return SwitchListTile(
-      value: value, onChanged: onChanged, activeThumbColor: Colors.white,
-      activeTrackColor: const Color(0xFF22DCA0), inactiveThumbColor: Colors.white,
-      inactiveTrackColor: Colors.white24,
+      value: value, onChanged: onChanged, activeThumbColor: ink,
+      activeTrackColor: gold, inactiveThumbColor: ink,
+      inactiveTrackColor: ink24,
       title: Text(title, style: const TextStyle(color: white, fontSize: 15, fontStyle: FontStyle.italic)),
-      subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12, height: 1.3))),
+      subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: ink60, fontSize: 12, height: 1.3))),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
     );
   }
@@ -3035,10 +3243,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _settingsContent() {
     return Column(children: [
       Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 14, 12, 16), children: [
-        const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: Colors.white70, fontSize: 13))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 2, 4, 9), child: Text('Your app and preferences', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.notifications_none, 'Notifications', () => _saveBoolSetting('flixora_notifications', !_notificationsEnabled, (x) => _notificationsEnabled = x),
-            trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: Colors.white, activeTrackColor: const Color(0xFF22DCA0))),
+            trailing: Switch(value: _notificationsEnabled, onChanged: (v) => _saveBoolSetting('flixora_notifications', v, (x) => _notificationsEnabled = x), activeThumbColor: ink, activeTrackColor: gold)),
           _profileTile(Icons.language, 'Language', _showLanguagePicker, trailingText: _appLanguage),
           _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
           _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
@@ -3047,7 +3255,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
         ]),
         const SizedBox(height: 20),
-        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: Colors.white70, fontSize: 13))),
+        const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.system_update, 'Check update', () => _showSettingsInfo('Check update', 'Automatic update checking is not connected to a release service yet. Install new FLIXORA versions from the official release when available.')),
           _profileTile(Icons.info_outline, 'About us', () => _showSettingsInfo('About FLIXORA', 'FLIXORA is a free movie and series discovery and streaming app.')),
@@ -3072,7 +3280,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text(message, textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54, height: 1.4)),
+                style: const TextStyle(color: ink54, height: 1.4)),
           ],
         ),
       ),
@@ -3209,7 +3417,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           style: const TextStyle(color: white),
           decoration: const InputDecoration(
             labelText: '4–6 digit PIN',
-            counterStyle: TextStyle(color: Colors.white54),
+            counterStyle: TextStyle(color: ink54),
           ),
         ),
         actions: [
@@ -3263,14 +3471,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const categories = ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
     final movies = _rankingMovies();
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF24252B), child: ListView.builder(
+      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFFF0EEE8), child: ListView.builder(
         padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
         itemBuilder: (context, index) {
           final category = categories[index]; final selected = category == _rankingCategory;
-          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? const Color(0xFF22DCA0) : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
+          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? gold : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
         },
       ))),
-      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: Colors.white54))) : ListView.builder(
+      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
@@ -3283,9 +3491,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(movie.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 14, fontWeight: FontWeight.w700)),
               const Spacer(),
-              Row(children: [const Icon(Icons.star, color: gold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: gold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white54, fontSize: 11)))]),
+              Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: Color(0xFF22DCA0), size: 34), tooltip: 'Play'),
+            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
@@ -3329,7 +3537,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return const Center(
             child: Text(
               'No movies available yet.',
-              style: TextStyle(color: Colors.white54),
+              style: TextStyle(color: ink54),
             ),
           );
         }
@@ -3337,8 +3545,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _homeContent();
 
       case 1:
-        return _downloadsContent();
+        return _ottContent();
       case 2:
+        return _libraryContent();
+      case 3:
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
@@ -3367,9 +3577,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 22, color: selected ? const Color(0xFF22DCA0) : Colors.white60),
+              Icon(selected ? activeIcon : icon, size: 22, color: selected ? gold : ink60),
               const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? const Color(0xFF22DCA0) : Colors.white60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+              Text(label, style: TextStyle(color: selected ? gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
             ],          ),
         ),
       ),
@@ -3379,8 +3589,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
-    if (_tab == 1) return 'Downloads';
-    if (_tab == 2) return _profileSection ?? 'Me';
+    if (_tab == 1) return 'OTT';
+    if (_tab == 2) return 'Library';
+    if (_tab == 3) return _profileSection ?? 'CineProfile';
     return 'FLIXORA';
   }
 
@@ -3390,7 +3601,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
       appBar: AppBar(
         backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
-        systemOverlayStyle: const SystemUiOverlayStyle(
+        systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
           statusBarBrightness: Brightness.dark,
@@ -3399,7 +3610,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         centerTitle: _showRanking,
         toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
         titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
-        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 2 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
+        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 3 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
         title: _showRanking ? const Text('Ranking', style: TextStyle(color: white, fontWeight: FontWeight.w700)) : _tab == 0
             ? Row(
                 children: [
@@ -3414,9 +3625,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Container(
                       height: 46,
                       decoration: BoxDecoration(
-                        color: const Color(0xAA292929),
+                        color: Colors.transparent,
                         borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: Colors.white12),
+                        border: Border.all(color: white.withValues(alpha: 0.24)),
                       ),
                       child: TextField(
                         controller: _searchController,
@@ -3426,12 +3637,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         decoration: InputDecoration(
                           hintText: 'Search movies & series...',
                           hintStyle: const TextStyle(
-                            color: Colors.white54,
+                            color: ink54,
                             fontSize: 13,
                           ),
                           prefixIcon: const Icon(
                             Icons.search,
-                            color: Colors.white70,
+                            color: ink70,
                             size: 21,
                           ),
                           suffixIcon: _searchController.text.isEmpty
@@ -3443,7 +3654,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   },
                                   icon: const Icon(
                                     Icons.close,
-                                    color: Colors.white54,
+                                    color: ink54,
                                     size: 18,
                                   ),
                                 ),
@@ -3462,7 +3673,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       _onSearchChanged(_searchController.text);
                     },
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.greenAccent,
+                      foregroundColor: gold,
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                     ),
                     child: const Text(
@@ -3494,7 +3705,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         : 'No internet connection',
                     child: Icon(
                       _online ? Icons.wifi_rounded : Icons.wifi_off_rounded,
-                      color: _online ? Colors.greenAccent : Colors.redAccent,
+                      color: _online ? gold : Colors.redAccent,
                     ),
                   ),
                 ),
@@ -3509,20 +3720,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
-        color: const Color(0xF217181D),
+        color: panel,
         child: SafeArea(
           top: false,
           maintainBottomViewPadding: true,
           child: Container(
             height: 56,
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: Colors.white10, width: 0.5)),
+              border: Border(top: BorderSide(color: ink10, width: 0.5)),
             ),
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.download_outlined, Icons.download, 'Downloads'),
-                _bottomNavItem(2, Icons.person_outline, Icons.person, 'Me'),
+                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
+                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
+                _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
               ],
             ),
           ),
@@ -3585,7 +3797,7 @@ class NoInternetScreen extends StatelessWidget {
                 'Please check your internet connection and try again.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white,
+                  color: ink,
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
                 ),
@@ -3594,7 +3806,7 @@ class NoInternetScreen extends StatelessWidget {
               FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: gold,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                 ),
                 onPressed: () => _openWifiSettings(context),
                 icon: const Icon(Icons.settings),
@@ -3644,7 +3856,7 @@ class DownloadsScreen extends StatelessWidget {
                 'Your saved videos will appear here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white70,
+                  color: ink70,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
@@ -3693,7 +3905,7 @@ class DownloadsScreen extends StatelessWidget {
                   border: Border.all(
                     color: completed
                         ? const Color(0x5539E69B)
-                        : Colors.white12,
+                        : ink12,
                   ),
                 ),
                 child: Row(
@@ -3746,7 +3958,7 @@ class DownloadsScreen extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                              color: Colors.white70,
+                              color: ink70,
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -3777,7 +3989,7 @@ class DownloadsScreen extends StatelessWidget {
                                         ? task.progress
                                         : (completed ? 1 : null),
                                     minHeight: 6,
-                                    backgroundColor: Colors.white24,
+                                    backgroundColor: ink24,
                                     color: statusColor,
                                   ),
                                 ),
@@ -3802,7 +4014,7 @@ class DownloadsScreen extends StatelessWidget {
                             Text(
                               'Downloaded: ${DownloadManager.formatBytes(task.bytesReceived)}',
                               style: const TextStyle(
-                                color: Colors.white70,
+                                color: ink70,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -3822,7 +4034,7 @@ class DownloadsScreen extends StatelessWidget {
                               : null,
                           icon: Icon(
                             Icons.play_circle_fill,
-                            color: completed ? const Color(0xFF39E69B) : Colors.white24,
+                            color: completed ? const Color(0xFF39E69B) : ink24,
                           ),
                         ),
                         IconButton(
@@ -3961,7 +4173,7 @@ class MovieDetailsScreen extends StatelessWidget {
                             Text(
                               movie.year,
                               style: const TextStyle(
-                                color: Colors.white60,
+                                color: ink60,
                               ),
                             ),                            const SizedBox(height: 8),
                             Row(
@@ -3985,14 +4197,14 @@ class MovieDetailsScreen extends StatelessWidget {
                               const SizedBox(height: 8),
                               Text(
                                 'Country: ${movie.originCountry}',
-                                style: const TextStyle(color: Colors.white60),
+                                style: const TextStyle(color: ink60),
                               ),
                             ],
                             if (movie.originalLanguage.isNotEmpty) ...[
                               const SizedBox(height: 6),
                               Text(
                                 'Language: ${movie.originalLanguage.toUpperCase()}',
-                                style: const TextStyle(color: Colors.white60),
+                                style: const TextStyle(color: ink60),
                               ),
                             ],
                             if (movie.runtime != null &&
@@ -4001,7 +4213,7 @@ class MovieDetailsScreen extends StatelessWidget {
                               Text(
                                 '${movie.runtime} min',
                                 style: const TextStyle(
-                                  color: Colors.white60,
+                                  color: ink60,
                                 ),
                               ),
                             ],
@@ -4044,7 +4256,7 @@ class MovieDetailsScreen extends StatelessWidget {
                         ? 'No description available.'
                         : movie.overview,
                     style: const TextStyle(
-                      color: Colors.white70,
+                      color: ink70,
                       height: 1.6,
                       fontSize: 14,
                     ),
@@ -4057,7 +4269,7 @@ class MovieDetailsScreen extends StatelessWidget {
                       child: FilledButton.icon(
                         style: FilledButton.styleFrom(
                           backgroundColor: gold,
-                          foregroundColor: Colors.black,
+                          foregroundColor: Colors.white,
                         ),
                         onPressed: onWatch,
                         icon: const Icon(
@@ -4078,7 +4290,7 @@ class MovieDetailsScreen extends StatelessWidget {
                       padding: EdgeInsets.symmetric(vertical: 10),
                       child: Text(
                         'This title is not currently available to stream on FLIXORA.',
-                        style: TextStyle(color: Colors.white60, fontSize: 13),
+                        style: TextStyle(color: ink60, fontSize: 13),
                       ),
                     ),
                   const SizedBox(height: 12),
@@ -4330,12 +4542,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, color: goldLight, size: 14),
+        Icon(icon, color: playerGoldLight, size: 14),
         const SizedBox(width: 4),
         Text(
           label,
           style: const TextStyle(
-            color: Colors.white70,
+            color: Color(0xB3FFFFFF),
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
@@ -5036,17 +5248,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          backgroundColor: panel,
+          backgroundColor: playerPanel,
           title: const Text(
             'External Subtitle',
-            style: TextStyle(color: white),
+            style: TextStyle(color: playerWhite),
           ),
           content: TextField(
             controller: controller,
-            style: const TextStyle(color: white),
+            style: const TextStyle(color: playerWhite),
             decoration: const InputDecoration(
               hintText: 'Enter subtitle URL',
-              hintStyle: TextStyle(color: Colors.white38),
+              hintStyle: TextStyle(color: Color(0x61FFFFFF)),
             ),
           ),
           actions: [
@@ -5118,7 +5330,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: panel,
+      backgroundColor: playerPanel,
       builder: (context) {
         return SafeArea(
           child: Padding(
@@ -5130,7 +5342,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 const Text(
                   'Audio Track',
                   style: TextStyle(
-                    color: white,
+                    color: playerWhite,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -5139,17 +5351,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 if (audioTracks.isEmpty)
                   const Text(
                     'No audio tracks available.',
-                    style: TextStyle(color: Colors.white54),
+                    style: TextStyle(color: Color(0x8AFFFFFF)),
                   ),
                 ...audioTracks.map((track) {
                   return ListTile(
                     leading: const Icon(
                       Icons.audiotrack,
-                      color: gold,
+                      color: playerGold,
                     ),
                     title: Text(
                       track.title ?? track.language ?? 'Audio',
-                      style: const TextStyle(color: white),
+                      style: const TextStyle(color: playerWhite),
                     ),
                     onTap: () => _selectAudioTrack(track),
                   );
@@ -5167,7 +5379,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: panel,
+      backgroundColor: playerPanel,
       builder: (context) {
         return SafeArea(
           child: Padding(
@@ -5179,7 +5391,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 const Text(
                   'Subtitles',
                   style: TextStyle(
-                    color: white,
+                    color: playerWhite,
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
@@ -5188,11 +5400,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ListTile(
                   leading: const Icon(
                     Icons.subtitles_off,
-                    color: gold,
+                    color: playerGold,
                   ),
                   title: const Text(
                     'Off',
-                    style: TextStyle(color: white),
+                    style: TextStyle(color: playerWhite),
                   ),
                   onTap: () => _selectSubtitleTrack(
                     SubtitleTrack.no(),
@@ -5202,20 +5414,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   return ListTile(
                     leading: const Icon(
                       Icons.subtitles,
-                      color: gold,
+                      color: playerGold,
                     ),
                     title: Text(
                       track.title ?? track.language ?? 'Subtitle',
-                      style: const TextStyle(color: white),
+                      style: const TextStyle(color: playerWhite),
                     ),
                     onTap: () => _selectSubtitleTrack(track),
                   );
                 }),
                 ListTile(
-                  leading: const Icon(Icons.add, color: gold),
+                  leading: const Icon(Icons.add, color: playerGold),
                   title: const Text(
                     'Add External Subtitle',
-                    style: TextStyle(color: white),
+                    style: TextStyle(color: playerWhite),
                   ),
                   onTap: _addExternalSubtitle,
                 ),
@@ -5266,7 +5478,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     final selected = await showModalBottomSheet<Map<String, String>>(
       context: context,
-      backgroundColor: panel,
+      backgroundColor: playerPanel,
       isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
         child: Padding(
@@ -5278,7 +5490,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               const Text(
                 'Select video quality',
                 style: TextStyle(
-                  color: white,
+                  color: playerWhite,
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
@@ -5286,7 +5498,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               const SizedBox(height: 6),
               const Text(
                 'Changes the encoded resolution of this same movie.',
-                style: TextStyle(color: Colors.white60, fontSize: 12),
+                style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
               ),
               const SizedBox(height: 14),
               Wrap(
@@ -5299,10 +5511,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   return ChoiceChip(
                     label: Text(label),
                     selected: active,
-                    selectedColor: gold,
-                    backgroundColor: bg,
+                    selectedColor: playerGold,
+                    backgroundColor: playerBg,
                     labelStyle: TextStyle(
-                      color: active ? Colors.black : white,
+                      color: active ? Colors.black : playerWhite,
                       fontWeight: FontWeight.w600,
                     ),
                     onSelected: (_) => Navigator.pop(sheetContext, item),
@@ -5327,7 +5539,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: panel,
+      backgroundColor: playerPanel,
       isScrollControlled: true,
       builder: (context) {
         const speeds = [
@@ -5357,7 +5569,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     const Text(
                       'Playback Settings',
                       style: TextStyle(
-                        color: white,
+                        color: playerWhite,
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
@@ -5365,25 +5577,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     const SizedBox(height: 20),
                     Row(
                       children: [
-                        const Icon(Icons.brightness_6_outlined, color: gold, size: 20),
+                        const Icon(Icons.brightness_6_outlined, color: playerGold, size: 20),
                         const SizedBox(width: 9),
                         const Expanded(
                           child: Text(
                             'Screen Brightness',
-                            style: TextStyle(color: white, fontWeight: FontWeight.w600),
+                            style: TextStyle(color: playerWhite, fontWeight: FontWeight.w600),
                           ),
                         ),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
-                            color: bg,
+                            color: playerBg,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: gold.withValues(alpha: 0.45)),
+                            border: Border.all(color: playerGold.withValues(alpha: 0.45)),
                           ),
                           child: Text(
                             '${(sheetBrightness * 100).round()}%',
                             style: const TextStyle(
-                              color: goldLight,
+                              color: playerGoldLight,
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
@@ -5395,10 +5607,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     SliderTheme(
                       data: SliderTheme.of(sheetContext).copyWith(
                         trackHeight: 4,
-                        activeTrackColor: gold,
-                        inactiveTrackColor: Colors.white24,
-                        thumbColor: Colors.white,
-                        overlayColor: gold.withValues(alpha: 0.18),
+                        activeTrackColor: playerGold,
+                        inactiveTrackColor: Color(0x3DFFFFFF),
+                        thumbColor: playerWhite,
+                        overlayColor: playerGold.withValues(alpha: 0.18),
                         showValueIndicator: ShowValueIndicator.never,
                         trackShape: const RoundedRectSliderTrackShape(),
                         thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
@@ -5425,15 +5637,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     const Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Dim', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                        Text('Bright', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                        Text('Dim', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
+                        Text('Bright', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
                       ],
                     ),
                     const SizedBox(height: 14),
                     const Text(
                       'Playback Speed',
                       style: TextStyle(
-                        color: gold,
+                        color: playerGold,
                         fontWeight: FontWeight.bold,
                       ),
                     ),                    const SizedBox(height: 10),
@@ -5446,10 +5658,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         return ChoiceChip(
                           label: Text('${speed}x'),
                           selected: selected,
-                          selectedColor: gold,
-                          backgroundColor: bg,
+                          selectedColor: playerGold,
+                          backgroundColor: playerBg,
                           labelStyle: TextStyle(
-                            color: selected ? Colors.black : white,
+                            color: selected ? Colors.black : playerWhite,
                           ),
                           onSelected: (_) async {
                             await _changeSpeed(speed);
@@ -5466,15 +5678,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(
                         Icons.audiotrack,
-                        color: gold,
+                        color: playerGold,
                       ),
                       title: const Text(
                         'Audio Track',
-                        style: TextStyle(color: white),
+                        style: TextStyle(color: playerWhite),
                       ),
                       trailing: const Icon(
                         Icons.chevron_right,
-                        color: Colors.white54,
+                        color: Color(0x8AFFFFFF),
                       ),
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -5485,15 +5697,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(
                         Icons.subtitles,
-                        color: gold,
+                        color: playerGold,
                       ),
                       title: const Text(
                         'Subtitles',
-                        style: TextStyle(color: white),
+                        style: TextStyle(color: playerWhite),
                       ),
                       trailing: const Icon(
                         Icons.chevron_right,
-                        color: Colors.white54,
+                        color: Color(0x8AFFFFFF),
                       ),
                       onTap: () {
                         Navigator.pop(sheetContext);
@@ -5516,7 +5728,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         IconButton(
           onPressed: () => _seekBy(-10),
           iconSize: 38,
-          color: white,
+          color: playerWhite,
           icon: const Icon(Icons.replay_10_rounded),
         ),
         const SizedBox(width: 25),
@@ -5527,14 +5739,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             color: Colors.black54,
             shape: BoxShape.circle,
             border: Border.all(
-              color: gold.withValues(alpha: 0.6),
+              color: playerGold.withValues(alpha: 0.6),
               width: 1.5,
             ),
           ),
           child: IconButton(
             onPressed: _togglePlay,
             iconSize: 38,
-            color: gold,
+            color: playerGold,
             icon: Icon(
               _isPlaying
                   ? Icons.pause_rounded
@@ -5546,7 +5758,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         IconButton(
           onPressed: () => _seekBy(10),
           iconSize: 38,
-          color: white,
+          color: playerWhite,
           icon: const Icon(Icons.forward_10_rounded),
         ),
       ],
@@ -5569,7 +5781,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               Text(
                 _formatDuration(_position),
                 style: const TextStyle(
-                  color: white,
+                  color: playerWhite,
                   fontSize: 11,
                 ),
               ),
@@ -5577,10 +5789,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 child: SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 2.5,
-                    activeTrackColor: gold,
-                    inactiveTrackColor: Colors.white30,
-                    thumbColor: white,
-                    overlayColor: gold.withValues(alpha: 0.16),
+                    activeTrackColor: playerGold,
+                    inactiveTrackColor: Color(0x4DFFFFFF),
+                    thumbColor: playerWhite,
+                    overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
                       enabledThumbRadius: 5.5,
                     ),
@@ -5607,7 +5819,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               Text(
                 _formatDuration(_duration),
                 style: const TextStyle(
-                  color: white,
+                  color: playerWhite,
                   fontSize: 11,
                 ),
               ),
@@ -5624,7 +5836,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 onPressed: () => _changeVolume(_volume - 10),
                 icon: const Icon(
                   Icons.volume_down,
-                  color: white,
+                  color: playerWhite,
                   size: 20,
                 ),
               ),
@@ -5633,10 +5845,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 child: SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
-                    activeTrackColor: gold,
-                    inactiveTrackColor: Colors.white24,
-                    thumbColor: Colors.white,
-                    overlayColor: gold.withValues(alpha: 0.16),
+                    activeTrackColor: playerGold,
+                    inactiveTrackColor: Color(0x3DFFFFFF),
+                    thumbColor: playerWhite,
+                    overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
                       enabledThumbRadius: 5,
                     ),
@@ -5661,7 +5873,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 onPressed: () => _changeVolume(_volume + 10),
                 icon: const Icon(
                   Icons.volume_up,
-                  color: white,
+                  color: playerWhite,
                   size: 20,
                 ),
               ),
@@ -5670,7 +5882,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 child: Text(
                   '${_speed}x',
                   style: const TextStyle(
-                    color: gold,
+                    color: playerGold,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -5697,7 +5909,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             },
             icon: const Icon(
               Icons.arrow_back,
-              color: white,
+              color: playerWhite,
             ),
           ),
           Expanded(
@@ -5706,7 +5918,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: white,
+                color: playerWhite,
                 fontWeight: FontWeight.bold,
                 fontSize: 15,
               ),
@@ -5716,9 +5928,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             const SizedBox(width: 6),
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
-                foregroundColor: white,
+                foregroundColor: playerWhite,
                 side: BorderSide(
-                  color: _availableQualities.isNotEmpty ? gold : Colors.white30,
+                  color: _availableQualities.isNotEmpty ? playerGold : Color(0x4DFFFFFF),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
                 minimumSize: Size.zero,
@@ -5743,7 +5955,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             onPressed: _showSettings,
             icon: const Icon(
               Icons.settings,
-              color: white,
+              color: playerWhite,
             ),
           ),
           IconButton(
@@ -5756,7 +5968,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             },
             icon: const Icon(
               Icons.lock_outline,
-              color: white,
+              color: playerWhite,
             ),
           ),
         ],
@@ -5773,19 +5985,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           children: [
             const Icon(
               Icons.error_outline,
-              color: gold,
+              color: playerGold,
               size: 55,
             ),
             const SizedBox(height: 15),
             Text(
               _errorMessage ?? 'Playback error',
               textAlign: TextAlign.center,
-              style: const TextStyle(color: white),
+              style: const TextStyle(color: playerWhite),
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
               style: FilledButton.styleFrom(
-                backgroundColor: gold,
+                backgroundColor: playerGold,
                 foregroundColor: Colors.black,
               ),
               onPressed: _initializePlayer,
@@ -5830,7 +6042,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 width: 24,
                 height: 24,
                 child: CircularProgressIndicator(
-                  color: gold,
+                  color: playerGold,
                   strokeWidth: 2.2,
                 ),
               ),
@@ -5857,7 +6069,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               },
               icon: const Icon(
                 Icons.lock,
-                color: gold,
+                color: playerGold,
                 size: 28,
               ),
             ),
@@ -5922,14 +6134,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               decoration: BoxDecoration(
                 color: Colors.black54,
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white24),
+                border: Border.all(color: Color(0x3DFFFFFF)),
               ),
               child: IconButton(
                 tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
                 onPressed: _toggleFullscreen,
                 icon: Icon(
                   _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                  color: white,
+                  color: playerWhite,
                 ),
               ),
             ),
@@ -5946,7 +6158,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.78),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: gold.withValues(alpha: 0.45)),
+                    border: Border.all(color: playerGold.withValues(alpha: 0.45)),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -5961,7 +6173,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                     : (_gestureFeedback.startsWith('-')
                                         ? Icons.fast_rewind
                                         : Icons.fast_forward),
-                        color: gold,
+                        color: playerGold,
                         size: 25,
                       ),
                       const SizedBox(width: 10),
@@ -5975,7 +6187,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                     ? 'Volume  $_gestureFeedback'
                                     : 'Zoom  $_gestureFeedback',
                         style: const TextStyle(
-                          color: white,
+                          color: playerWhite,
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
                         ),
@@ -6067,7 +6279,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             child: Text(
               title,
               style: const TextStyle(
-                color: white,
+                color: playerWhite,
                 fontSize: 19,
                 fontWeight: FontWeight.bold,
               ),
@@ -6104,10 +6316,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                     fit: BoxFit.cover,
                                   )
                                 : Container(
-                                    color: panel,
+                                    color: playerPanel,
                                     child: const Icon(
                                       Icons.movie,
-                                      color: gold,
+                                      color: playerGold,
                                       size: 35,
                                     ),
                                   ),
@@ -6119,7 +6331,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: white,
+                            color: playerWhite,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -6139,11 +6351,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return OutlinedButton.icon(
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
-        foregroundColor: white,
-        side: const BorderSide(color: Colors.white24),
+        foregroundColor: playerWhite,
+        side: const BorderSide(color: Color(0x3DFFFFFF)),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       ),
-      icon: Icon(icon, color: gold, size: 18),
+      icon: Icon(icon, color: playerGold, size: 18),
       label: Text(label, style: const TextStyle(fontSize: 12)),
     );
   }
@@ -6176,11 +6388,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (_tracks.audio.isEmpty) {
       return const ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.language, color: gold),
+        leading: Icon(Icons.language, color: playerGold),
         title: Text('Resources',
-            style: TextStyle(color: white, fontWeight: FontWeight.bold)),
+            style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
         subtitle: Text('No alternate audio languages are available.',
-            style: TextStyle(color: Colors.white60)),
+            style: TextStyle(color: Color(0x99FFFFFF))),
       );
     }
     final selectedIndex = _selectedAudioTrackIndex
@@ -6194,17 +6406,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Resources', style: TextStyle(
-                    color: white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    color: playerWhite, fontSize: 18, fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
                 Text('Select audio language', style: TextStyle(
-                    color: Colors.white60, fontSize: 12)),
+                    color: Color(0x99FFFFFF), fontSize: 12)),
               ],
             ),
           ),          DropdownButton<int>(
             value: selectedIndex,
-            dropdownColor: panel,
-            style: const TextStyle(color: white),
-            underline: Container(height: 1, color: gold),
+            dropdownColor: playerPanel,
+            style: const TextStyle(color: playerWhite),
+            underline: Container(height: 1, color: playerGold),
             items: _tracks.audio.asMap().entries.map((entry) =>
               DropdownMenuItem<int>(
                 value: entry.key,
@@ -6235,7 +6447,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: panel,
+      backgroundColor: playerPanel,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
@@ -6262,10 +6474,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           height: 148,
                           child: widget.movie.posterUrl.isEmpty
                               ? Container(
-                                  color: bg,
+                                  color: playerBg,
                                   child: const Icon(
                                     Icons.movie,
-                                    color: goldLight,
+                                    color: playerGoldLight,
                                     size: 36,
                                   ),
                                 )
@@ -6286,7 +6498,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               maxLines: 3,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
-                                color: white,
+                                color: playerWhite,
                                 fontSize: 19,
                                 fontWeight: FontWeight.w800,
                               ),
@@ -6298,7 +6510,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                 if (widget.movie.year.isNotEmpty) widget.movie.year,
                               ].join('  •  '),
                               style: const TextStyle(
-                                color: goldLight,
+                                color: playerGoldLight,
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
                               ),
@@ -6341,7 +6553,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   child: Text(
                                     info.join('  •  '),
                                     style: const TextStyle(
-                                      color: Colors.white70,
+                                      color: Color(0xB3FFFFFF),
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -6353,12 +6565,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               const SizedBox(height: 9),
                               Row(
                                 children: [
-                                  const Icon(Icons.star_rounded, color: goldLight, size: 19),
+                                  const Icon(Icons.star_rounded, color: playerGoldLight, size: 19),
                                   const SizedBox(width: 5),
                                   Text(
                                     '${widget.movie.rating.toStringAsFixed(1)}/10',
                                     style: const TextStyle(
-                                      color: white,
+                                      color: playerWhite,
                                       fontSize: 14,
                                       fontWeight: FontWeight.w800,
                                     ),
@@ -6367,7 +6579,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                   const Text(
                                     'TMDB Rating',
                                     style: TextStyle(
-                                      color: Colors.white70,
+                                      color: Color(0xB3FFFFFF),
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -6380,7 +6592,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Country: ${widget.movie.originCountry}',
                                 style: const TextStyle(
-                                  color: Colors.white70,
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6391,7 +6603,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 'Original language: ${widget.movie.originalLanguage.toUpperCase()}',
                                 style: const TextStyle(
-                                  color: Colors.white70,
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6402,7 +6614,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                               Text(
                                 '${widget.movie.runtime!.round()} min',
                                 style: const TextStyle(
-                                  color: Colors.white70,
+                                  color: Color(0xB3FFFFFF),
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -6421,14 +6633,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       children: widget.movie.genres.map((genre) => Container(
                         padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
                         decoration: BoxDecoration(
-                          color: bg,
+                          color: playerBg,
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: gold.withValues(alpha: 0.35)),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.35)),
                         ),
                         child: Text(
                           genre,
                           style: const TextStyle(
-                            color: goldLight,
+                            color: playerGoldLight,
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                           ),
@@ -6440,7 +6652,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   const Text(
                     'Movie Info',
                     style: TextStyle(
-                      color: white,
+                      color: playerWhite,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
                     ),
@@ -6451,7 +6663,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? 'No description available.'
                         : widget.movie.overview,
                     style: const TextStyle(
-                      color: Colors.white70,
+                      color: Color(0xB3FFFFFF),
                       fontSize: 13,
                       height: 1.5,
                     ),
@@ -6461,7 +6673,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     Text(
                       'Available Audio: ${widget.movie.audioLanguages.join(', ')}',
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: playerWhite,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                       ),
@@ -6471,7 +6683,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   const Text(
                     'Cast',
                     style: TextStyle(
-                      color: white,
+                      color: playerWhite,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
                     ),
@@ -6484,7 +6696,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         return const SizedBox(
                           height: 112,
                           child: Center(
-                            child: CircularProgressIndicator(color: goldLight),
+                            child: CircularProgressIndicator(color: playerGoldLight),
                           ),
                         );
                       }
@@ -6493,7 +6705,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         return const Text(
                           'Cast photos are not available for this title.',
                           style: TextStyle(
-                            color: Colors.white70,
+                            color: Color(0xB3FFFFFF),
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -6522,10 +6734,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                       height: 88,
                                       child: profile.isEmpty
                                           ? Container(
-                                              color: bg,
+                                              color: playerBg,
                                               child: const Icon(
                                                 Icons.person,
-                                                color: goldLight,
+                                                color: playerGoldLight,
                                                 size: 34,
                                               ),
                                             )
@@ -6543,7 +6755,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                     overflow: TextOverflow.ellipsis,
                                     textAlign: TextAlign.center,
                                     style: const TextStyle(
-                                      color: white,
+                                      color: playerWhite,
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                     ),
@@ -6555,7 +6767,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                       overflow: TextOverflow.ellipsis,
                                       textAlign: TextAlign.center,
                                       style: const TextStyle(
-                                        color: Colors.white70,
+                                        color: Color(0xB3FFFFFF),
                                         fontSize: 10,
                                       ),
                                     ),
@@ -6576,7 +6788,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               right: 5,
               child: DecoratedBox(
                 decoration: const BoxDecoration(
-                  color: bg,
+                  color: playerBg,
                   shape: BoxShape.circle,
                 ),
                 child: IconButton(
@@ -6585,7 +6797,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   onPressed: () => Navigator.of(sheetContext).pop(),
                   icon: const Icon(
                     Icons.close_rounded,
-                    color: white,
+                    color: playerWhite,
                     size: 19,
                   ),
                 ),
@@ -6638,7 +6850,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: white,
+                          color: playerWhite,
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
                         ),
@@ -6650,8 +6862,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       icon: const Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.info_outline_rounded, color: goldLight, size: 17),
-                          Icon(Icons.keyboard_arrow_down_rounded, color: goldLight, size: 21),
+                          Icon(Icons.info_outline_rounded, color: playerGoldLight, size: 17),
+                          Icon(Icons.keyboard_arrow_down_rounded, color: playerGoldLight, size: 21),
                         ],
                       ),
                     ),
@@ -6685,7 +6897,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 const Text(
                   'For You',
                   style: TextStyle(
-                    color: white,
+                    color: playerWhite,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -6714,7 +6926,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         }
       },
       child: Scaffold(
-        backgroundColor: bg,
+        backgroundColor: playerBg,
         body: _isFullscreen
             ? SafeArea(
                 top: false,
