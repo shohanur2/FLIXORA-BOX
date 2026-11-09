@@ -4315,28 +4315,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ),
         if (_showControls && !_isLocked && _errorMessage == null)
           Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: 0.7),
-                    Colors.transparent,
-                    Colors.transparent,
-                    Colors.black87,
-                  ],
-                  stops: [0, 0.28, 0.62, 1],
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _toggleControls,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.7),
+                      Colors.transparent,
+                      Colors.transparent,
+                      Colors.black87,
+                    ],
+                    stops: [0, 0.28, 0.62, 1],
+                  ),
                 ),
-              ),
-              child: Column(
-                children: [
-                  _topControls(),
-                  const Spacer(),
-                  _centerControls(),
-                  const Spacer(),
-                  _bottomControls(),
-                ],
+                child: Column(
+                  children: [
+                    _topControls(),
+                    const Spacer(),
+                    _centerControls(),
+                    const Spacer(),
+                    _bottomControls(),
+                  ],
+                ),
               ),
             ),
           ),
@@ -4418,6 +4422,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   @override
   void dispose() {
+    // Persist the latest playback position even if the position stream has
+    // not emitted its final update yet when the user leaves the player.
+    unawaited(_saveResumePosition(_position));
     _isDisposed = true;
     _gestureFeedbackTimer?.cancel();
     _playerConnectionTimer?.cancel();
@@ -4459,13 +4466,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return candidates.take(20).toList();
   }
 
+  List<Movie> get _otherMovies => widget.recommendedMovies
+      .where((item) => item.id != widget.movie.id)
+      .toList();
+
   List<Movie> get _recommendedMovies {
     final relatedIds = _relatedMovies.map((movie) => movie.id).toSet();
-    return widget.recommendedMovies
-        .where((item) =>
-            item.id != widget.movie.id && !relatedIds.contains(item.id))
+    return _otherMovies
+        .where((item) => !relatedIds.contains(item.id))
         .take(20)
         .toList();
+  }
+
+  List<Movie> _sortedMovies(Iterable<Movie> movies, int Function(Movie, Movie) compare) {
+    final result = movies.toList();
+    result.sort(compare);
+    return result;
   }
 
   Widget _movieRail(String title, List<Movie> movies) {
@@ -4553,6 +4569,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Widget _playerPageContent() {
     final related = _relatedMovies;
     final recommended = _recommendedMovies;
+    final allSuggestions = _otherMovies;
+    final topRated = _sortedMovies(
+      allSuggestions.where((movie) => movie.rating > 0),
+      (a, b) => b.rating.compareTo(a.rating),
+    ).take(20).toList();
+    final latest = _sortedMovies(
+      allSuggestions.where((movie) => movie.year != 'N/A'),
+      (a, b) => b.year.compareTo(a.year),
+    ).take(20).toList();
+    final actionMovies = allSuggestions
+        .where((movie) => movie.genres.any((genre) =>
+            genre.toLowerCase().contains('action') ||
+            genre.toLowerCase().contains('adventure')))
+        .take(20).toList();
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(
@@ -4599,7 +4629,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         ),
         SliverToBoxAdapter(child: _movieRail('Related Movies', related)),
         SliverToBoxAdapter(child: _movieRail('Recommended for You', recommended)),
-        const SliverToBoxAdapter(child: SizedBox(height: 28)),
+        SliverToBoxAdapter(child: _movieRail('Top Rated Movies', topRated)),
+        SliverToBoxAdapter(child: _movieRail('Recently Added', latest)),
+        SliverToBoxAdapter(child: _movieRail('Action & Adventure', actionMovies)),
+        const SliverToBoxAdapter(child: SizedBox(height: 48)),
       ],
     );
   }
