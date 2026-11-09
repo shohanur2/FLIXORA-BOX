@@ -60,7 +60,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
             });
           },
           onWebResourceError: (error) {
-            if (!mounted || !error.isForMainFrame) return;
+            if (!mounted || error.isForMainFrame == false) return;
             setState(() {
               _isLoading = false;
               _errorMessage =
@@ -69,11 +69,22 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
           },
           onNavigationRequest: (request) {
             final uri = Uri.tryParse(request.url);
-            if (uri != null &&
-                ProviderCatalog.allowsNavigation(widget.source, uri)) {
-              return NavigationDecision.navigate;
+            if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+              return NavigationDecision.prevent;
             }
-            return NavigationDecision.prevent;
+
+            // Providers commonly host the player in a separate HTTPS iframe.
+            // Permit secure subframes, but keep top-level navigation on the
+            // selected provider's approved domain.
+            if (!request.isMainFrame) {
+              return uri.scheme.toLowerCase() == 'https'
+                  ? NavigationDecision.navigate
+                  : NavigationDecision.prevent;
+            }
+
+            return ProviderCatalog.allowsNavigation(widget.source, uri)
+                ? NavigationDecision.navigate
+                : NavigationDecision.prevent;
           },
         ),
       );
