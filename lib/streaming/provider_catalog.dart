@@ -40,7 +40,29 @@ class ProviderCatalog {
   /// unrelated numeric TMDB ID is never sent to the provider by mistake.
   static String? _validatedPlay4uImdbId(String? rawId) {
     final id = (rawId ?? '').trim();
-    return RegExp(r'^tt\\d+  // Redirect destinations approved by FLIXORA-REFERENCE's playback security
+    return RegExp(r'^tt\d+$', caseSensitive: false).hasMatch(id)
+        ? id
+        : null;
+  }
+
+  /// Reference route: https://play4u.org/watch/{imdbId}?embed=1
+  static String _play4uMovieUrl(String? imdbId) {
+    final id = _validatedPlay4uImdbId(imdbId);
+    return id == null ? '' : 'https://play4u.org/watch/$id?embed=1';
+  }
+
+  /// Reference route: /series/{imdbId}/s-XX/ep-XX?cont=1
+  static String _play4uTvUrl(String? imdbId, int season, int episode) {
+    final id = _validatedPlay4uImdbId(imdbId);
+    if (id == null) return '';
+    final safeSeason = season > 0 ? season : 1;
+    final safeEpisode = episode > 0 ? episode : 1;
+    final seasonPart = safeSeason.toString().padLeft(2, '0');
+    final episodePart = safeEpisode.toString().padLeft(2, '0');
+    return 'https://play4u.org/series/$id/s-$seasonPart/ep-$episodePart?cont=1';
+  }
+
+  // Redirect destinations approved by FLIXORA-REFERENCE's playback security
   // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
   static const Set<String> _approvedRedirectHosts = <String>{
     'play4u.org',
