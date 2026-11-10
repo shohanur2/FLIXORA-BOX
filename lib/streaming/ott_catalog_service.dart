@@ -132,7 +132,7 @@ class OttCatalogService {
             'with_watch_monetization_types': 'flatrate|free|ads',
           });
           try {
-            http.Response? response;
+            late http.Response response;
             for (var attempt = 0; attempt < 3; attempt++) {
               response = await http.get(uri).timeout(const Duration(seconds: 20));
               if (response.statusCode == 200 ||
