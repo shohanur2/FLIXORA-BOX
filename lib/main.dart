@@ -5342,6 +5342,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   int _selectedSeasonNumber = 1;
   int _selectedEpisodeNumber = 1;
   int? _aniListId;
+  String? _tvImdbId;
   bool _loadingTvEpisodes = false;
   int _tvSeasonRequestToken = 0;
   String? _tvEpisodeError;
@@ -5453,6 +5454,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
 
       if (isTv) {
+        final externalIds = details['external_ids'];
+        _tvImdbId = externalIds is Map
+            ? (externalIds['imdb_id'] ?? '').toString()
+            : '';
         final seasons = (details['seasons'] as List? ?? [])
             .whereType<Map>()
             .map((item) => Map<String, dynamic>.from(item))
@@ -5538,6 +5543,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (widget.movie.mediaType != 'tv') return;
     final sources = ProviderCatalog.forTv(
       tmdbId: id,
+      imdbId: _tvImdbId,
       aniListId: _aniListId,
       seasonNumber: _selectedSeasonNumber,
       episodeNumber: _selectedEpisodeNumber,
