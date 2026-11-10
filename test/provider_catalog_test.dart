@@ -172,6 +172,17 @@ void main() {
       );
     });
 
+    test('labels anime source variants with their language mode', () {
+      final sources = ProviderCatalog.forTv(
+        tmdbId: 1429,
+        aniListId: 16498,
+      );
+
+      expect(sources.firstWhere((source) => source.id == 'vidrift-anime-sub').languageLabel, 'Sub');
+      expect(sources.firstWhere((source) => source.id == 'vidrift-anime-dub').languageLabel, 'Dub');
+      expect(sources.firstWhere((source) => source.id == 'play4u-tv').languageLabel, isNull);
+    });
+
     test('builds separate AniList Sub and Dub routes with TMDB fallback', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1429, aniListId: 16498);
 
@@ -270,6 +281,37 @@ void main() {
 
       expect(uri.host.endsWith('.pvrplay.fun'), isTrue);
       expect(ProviderCatalog.allowsNavigation(pvr, uri), isTrue);
+    });
+
+    test('allows approved HTTPS player subframes and blocks unknown hosts', () {
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://play4u.org/player/frame'),
+        ),
+        isTrue,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://www.youtube.com/embed/dQw4w9WgXcQ'),
+        ),
+        isTrue,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://unknown-player.example/embed'),
+        ),
+        isFalse,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('http://play4u.org/player/frame'),
+        ),
+        isFalse,
+      );
     });
 
     test('blocks HTTP, credentials, and unrelated domains', () {
