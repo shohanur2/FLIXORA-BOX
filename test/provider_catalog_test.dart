@@ -23,8 +23,13 @@ void main() {
         'vidrift-movie',
       ]);
       expect(sources.first.id, 'play4u');
-      expect(sources.first.isAvailable, isFalse);
-      expect(sources.first.unavailableReason, contains('verified in-app embed'));
+      expect(sources.first.isAvailable, isTrue);
+      expect(
+        sources.first.url,
+        'https://play4u.org/watch/tt0816692?embed=1',
+      );
+      expect(sources.first.loadInIframe, isTrue);
+      expect(sources.first.unavailableReason, isNull);
       expect(
         sources[1].url,
         'https://yapgrid.com/embed/movie/157336?autoplay=1',
@@ -37,14 +42,19 @@ void main() {
       expect(sources.last.loadInIframe, isTrue);
     });
 
-    test('keeps Play4U unavailable until an official embed route is verified', () {
-      final sources = ProviderCatalog.forMovie(tmdbId: 157336);
+    test('requires a valid IMDb ID for the Play4U movie route', () {
+      final missing = ProviderCatalog.forMovie(tmdbId: 157336);
+      final invalid = ProviderCatalog.forMovie(
+        tmdbId: 157336,
+        imdbId: '157336',
+      );
 
-      expect(sources, hasLength(10));
-      expect(sources.first.id, 'play4u');
-      expect(sources.first.isAvailable, isFalse);
-      expect(sources.first.unavailableReason, contains('verified in-app embed'));
-      expect(sources[1].isAvailable, isTrue);
+      expect(missing.first.isAvailable, isFalse);
+      expect(missing.first.url, isEmpty);
+      expect(missing.first.unavailableReason, contains('IMDb title ID'));
+      expect(invalid.first.isAvailable, isFalse);
+      expect(invalid.first.url, isEmpty);
+      expect(missing[1].isAvailable, isTrue);
     });
 
     test('all configured provider URLs are HTTPS and match their approved hosts', () {
@@ -113,7 +123,7 @@ void main() {
       }
     });
 
-    test('does not expose the Play4U TV website as an in-app player', () {
+    test('builds the Play4U embed route for the exact selected TV episode', () {
       final sources = ProviderCatalog.forTv(
         tmdbId: 1399,
         imdbId: 'tt0903747',
@@ -123,9 +133,13 @@ void main() {
       final play4u = sources.first;
 
       expect(play4u.id, 'play4u-tv');
-      expect(play4u.isAvailable, isFalse);
-      expect(play4u.url, isEmpty);
-      expect(play4u.unavailableReason, contains('verified in-app episode embed'));
+      expect(play4u.isAvailable, isTrue);
+      expect(
+        play4u.url,
+        'https://play4u.org/series/tt0903747/s-02/ep-05?cont=1',
+      );
+      expect(play4u.loadInIframe, isTrue);
+      expect(play4u.unavailableReason, isNull);
     });
 
     test('matches the three Play4U sample routes supplied for FLIXORA', () {
@@ -146,11 +160,15 @@ void main() {
         episodeNumber: 7,
       );
 
-      expect(movieSources.first.isAvailable, isFalse);
-      expect(firstEpisodeSources.first.isAvailable, isFalse);
-      expect(seventhEpisodeSources.first.isAvailable, isFalse);
-      expect(movieSources.first.unavailableReason, contains('watch page'));
-      expect(firstEpisodeSources.first.unavailableReason, contains('series page'));
+      expect(movieSources.first.url,
+          'https://play4u.org/watch/tt34339725?embed=1');
+      expect(firstEpisodeSources.first.url,
+          'https://play4u.org/series/tt36458668/s-01/ep-01?cont=1');
+      expect(seventhEpisodeSources.first.url,
+          'https://play4u.org/series/tt23112594/s-01/ep-07?cont=1');
+      expect(movieSources.first.loadInIframe, isTrue);
+      expect(firstEpisodeSources.first.loadInIframe, isTrue);
+      expect(seventhEpisodeSources.first.loadInIframe, isTrue);
     });
 
     test('builds the exact selected TV season and episode route', () {
@@ -241,7 +259,7 @@ void main() {
           'vidrift-movie',
           excludedIds: const <String>{'vidrift-movie'},
         )?.id,
-        'yapgrid',
+        'play4u',
       );
     });
   });
