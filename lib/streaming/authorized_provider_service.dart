@@ -140,7 +140,9 @@ class AuthorizedProviderService {
       return false;
     }
     final path = Uri.decodeComponent(uri.path).toLowerCase();
-    return RegExp(r'\.(mp4|m4v|mkv|webm|mov|avi|m3u8|mpd)(?:$|/)').hasMatch(path);
+    return RegExp(
+      r'\.(mp4|m4v|mkv|webm|mov|avi|wmv|flv|ts|m4s|3gp|mpeg|mpg|m3u8|mpd)(?:$|/)',
+    ).hasMatch(path);
   }
 
   static bool _isPublicHttpsUri(Uri uri) {
@@ -201,9 +203,14 @@ class AuthorizedProviderService {
 
   static bool _isApprovedResolverMedia(Uri uri) {
     if (!_isPublicHttpsUri(uri)) return false;
+    final path = uri.path.toLowerCase();
+    if (path.endsWith('.zip') ||
+        path.contains('login.php') ||
+        path.contains('logout')) {
+      return false;
+    }
     if (_isSupportedMediaUrl(uri)) return true;
     final host = uri.host.toLowerCase();
-    final path = uri.path.toLowerCase();
     return (host.contains('pixeldrain.') && path.startsWith('/api/file/')) ||
         host == 'storage.googleapis.com' ||
         host.endsWith('.googleusercontent.com') ||
