@@ -9,6 +9,7 @@ class ProviderEmbedSource {
     required this.allowedHosts,
     this.unavailableReason,
     this.loadInIframe = false,
+    this.languageLabel,
   });
 
   final String id;
@@ -17,6 +18,10 @@ class ProviderEmbedSource {
   final Set<String> allowedHosts;
   final String? unavailableReason;
   final bool loadInIframe;
+
+  /// Optional language/track label for sources with a known variant, e.g.
+  /// Anime Sub or Dub. Null means the provider controls language selection.
+  final String? languageLabel;
 
   bool get isAvailable => url.isNotEmpty;
 }
@@ -458,6 +463,7 @@ class ProviderCatalog {
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
           allowedHosts: vidriftHosts,
           loadInIframe: true,
+          languageLabel: 'Sub',
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
@@ -465,6 +471,7 @@ class ProviderCatalog {
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
           allowedHosts: vidriftHosts,
           loadInIframe: true,
+          languageLabel: 'Dub',
         ),
         ...tvProviders,
       ];
@@ -511,6 +518,30 @@ class ProviderCatalog {
       }
     }
     return null;
+  }
+
+  /// Allows secure subframes only when they belong to the selected provider or
+  /// an explicitly approved player/redirect host. This avoids trusting every
+  /// HTTPS iframe a provider page may try to open.
+  static bool allowsSubframeNavigation(
+    ProviderEmbedSource source,
+    Uri uri,
+  ) {
+    if (uri.scheme.toLowerCase() != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      return false;
+    }
+
+    final host = uri.host.toLowerCase();
+    final approvedHosts = <String>{
+      ...source.allowedHosts,
+      ..._approvedRedirectHosts,
+    };
+    return approvedHosts.any((allowed) {
+      final domain = allowed.toLowerCase();
+      return host == domain || host.endsWith('.$domain');
+    });
   }
 
   /// Only HTTPS navigation on the provider's own domain (or its subdomains)
