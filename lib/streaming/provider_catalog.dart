@@ -244,7 +244,7 @@ class ProviderCatalog {
 
   /// Returns the built-in movie providers. Dailymotion is included only when
   /// the Admin source URL points to a Dailymotion video or playlist.
-  /// Play4U uses the site's observed /watch/{IMDb_ID} page route.
+  /// Play4U stays disabled until an official in-app embed endpoint is verified.
   static List<ProviderEmbedSource> forMovie({
     required int tmdbId,
     String? imdbId,
@@ -263,22 +263,17 @@ class ProviderCatalog {
     }
 
     final id = tmdbId.toString();
-    final cleanImdbId = (imdbId ?? '').trim();
-    final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
-        .hasMatch(cleanImdbId);
     final nexStreamKey = _dynamicNexStreamDemoKey();
 
     return <ProviderEmbedSource>[
       if (adminSource != null) adminSource,
       ProviderEmbedSource(
         id: 'play4u',
-        name: 'STREAM 1 · Play4U',
-        url: hasImdbId
-            ? 'https://play4u.org/watch/$cleanImdbId'
-            : '',
+        name: 'Play4U · Unavailable',
+        url: '',
         allowedHosts: const <String>{'play4u.org'},
         unavailableReason:
-            hasImdbId ? null : 'IMDb ID is not available for this movie.',
+            'Play4U currently provides a watch page, not a verified in-app embed player.',
       ),
       ProviderEmbedSource(
         id: 'yapgrid',
@@ -369,30 +364,22 @@ class ProviderCatalog {
     final animeEpisode = (aniListEpisodeNumber ?? episode) > 0
         ? (aniListEpisodeNumber ?? episode)
         : episode;
-    final cleanImdbId = (imdbId ?? '').trim();
-    final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
-        .hasMatch(cleanImdbId);
     const vidriftHosts = <String>{
       'embed.vidrift.net',
       'embed.vidrift.in',
     };
     const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
 
-    // These route templates mirror FLIXORA-REFERENCE's TV resolver.
+    // Provider routes must resolve an authorized player for the exact TV episode.
     // Each provider must still have the selected title/episode in its catalogue.
     final tvProviders = <ProviderEmbedSource>[
       ProviderEmbedSource(
         id: 'play4u-tv',
-        name: 'Play4U · TV / Series',
-        url: hasImdbId
-            ? 'https://play4u.org/series/$cleanImdbId/s-' +
-                season.toString().padLeft(2, '0') +
-                '/ep-' +
-                episode.toString().padLeft(2, '0')
-            : '',
+        name: 'Play4U · Unavailable',
+        url: '',
         allowedHosts: const <String>{'play4u.org'},
         unavailableReason:
-            hasImdbId ? null : 'IMDb ID is not available for this TV title.',
+            'Play4U currently provides a series page, not a verified in-app episode embed.',
       ),
       ProviderEmbedSource(
         id: 'yapgrid-tv',
@@ -500,8 +487,8 @@ class ProviderCatalog {
     return 'DEMO_$hex';
   }
 
-  /// Returns the next available provider after a failed source. The order is
-  /// deterministic and never loops back to a provider that already failed.
+  /// Returns the next available provider after a failed source, wrapping once
+  /// so the last preferred provider can still fall back to earlier sources.
   static ProviderEmbedSource? nextAvailableAfter(
     Iterable<ProviderEmbedSource> sources,
     String failedSourceId, {
@@ -511,7 +498,8 @@ class ProviderCatalog {
     final failedIndex = items.indexWhere((item) => item.id == failedSourceId);
     if (failedIndex < 0) return null;
 
-    for (var index = failedIndex + 1; index < items.length; index++) {
+    for (var offset = 1; offset < items.length; offset++) {
+      final index = (failedIndex + offset) % items.length;
       final candidate = items[index];
       if (candidate.isAvailable && !excludedIds.contains(candidate.id)) {
         return candidate;
