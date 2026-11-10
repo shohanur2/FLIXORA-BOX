@@ -91,14 +91,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080808),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF080808),
-        foregroundColor: const Color(0xFFD6AD45),
-        title: const Text(
-          'Free Movies',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-      ),
+      appBar: null,
       body: Column(
         children: [
           Padding(
