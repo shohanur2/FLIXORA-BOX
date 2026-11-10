@@ -2423,6 +2423,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Top Series':
           final series = _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ]);
           return series..sort((a, b) => b.rating.compareTo(a.rating));
         case 'Drama':
