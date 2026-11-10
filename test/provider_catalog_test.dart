@@ -244,6 +244,18 @@ void main() {
       expect(short?.url, watch?.url);
     });
 
+    test('converts YouTube playlist links to the official playlist player', () {
+      final playlist = ProviderCatalog.fromAdminUrl(
+        'https://www.youtube.com/playlist?list=PL1234567890abcdefgh',
+      );
+      final watchWithPlaylist = ProviderCatalog.fromAdminUrl(
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdefgh',
+      );
+
+      expect(playlist?.id, 'youtube-playlist');
+      expect(playlist?.url, contains('/embed/videoseries?list=PL1234567890abcdefgh'));
+      expect(watchWithPlaylist?.url, playlist?.url);
+    });
     test('converts Vimeo links to the Vimeo player', () {
       final source = ProviderCatalog.fromAdminUrl(
         'https://vimeo.com/123456789',
