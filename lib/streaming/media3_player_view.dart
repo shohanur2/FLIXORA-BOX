@@ -72,6 +72,17 @@ class Media3PlayerController {
   Future<void> setResizeMode(String mode) =>
       _invoke('setResizeMode', {'mode': mode});
 
+  Future<void> selectTrack({
+    required int trackType,
+    required int groupIndex,
+    required int trackIndex,
+  }) =>
+      _invoke('selectTrack', {
+        'trackType': trackType,
+        'groupIndex': groupIndex,
+        'trackIndex': trackIndex,
+      });
+
   Future<void> setMedia({
     required String url,
     required int startPositionMs,
@@ -92,7 +103,7 @@ class Media3PlayerController {
   Future<void> dispose() => detach();
 }
 
-class Media3PlayerView extends StatelessWidget {
+class Media3PlayerView extends StatefulWidget {
   const Media3PlayerView({
     super.key,
     required this.url,
@@ -105,18 +116,29 @@ class Media3PlayerView extends StatelessWidget {
   final Media3PlayerController controller;
 
   @override
+  State<Media3PlayerView> createState() => _Media3PlayerViewState();
+}
+
+class _Media3PlayerViewState extends State<Media3PlayerView> {
+  @override
   Widget build(BuildContext context) {
     return AndroidView(
       viewType: 'flixora/media3_player',
       creationParams: {
-        'url': url,
-        'startPositionMs': startPositionMs,
+        'url': widget.url,
+        'startPositionMs': widget.startPositionMs,
         'headers': const <String, String>{},
       },
       creationParamsCodec: const StandardMessageCodec(),
       onPlatformViewCreated: (viewId) {
-        unawaited(controller.attach(viewId));
+        unawaited(widget.controller.attach(viewId));
       },
     );
+  }
+
+  @override
+  void dispose() {
+    unawaited(widget.controller.detach());
+    super.dispose();
   }
 }
