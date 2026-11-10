@@ -559,7 +559,7 @@ class TmdbService {
         }
         final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
         final delay = retryAfter != null
-            ? Duration(seconds: retryAfter.clamp(1, 5))
+            ? Duration(seconds: retryAfter.clamp(1, 5).toInt())
             : Duration(milliseconds: 400 * (attempt + 1));
         await Future.delayed(delay);
       } catch (_) {
