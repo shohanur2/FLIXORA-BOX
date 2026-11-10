@@ -5552,6 +5552,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     required int season,
     required int episode,
   }) async {
+    if (!_playerIsOnline || widget.localFilePath != null) return;
     final requestToken = ++_providerDiscoveryToken;
     final titleId = widget.movie.tmdbId;
     final found = await AuthorizedProviderService.discover(
