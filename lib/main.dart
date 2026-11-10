@@ -67,8 +67,8 @@ const Color ink12 = Color(0x1FFFFFFF);
 const Color ink10 = Color(0x1AFFFFFF);
 const Color playerBg = Color(0xFF080808);
 const Color playerPanel = Color(0xFF191919);
-const Color playerGold = Color(0xFFD6AD45);
-const Color playerGoldLight = Color(0xFFFFE5A3);
+const Color playerGold = Color(0xFFE50914);
+const Color playerGoldLight = Color(0xFFFF6670);
 const Color playerWhite = Colors.white;
 
 const String imageBase = 'https://image.tmdb.org/t/p/';
@@ -5469,7 +5469,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   ) async {
     try {
       await _player.setAudioTrack(track);
-      if (!mounted) return;
+      if (!mounted || _isDisposed) return;
       final index = _tracks.audio.indexOf(track);
       setState(() => _selectedAudioTrackIndex = index < 0 ? 0 : index);
       if (closeSheet) Navigator.pop(context);
@@ -5576,51 +5576,218 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _showAudioTracks() {
     final audioTracks = _tracks.audio;
+    final selectedIndex = audioTracks.isEmpty
+        ? -1
+        : _selectedAudioTrackIndex.clamp(0, audioTracks.length - 1).toInt();
 
-    showModalBottomSheet(
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
       context: context,
-      backgroundColor: playerPanel,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Audio Track',
-                  style: TextStyle(
-                    color: playerWhite,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 15),
-                if (audioTracks.isEmpty)
-                  const Text(
-                    'No audio tracks available.',
-                    style: TextStyle(color: Color(0x8AFFFFFF)),
-                  ),
-                ...audioTracks.map((track) {
-                  return ListTile(
-                    leading: const Icon(
-                      Icons.audiotrack,
-                      color: playerGold,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: playerPanel,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+            border: Border(top: BorderSide(color: Color(0x24FFFFFF))),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 38,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0x66FFFFFF),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                     ),
-                    title: Text(
-                      track.title ?? track.language ?? 'Audio',
-                      style: const TextStyle(color: playerWhite),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: playerGold.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                        child: const Icon(
+                          Icons.graphic_eq_rounded,
+                          color: playerGoldLight,
+                          size: 23,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Audio language',
+                              style: TextStyle(
+                                color: playerWhite,
+                                fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            SizedBox(height: 3),
+                            Text(
+                              'Choose the audio track for this movie',
+                              style: TextStyle(
+                                color: Color(0x99FFFFFF),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  if (audioTracks.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 18),
+                      child: Center(
+                        child: Text(
+                          'This stream does not expose alternate audio tracks.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Color(0x99FFFFFF),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(sheetContext).size.height * 0.52,
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: audioTracks.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          final track = audioTracks[index];
+                          final selected = index == selectedIndex;
+                          final label = _audioTrackLabel(track, index);
+                          final rawTitle = track.title?.trim() ?? '';
+                          final showTrackDetail = rawTitle.isNotEmpty &&
+                              rawTitle.toLowerCase() != label.toLowerCase() &&
+                              !RegExp(
+                                r'^(audio|track)\s*#?\s*\d*$',
+                                caseSensitive: false,
+                              ).hasMatch(rawTitle);
+
+                          return Material(
+                            color: selected
+                                ? playerGold.withValues(alpha: 0.13)
+                                : playerBg,
+                            borderRadius: BorderRadius.circular(14),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () => _selectAudioTrack(track),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 13,
+                                ),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: selected
+                                        ? playerGold.withValues(alpha: 0.8)
+                                        : const Color(0x1FFFFFFF),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 38,
+                                      height: 38,
+                                      decoration: BoxDecoration(
+                                        color: selected
+                                            ? playerGold.withValues(alpha: 0.18)
+                                            : const Color(0x14FFFFFF),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        Icons.audiotrack_rounded,
+                                        color: selected
+                                            ? playerGoldLight
+                                            : const Color(0xB3FFFFFF),
+                                        size: 19,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            label,
+                                            style: TextStyle(
+                                              color: playerWhite,
+                                              fontSize: 14,
+                                              fontWeight: selected
+                                                  ? FontWeight.w800
+                                                  : FontWeight.w600,
+                                            ),
+                                          ),
+                                          if (showTrackDetail) ...[
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              rawTitle,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                color: Color(0x80FFFFFF),
+                                                fontSize: 10,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    if (selected)
+                                      const Icon(
+                                        Icons.check_circle_rounded,
+                                        color: playerGoldLight,
+                                        size: 22,
+                                      )
+                                    else
+                                      const Icon(
+                                        Icons.circle_outlined,
+                                        color: Color(0x55FFFFFF),
+                                        size: 21,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                    onTap: () => _selectAudioTrack(track),
-                  );
-                }),
-              ],
+                ],
+              ),
             ),
           ),
         );
       },
-    );
+    ).whenComplete(_startHideTimer);
   }
 
   void _showSubtitleTracks() {
@@ -5930,17 +6097,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         color: playerGold,
                       ),
                       title: const Text(
-                        'Audio Track',
+                        'Audio language',
                         style: TextStyle(color: playerWhite),
+                      ),
+                      subtitle: Text(
+                        _selectedProviderSource != null
+                            ? 'Change language in the provider player'
+                            : (_tracks.audio.isEmpty
+                                ? 'No alternate audio tracks detected'
+                                : _audioTrackLabel(
+                                    _tracks.audio[_selectedAudioTrackIndex
+                                        .clamp(0, _tracks.audio.length - 1)
+                                        .toInt()],
+                                    _selectedAudioTrackIndex
+                                        .clamp(0, _tracks.audio.length - 1)
+                                        .toInt(),
+                                  )),
+                        style: const TextStyle(
+                          color: Color(0x99FFFFFF),
+                          fontSize: 11,
+                        ),
                       ),
                       trailing: const Icon(
                         Icons.chevron_right,
                         color: Color(0x8AFFFFFF),
                       ),
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                        _showAudioTracks();
-                      },
+                      onTap: _selectedProviderSource != null
+                          ? null
+                          : () {
+                              Navigator.pop(sheetContext);
+                              _showAudioTracks();
+                            },
                     ),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -5971,31 +6158,55 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _centerControls() {
+    Widget skipControl({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onPressed,
+    }) {
+      return Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.42),
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0x33FFFFFF)),
+        ),
+        child: IconButton(
+          tooltip: tooltip,
+          onPressed: onPressed,
+          icon: Icon(icon, color: playerWhite, size: 27),
+        ),
+      );
+    }
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        IconButton(
+        skipControl(
+          icon: Icons.replay_10_rounded,
+          tooltip: 'Back 10 seconds',
           onPressed: () => _seekBy(-10),
-          iconSize: 38,
-          color: playerWhite,
-          icon: const Icon(Icons.replay_10_rounded),
         ),
-        const SizedBox(width: 25),
+        const SizedBox(width: 28),
         Container(
-          width: 66,
-          height: 66,
+          width: 72,
+          height: 72,
           decoration: BoxDecoration(
-            color: Colors.black54,
+            color: playerGold,
             shape: BoxShape.circle,
-            border: Border.all(
-              color: playerGold.withValues(alpha: 0.6),
-              width: 1.5,
-            ),
+            boxShadow: [
+              BoxShadow(
+                color: playerGold.withValues(alpha: 0.35),
+                blurRadius: 24,
+                spreadRadius: 2,
+              ),
+            ],
           ),
           child: IconButton(
+            tooltip: _isPlaying ? 'Pause' : 'Play',
             onPressed: _togglePlay,
-            iconSize: 38,
-            color: playerGold,
+            iconSize: 43,
+            color: playerWhite,
             icon: Icon(
               _isPlaying
                   ? Icons.pause_rounded
@@ -6003,12 +6214,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 25),
-        IconButton(
+        const SizedBox(width: 28),
+        skipControl(
+          icon: Icons.forward_10_rounded,
+          tooltip: 'Forward 10 seconds',
           onPressed: () => _seekBy(10),
-          iconSize: 38,
-          color: playerWhite,
-          icon: const Icon(Icons.forward_10_rounded),
         ),
       ],
     );
@@ -6039,7 +6249,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 2.5,
                     activeTrackColor: playerGold,
-                    inactiveTrackColor: Color(0x4DFFFFFF),
+                    inactiveTrackColor: const Color(0x4DFFFFFF),
                     thumbColor: playerWhite,
                     overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
@@ -6095,7 +6305,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   data: SliderTheme.of(context).copyWith(
                     trackHeight: 3,
                     activeTrackColor: playerGold,
-                    inactiveTrackColor: Color(0x3DFFFFFF),
+                    inactiveTrackColor: const Color(0x3DFFFFFF),
                     thumbColor: playerWhite,
                     overlayColor: playerGold.withValues(alpha: 0.16),
                     thumbShape: const RoundSliderThumbShape(
@@ -6144,83 +6354,180 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _topControls() {
+    final audioIndex = _tracks.audio.isEmpty
+        ? -1
+        : _selectedAudioTrackIndex.clamp(0, _tracks.audio.length - 1).toInt();
+    final audioLabel = audioIndex >= 0
+        ? _audioTrackLabel(_tracks.audio[audioIndex], audioIndex)
+        : 'Audio';
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       child: Row(
         children: [
-          IconButton(
-            onPressed: () {
-              if (_isFullscreen) {
-                _toggleFullscreen();
-              } else {
-                Navigator.pop(context);
-              }
-            },
-            icon: const Icon(
-              Icons.arrow_back,
-              color: playerWhite,
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Back',
+              onPressed: () {
+                if (_isFullscreen) {
+                  _toggleFullscreen();
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+              icon: const Icon(
+                Icons.arrow_back_rounded,
+                color: playerWhite,
+              ),
             ),
           ),
+          const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              widget.movie.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: playerWhite,
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.movie.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: playerWhite,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'FLIXORA CINEMA',
+                  style: TextStyle(
+                    color: playerGoldLight,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.7,
+                  ),
+                ),
+              ],
             ),
           ),
           if (widget.localFilePath == null) ...[
-            const SizedBox(width: 6),
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: playerWhite,
-                side: BorderSide(
-                  color: _availableQualities.isNotEmpty ? playerGold : Color(0x4DFFFFFF),
+            const SizedBox(width: 5),
+            _playerTopAction(
+              icon: Icons.high_quality_rounded,
+              label: _loadingQualities
+                  ? '...'
+                  : _selectedQuality == null
+                      ? 'Quality'
+                      : VideoQualityService.displayName(_selectedQuality!),
+              tooltip: 'Video quality',
+              enabled: _availableQualities.isNotEmpty,
+              onPressed: _showQualitySelector,
+            ),
+          ],
+          if (_selectedProviderSource == null && _tracks.audio.isNotEmpty) ...[
+            const SizedBox(width: 3),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Audio language: $audioLabel',
+                onPressed: _showAudioTracks,
+                icon: const Icon(
+                  Icons.audiotrack_rounded,
+                  color: playerGoldLight,
+                  size: 20,
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-              onPressed: _availableQualities.isNotEmpty
-                  ? _showQualitySelector
-                  : null,
-              icon: const Icon(Icons.high_quality, size: 17),
-              label: Text(
-                _loadingQualities
-                    ? '...'
-                    : _selectedQuality == null
-                        ? 'Quality'
-                        : VideoQualityService.displayName(_selectedQuality!),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
               ),
             ),
           ],
-          IconButton(
-            onPressed: _showSettings,
-            icon: const Icon(
-              Icons.settings,
-              color: playerWhite,
+          const SizedBox(width: 3),
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Playback settings',
+              onPressed: _showSettings,
+              icon: const Icon(
+                Icons.tune_rounded,
+                color: playerWhite,
+                size: 21,
+              ),
             ),
           ),
-          IconButton(
-            onPressed: () {
-              setState(() {
-                _isLocked = true;
-                _showControls = false;
-              });
-              _cancelHideTimer();
-            },
-            icon: const Icon(
-              Icons.lock_outline,
-              color: playerWhite,
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Lock controls',
+              onPressed: () {
+                setState(() {
+                  _isLocked = true;
+                  _showControls = false;
+                });
+                _cancelHideTimer();
+              },
+              icon: const Icon(
+                Icons.lock_outline_rounded,
+                color: playerWhite,
+                size: 20,
+              ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _playerTopAction({
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: OutlinedButton(
+        onPressed: enabled ? onPressed : null,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: playerWhite,
+          disabledForegroundColor: const Color(0x66FFFFFF),
+          backgroundColor: Colors.black.withValues(alpha: 0.42),
+          side: BorderSide(
+            color: enabled
+                ? playerGold.withValues(alpha: 0.68)
+                : const Color(0x3DFFFFFF),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? playerGoldLight : playerWhite,
+            ),
+            const SizedBox(width: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 64),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -6647,24 +6954,81 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String _audioTrackLabel(AudioTrack track, int index) {
     final title = track.title?.trim() ?? '';
     final language = track.language?.trim() ?? '';
-    if (title.isNotEmpty) return title;
+
     const languageNames = <String, String>{
-      'en': 'English', 'eng': 'English',
-      'hi': 'Hindi', 'hin': 'Hindi',
-      'bn': 'Bengali', 'ben': 'Bengali',
-      'ta': 'Tamil', 'tam': 'Tamil',
-      'te': 'Telugu', 'tel': 'Telugu',
-      'kn': 'Kannada', 'kan': 'Kannada',
-      'ml': 'Malayalam', 'mal': 'Malayalam',
-      'ja': 'Japanese', 'jpn': 'Japanese',
-      'ko': 'Korean', 'kor': 'Korean',
-      'zh': 'Chinese', 'zho': 'Chinese',
-      'es': 'Spanish', 'spa': 'Spanish',
-      'fr': 'French', 'fra': 'French',
+      'en': 'English',
+      'eng': 'English',
+      'english': 'English',
+      'hi': 'Hindi',
+      'hin': 'Hindi',
+      'hindi': 'Hindi',
+      'bn': 'বাংলা',
+      'ben': 'বাংলা',
+      'bengali': 'বাংলা',
+      'bangla': 'বাংলা',
+      'ta': 'Tamil',
+      'tam': 'Tamil',
+      'tamil': 'Tamil',
+      'te': 'Telugu',
+      'tel': 'Telugu',
+      'telugu': 'Telugu',
+      'kn': 'Kannada',
+      'kan': 'Kannada',
+      'kannada': 'Kannada',
+      'ml': 'Malayalam',
+      'mal': 'Malayalam',
+      'malayalam': 'Malayalam',
+      'ja': 'Japanese',
+      'jpn': 'Japanese',
+      'japanese': 'Japanese',
+      'ko': 'Korean',
+      'kor': 'Korean',
+      'korean': 'Korean',
+      'zh': 'Chinese',
+      'zho': 'Chinese',
+      'chinese': 'Chinese',
+      'es': 'Spanish',
+      'spa': 'Spanish',
+      'spanish': 'Spanish',
+      'fr': 'French',
+      'fra': 'French',
+      'french': 'French',
+      'ar': 'Arabic',
+      'ara': 'Arabic',
+      'arabic': 'Arabic',
+      'ur': 'Urdu',
+      'urd': 'Urdu',
+      'urdu': 'Urdu',
     };
-    if (language.isNotEmpty) {
-      return languageNames[language.toLowerCase()] ?? language;
+
+    String? displayLanguage(String value) {
+      final normalized = value.trim().toLowerCase().replaceAll('_', '-');
+      if (normalized.isEmpty) return null;
+      final firstPart = normalized.split(RegExp(r'[-\s(/]')).first;
+      return languageNames[firstPart] ?? languageNames[normalized];
     }
+
+    // Prefer actual language metadata. This handles BCP-47 values such as
+    // hi-IN, bn-BD and en-US instead of showing generic "Audio 1" titles.
+    final metadataLanguage = displayLanguage(language);
+    if (metadataLanguage != null) return metadataLanguage;
+
+    // Some streams put the language in the track title instead.
+    final titleLanguage = displayLanguage(title);
+    if (titleLanguage != null) return titleLanguage;
+
+    final genericTitle = RegExp(
+      r'^(audio|track)(\s*#?\s*\d*)?$',
+      caseSensitive: false,
+    );
+    if (title.isNotEmpty && !genericTitle.hasMatch(title)) return title;
+
+    final normalizedLanguage = language.toLowerCase();
+    if (language.isNotEmpty &&
+        !{'und', 'unknown', 'unk', 'zxx', 'null'}.contains(normalizedLanguage)) {
+      return language;
+    }
+
     return index == 0 ? 'Original / Auto' : 'Audio ${index + 1}';
   }
 
