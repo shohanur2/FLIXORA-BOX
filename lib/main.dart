@@ -24,6 +24,7 @@ import 'streaming/episode_number_mapper.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
+import 'streaming/media3_player_view.dart';
 import 'streaming/ott_catalog_service.dart';
 import 'streaming/external_catalog_service.dart';
 
@@ -5261,6 +5262,14 @@ class MoviePlayerScreen extends StatefulWidget {
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   late final Player _player;
   late final VideoController _videoController;
+  late final Media3PlayerController _media3Controller;
+  bool _usingMedia3Fallback = false;
+  String? _media3FallbackUrl;
+  String? _media3Error;
+  Map<String, dynamic> _media3State = <String, dynamic>{};
+  int _lastMedia3UiPositionMs = -1000;
+  int _lastMedia3ResumeSaveMs = 0;
+  bool _media3ErrorHandling = false;
   late Future<Map<String, dynamic>> _movieDetailsFuture;
 
   StreamSubscription<Duration>? _positionSubscription;
@@ -5388,6 +5397,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             adminVideoUrl: widget.movie.videoUrl,
           );
     _movieDetailsFuture = _loadPlayerMovieDetails();
+    _media3Controller = Media3PlayerController(
+      onState: _handleMedia3State,
+      onError: _handleMedia3Error,
+    );
     _player = Player();
     _videoController = VideoController(_player);
 
@@ -6133,6 +6146,308 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ),
         );
       },
+    );
+  }
+
+  String? _media3SourceUrl() {
+    if (widget.localFilePath != null) {
+      final path = widget.localFilePath!.trim();
+      if (path.isEmpty) return null;
+      return File(path).uri.toString();
+    }
+    final candidate = _currentVideoUrl.trim().isNotEmpty
+        ? _currentVideoUrl.trim()
+        : _resolveInitialNetworkUrl().trim();
+    final uri = Uri.tryParse(candidate);
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        uri.host.isEmpty) {
+      return null;
+    }
+    return candidate;
+  }
+
+  Future<bool> _activateMedia3Fallback() async {
+    if (!Platform.isAndroid ||
+        !mounted ||
+        _isDisposed ||
+        _usingMedia3Fallback ||
+        _selectedProviderSource != null) {
+      return false;
+    }
+    final source = _media3SourceUrl();
+    if (source == null || source.isEmpty) return false;
+
+    await _saveResumePosition(_position);
+    try {
+      await _player.pause();
+      await _player.stop();
+    } catch (_) {}
+
+    if (!mounted || _isDisposed) return false;
+    setState(() {
+      _usingMedia3Fallback = true;
+      _media3FallbackUrl = source;
+      _media3Error = null;
+      _media3State = <String, dynamic>{};
+      _errorMessage = null;
+      _initialized = false;
+      _isPlaying = false;
+      _isBuffering = true;
+    });
+    return true;
+  }
+
+  void _handleMedia3State(Map<String, dynamic> state) {
+    if (!mounted || _isDisposed || !_usingMedia3Fallback) return;
+    final positionMs = _toInt(state['positionMs']);
+    final durationMs = _toInt(state['durationMs']);
+    final isPlaying = state['isPlaying'] == true;
+    final isBuffering = state['isBuffering'] == true;
+    final isReady = state['isReady'] == true;
+    final previousPlaying = _isPlaying;
+    final previousBuffering = _isBuffering;
+    final previousReady = _initialized;
+    final oldTracks = jsonEncode([
+      _media3State['audioTracks'] ?? const [],
+      _media3State['textTracks'] ?? const [],
+    ]);
+    final newTracks = jsonEncode([
+      state['audioTracks'] ?? const [],
+      state['textTracks'] ?? const [],
+    ]);
+
+    _media3State = state;
+    _position = Duration(milliseconds: positionMs < 0 ? 0 : positionMs);
+    _duration = Duration(milliseconds: durationMs < 0 ? 0 : durationMs);
+    _isPlaying = isPlaying;
+    _isBuffering = isBuffering;
+    _initialized = isReady;
+
+    final shouldUpdate = (positionMs - _lastMedia3UiPositionMs).abs() >= 900 ||
+        previousPlaying != isPlaying ||
+        previousBuffering != isBuffering ||
+        previousReady != isReady ||
+        oldTracks != newTracks;
+    if (shouldUpdate) {
+      _lastMedia3UiPositionMs = positionMs;
+      setState(() {});
+    }
+
+    if (positionMs - _lastMedia3ResumeSaveMs >= 5000) {
+      _lastMedia3ResumeSaveMs = positionMs;
+      unawaited(_saveResumePosition(_position));
+    }
+    if (state['isCompleted'] == true) {
+      _clearResumePosition();
+    }
+  }
+
+  void _handleMedia3Error(String message) {
+    if (!mounted || _isDisposed || !_usingMedia3Fallback || _media3ErrorHandling) {
+      return;
+    }
+    _media3ErrorHandling = true;
+    _media3Error = message;
+    if (widget.localFilePath != null) {
+      setState(() {
+        _usingMedia3Fallback = false;
+        _media3FallbackUrl = null;
+        _errorMessage = 'Android Media3 could not play this downloaded file: ' + message;
+        _isBuffering = false;
+        _initialized = false;
+      });
+      _media3ErrorHandling = false;
+      return;
+    }
+
+    setState(() {
+      _usingMedia3Fallback = false;
+      _media3FallbackUrl = null;
+      _errorMessage = 'Android Media3 could not play this source. Trying another provider...';
+      _isBuffering = false;
+      _initialized = false;
+    });
+    unawaited(_selectDefaultProviderIfNeeded(force: true).whenComplete(() {
+      _media3ErrorHandling = false;
+    }));
+  }
+
+  Future<void> _showMedia3TrackPicker(int trackType) async {
+    if (!_usingMedia3Fallback) return;
+    final isAudio = trackType == 1;
+    final raw = _media3State[isAudio ? 'audioTracks' : 'textTracks'];
+    final tracks = raw is List
+        ? raw.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList()
+        : <Map<String, dynamic>>[];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                isAudio ? 'Audio tracks' : 'Subtitle tracks',
+                style: const TextStyle(
+                  color: playerWhite,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                leading: const Icon(Icons.auto_awesome, color: playerGoldLight),
+                title: Text(isAudio ? 'Auto / Default' : 'Subtitles off',
+                    style: const TextStyle(color: playerWhite)),
+                onTap: () async {
+                  await _media3Controller.selectTrack(
+                    trackType: trackType,
+                    groupIndex: -1,
+                    trackIndex: -1,
+                  );
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                },
+              ),
+              if (tracks.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text('No alternate tracks were detected.',
+                      style: TextStyle(color: Color(0x99FFFFFF))),
+                ),
+              ...tracks.map((track) {
+                final language = (track['language'] ?? '').toString().trim();
+                final label = (track['label'] ?? '').toString().trim();
+                final title = label.isNotEmpty
+                    ? label
+                    : (language.isNotEmpty ? language : 'Track');
+                final selected = track['selected'] == true;
+                return ListTile(
+                  leading: Icon(
+                    selected ? Icons.check_circle : Icons.circle_outlined,
+                    color: selected ? playerGoldLight : const Color(0x80FFFFFF),
+                  ),
+                  title: Text(title, style: const TextStyle(color: playerWhite)),
+                  subtitle: language.isNotEmpty && language != title
+                      ? Text(language, style: const TextStyle(color: Color(0x99FFFFFF)))
+                      : null,
+                  onTap: () async {
+                    await _media3Controller.selectTrack(
+                      trackType: trackType,
+                      groupIndex: _toInt(track['groupIndex']),
+                      trackIndex: _toInt(track['trackIndex']),
+                    );
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  },
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMedia3DecoderPicker() async {
+    if (!_usingMedia3Fallback) return;
+    const modes = <String, String>{
+      'AUTO': 'Auto (recommended)',
+      'HARDWARE': 'Hardware decoder',
+      'SOFTWARE': 'Software decoder',
+      'FFMPEG': 'FFmpeg decoder',
+    };
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Decoder settings',
+                  style: TextStyle(color: playerWhite, fontSize: 17, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 10),
+              const Text('Video decoder', style: TextStyle(color: playerGoldLight, fontWeight: FontWeight.w700)),
+              ...modes.entries.map((entry) => ListTile(
+                    dense: true,
+                    title: Text(entry.value, style: const TextStyle(color: playerWhite)),
+                    trailing: (_media3State['videoDecoderMode'] ?? 'AUTO') == entry.key
+                        ? const Icon(Icons.check, color: playerGoldLight)
+                        : null,
+                    onTap: () async {
+                      await _media3Controller.setVideoDecoder(entry.key);
+                      if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    },
+                  )),
+              const Divider(color: Color(0x3DFFFFFF)),
+              const Text('Audio decoder', style: TextStyle(color: playerGoldLight, fontWeight: FontWeight.w700)),
+              ...modes.entries.map((entry) => ListTile(
+                    dense: true,
+                    title: Text(entry.value, style: const TextStyle(color: playerWhite)),
+                    trailing: (_media3State['audioDecoderMode'] ?? 'AUTO') == entry.key
+                        ? const Icon(Icons.check, color: playerGoldLight)
+                        : null,
+                    onTap: () async {
+                      await _media3Controller.setAudioDecoder(entry.key);
+                      if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    },
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _media3FallbackActions() {
+    return Positioned(
+      top: 7,
+      right: 7,
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(24),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Audio tracks',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _showMedia3TrackPicker(1),
+              icon: const Icon(Icons.audiotrack_rounded, color: Colors.white, size: 19),
+            ),
+            IconButton(
+              tooltip: 'Subtitles',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _showMedia3TrackPicker(3),
+              icon: const Icon(Icons.subtitles_rounded, color: Colors.white, size: 19),
+            ),
+            IconButton(
+              tooltip: 'Decoder settings',
+              visualDensity: VisualDensity.compact,
+              onPressed: _showMedia3DecoderPicker,
+              icon: const Icon(Icons.tune_rounded, color: Colors.white, size: 19),
+            ),
+            IconButton(
+              tooltip: 'Fullscreen',
+              visualDensity: VisualDensity.compact,
+              onPressed: _toggleFullscreen,
+              icon: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 19),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
