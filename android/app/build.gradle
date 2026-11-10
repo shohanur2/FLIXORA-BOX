@@ -60,7 +60,7 @@ flutter {
 
 
 dependencies {
-    def media3Version = "1.11.1"
+    def media3Version = "1.8.0"
 
     implementation "androidx.media3:media3-exoplayer:$media3Version"
     implementation "androidx.media3:media3-exoplayer-hls:$media3Version"
@@ -68,5 +68,5 @@ dependencies {
     implementation "androidx.media3:media3-ui:$media3Version"
 
     // GPL-3.0 FFmpeg decoder extensions for the Android Media3 fallback player.
-    implementation "io.github.anilbeesetti:nextlib-media3ext:1.11.1-0.18.0"
+    implementation "io.github.anilbeesetti:nextlib-media3ext:1.8.0-0.9.0"
 }
