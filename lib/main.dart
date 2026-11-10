@@ -6373,12 +6373,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _showMedia3DecoderPicker() async {
     if (!_usingMedia3Fallback) return;
-    const modes = <String, String>{
-      'AUTO': 'Auto (recommended)',
-      'HARDWARE': 'Hardware decoder',
-      'SOFTWARE': 'Software decoder',
-      'FFMPEG': 'FFmpeg decoder',
-    };
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: playerPanel,
@@ -6387,39 +6381,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       ),
       builder: (sheetContext) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Decoder settings',
-                  style: TextStyle(color: playerWhite, fontSize: 17, fontWeight: FontWeight.w800)),
+              const Text(
+                'Android Media3 fallback',
+                style: TextStyle(
+                  color: playerWhite,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
               const SizedBox(height: 10),
-              const Text('Video decoder', style: TextStyle(color: playerGoldLight, fontWeight: FontWeight.w700)),
-              ...modes.entries.map((entry) => ListTile(
-                    dense: true,
-                    title: Text(entry.value, style: const TextStyle(color: playerWhite)),
-                    trailing: (_media3State['videoDecoderMode'] ?? 'AUTO') == entry.key
-                        ? const Icon(Icons.check, color: playerGoldLight)
-                        : null,
-                    onTap: () async {
-                      await _media3Controller.setVideoDecoder(entry.key);
-                      if (sheetContext.mounted) Navigator.pop(sheetContext);
-                    },
-                  )),
-              const Divider(color: Color(0x3DFFFFFF)),
-              const Text('Audio decoder', style: TextStyle(color: playerGoldLight, fontWeight: FontWeight.w700)),
-              ...modes.entries.map((entry) => ListTile(
-                    dense: true,
-                    title: Text(entry.value, style: const TextStyle(color: playerWhite)),
-                    trailing: (_media3State['audioDecoderMode'] ?? 'AUTO') == entry.key
-                        ? const Icon(Icons.check, color: playerGoldLight)
-                        : null,
-                    onTap: () async {
-                      await _media3Controller.setAudioDecoder(entry.key);
-                      if (sheetContext.mounted) Navigator.pop(sheetContext);
-                    },
-                  )),
+              const Text(
+                'Decoder mode: Automatic. Android hardware decoders are tried first; the bundled NextLib FFmpeg decoder is available when the platform decoder cannot handle the format.',
+                style: TextStyle(color: Color(0xCCFFFFFF), height: 1.45),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'This compatible NextLib release does not expose manual Hardware / Software / FFmpeg switching. That can be added after a separate Android build-toolchain upgrade.',
+                style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11, height: 1.4),
+              ),
             ],
           ),
         ),
