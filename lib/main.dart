@@ -549,19 +549,44 @@ class TmdbService {
   static Future<List<Movie>> getMovies(
     String endpoint, {
     Map<String, String> extraParams = const {},
+    int pages = 1,
   }) async {
     if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
     final isTv = TmdbMediaType.isTvEndpoint(endpoint);
-    final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
-      'api_key': apiKey, 'language': 'en-US', 'page': '1', ...extraParams,
-    });
-    final response = await http.get(uri).timeout(const Duration(seconds: 20));
-    if (response.statusCode != 200) throw Exception('Could not load catalogue.');
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final results = data['results'] as List? ?? [];
-    return results.whereType<Map>().map((item) => Movie.fromJson(
-      Map<String, dynamic>.from(item), mediaType: isTv ? 'tv' : 'movie',
-    )).toList();
+    final pageCount = pages.clamp(1, 3).toInt();
+    final pageResults = await Future.wait<List<Movie>>(
+      List<int>.generate(pageCount, (index) => index + 1).map((page) async {
+        try {
+          final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
+            'api_key': apiKey,
+            'language': 'en-US',
+            'page': page.toString(),
+            ...extraParams,
+          });
+          final response = await http.get(uri).timeout(const Duration(seconds: 20));
+          if (response.statusCode != 200) return <Movie>[];
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          final results = data['results'] as List? ?? [];
+          return results.whereType<Map>().map((item) => Movie.fromJson(
+            Map<String, dynamic>.from(item), mediaType: isTv ? 'tv' : 'movie',
+          )).toList();
+        } catch (error) {
+          debugPrint('Catalogue page $page failed for $endpoint: $error');
+          return <Movie>[];
+        }
+      }),
+    );
+    return _deduplicateCataloguePages(pageResults.expand((items) => items));
+  }
+
+  static List<Movie> _deduplicateCataloguePages(Iterable<Movie> movies) {
+    final seen = <String>{};
+    return movies.where((movie) {
+      final key = movie.tmdbId > 0
+          ? '${movie.mediaType}:${movie.tmdbId}'
+          : '${movie.mediaType}:${movie.id}';
+      return seen.add(key);
+    }).toList();
   }
 
   static Future<List<Movie>> search(String query) async {
@@ -1064,6 +1089,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _ottTitlesError;
   String _librarySection = 'Downloads';
   bool _showRanking = false;
+  bool _rankingTv = false;
   String _rankingCategory = 'Cinema';
 
   String _search = '';
@@ -1500,10 +1526,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'sort_by': 'popularity.desc',
         }).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_origin_country': 'KR|JP|CN|TH|TW',
-          'with_original_language': 'ko|ja|zh|th',
+          'with_original_language': 'ko',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
         }).catchError((_) => <Movie>[]),
@@ -1514,36 +1539,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ur',
-          'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'en',
-          'with_origin_country': 'US|GB|CA|AU|NZ',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ta', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'te', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ml', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'kn', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'ja',
+          'sort_by': 'popularity.desc',
+        }, pages: 2).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'zh',
+          'sort_by': 'popularity.desc',
+        }, pages: 2).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'th',
+          'sort_by': 'popularity.desc',
+        }, pages: 2).catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
@@ -1566,7 +1598,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         southIndianMovies = _deduplicateMovies([
           ...results[15], ...results[16], ...results[17], ...results[18],
         ]);
-        indianDramaTv = results[19];
+        indianDramaTv = results[18];
+        koreanDrama = _deduplicateMovies([
+          ...results[8], ...results[19], ...results[20], ...results[21],
+        ]);
         loading = false;
 
         if (_allMovies().isEmpty) {
@@ -2279,9 +2314,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ));
   }
 
-  void _openRanking([String category = 'Cinema']) {
+  void _openRanking([String category = 'Cinema', bool tv = false]) {
     setState(() {
       _showRanking = true;
+      _rankingTv = tv;
       _rankingCategory = category;
     });
   }
@@ -2379,7 +2415,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               Expanded(child: Text(title, style: const TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.bold))),
               TextButton(
-                onPressed: () => _openRanking(title.contains('TV') ? 'Cinema' : 'Cinema'),
+                onPressed: () {
+                  final isTvSection = title.contains('TV') ||
+                      title == 'Anime' || title == 'Korean & Asian Drama';
+                  _openRanking(
+                    isTvSection ? 'All Series' : 'Cinema',
+                    isTvSection,
+                  );
+                },
                 style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(36, 28), tapTargetSize: MaterialTapTargetSize.shrinkWrap, visualDensity: VisualDensity.compact),
                 child: const Text('All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
               ),
@@ -3971,6 +4014,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _rankingMovies() {
+    if (_rankingTv) {
+      switch (_rankingCategory) {
+        case 'Top Series': {
+          final series = _deduplicateMovies([
+            ...topRatedTv, ...popularTv, ...trendingTv, ...anime,
+            ...koreanDrama, ...bengaliTv, ...indianDramaTv,
+          ]);
+          return series..sort((a, b) => b.rating.compareTo(a.rating));
+        }
+        case 'New Bengali':
+          return _deduplicateMovies(bengaliTv);
+        case 'Anime':
+          return _deduplicateMovies(anime);
+        case 'Asian Drama':
+          return _deduplicateMovies(koreanDrama);
+        case 'Indian Drama':
+          return _deduplicateMovies(indianDramaTv);
+        default:
+          return _deduplicateMovies([
+            ...trendingTv, ...popularTv, ...topRatedTv, ...anime,
+            ...koreanDrama, ...bengaliTv, ...indianDramaTv,
+          ]);
+      }
+    }
     switch (_rankingCategory) {
       case 'TOP Movies':
         final movies = _deduplicateMovies([
@@ -3995,7 +4062,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _rankingContent() {
-    const categories = ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
+    const movieCategories = [
+      'Cinema', 'TOP Movies', 'New Bengali', 'Bollywood',
+      'Hollywood', 'South Indian', 'New Release',
+    ];
+    const tvCategories = [
+      'All Series', 'Top Series', 'New Bengali',
+      'Anime', 'Asian Drama', 'Indian Drama',
+    ];
+    final categories = _rankingTv ? tvCategories : movieCategories;
     final movies = _rankingMovies();
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF171923), child: ListView.builder(
