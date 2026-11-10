@@ -18,13 +18,15 @@ Provider results are title/year matched, deduplicated, and added after a recogni
 
 ## Build-time endpoint configuration
 
-The following Dart defines can override the defaults:
+The following GitHub Actions secrets can override the defaults at build time:
 
-| Define | Default |
+| Secret | Default |
 | --- | --- |
 | `FLIXORA_DRAMACHI_API_BASE_URL` | `https://api.nodeobjects.com/` |
 | `FLIXORA_CIRCLEFTP_API_BASE_URL` | `http://new.circleftp.net:5000/api` |
 | `FLIXORA_4KHDHUB_BASE_URL` | `https://4khdhub.one/` |
+
+If a custom BDIX host is used, its exact hostname must also be added to the Android network-security allowlist in `android/app/src/main/res/xml/network_security_config.xml`.
 
 CircleFTP currently uses HTTP. Android cleartext traffic is restricted to `new.circleftp.net` in `network_security_config.xml`; other hosts remain blocked by default. If an authorized BDIX operator provides a different server hostname, update that hostname in the network security allowlist before building.
 
