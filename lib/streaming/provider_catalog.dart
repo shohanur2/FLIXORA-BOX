@@ -341,6 +341,7 @@ class ProviderCatalog {
   /// available as a fallback for the exact selected season and episode.
   static List<ProviderEmbedSource> forTv({
     required int tmdbId,
+    String? imdbId,
     int? aniListId,
     int seasonNumber = 1,
     int episodeNumber = 1,
@@ -363,15 +364,92 @@ class ProviderCatalog {
     final animeEpisode = (aniListEpisodeNumber ?? episode) > 0
         ? (aniListEpisodeNumber ?? episode)
         : episode;
-    const hosts = <String>{
+    final cleanImdbId = (imdbId ?? '').trim();
+    final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
+        .hasMatch(cleanImdbId);
+    const vidriftHosts = <String>{
       'embed.vidrift.net',
       'embed.vidrift.in',
     };
     const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
 
+    // These route templates mirror FLIXORA-REFERENCE's TV resolver.
+    // Each provider must still have the selected title/episode in its catalogue.
+    final tvProviders = <ProviderEmbedSource>[
+      ProviderEmbedSource(
+        id: 'play4u-tv',
+        name: 'Play4U · TV / Series',
+        url: hasImdbId
+            ? 'https://play4u.org/series/$cleanImdbId/s-' +
+                season.toString().padLeft(2, '0') +
+                '/ep-' +
+                episode.toString().padLeft(2, '0') +
+                '?cont=1'
+            : '',
+        allowedHosts: const <String>{'play4u.org'},
+        unavailableReason:
+            hasImdbId ? null : 'IMDb ID is not available for this TV title.',
+      ),
+      ProviderEmbedSource(
+        id: 'yapgrid-tv',
+        name: 'YapGrid · TV / Series',
+        url: 'https://yapgrid.com/embed/tv/$tmdbId/$season/$episode',
+        allowedHosts: const <String>{'yapgrid.com'},
+      ),
+      ProviderEmbedSource(
+        id: 'pvrplay-tv',
+        name: 'PVRPlay · TV / Series',
+        url: 'https://$_pvrPlayHost/watch/tv/$tmdbId/$season/$episode',
+        allowedHosts: const <String>{'pvrplay.fun'},
+      ),
+      ProviderEmbedSource(
+        id: 'cinesrc-tv',
+        name: 'CineSRC · TV / Series',
+        url: 'https://cinesrc.st/embed/tv/$tmdbId/$season/$episode',
+        allowedHosts: const <String>{'cinesrc.st'},
+      ),
+      ProviderEmbedSource(
+        id: 'framex-tv',
+        name: 'Frame X · TV / Series',
+        url: 'https://framextv.xyz/embed/$tmdbId/$season/$episode',
+        allowedHosts: const <String>{'framextv.xyz', 'framextv.cc'},
+      ),
+      ProviderEmbedSource(
+        id: 'streamrip-tv',
+        name: 'Stream Rip · TV / Series',
+        url: 'https://streamrip.fun/play?type=tv&id=$tmdbId&season=$season&episode=$episode',
+        allowedHosts: const <String>{'streamrip.fun'},
+      ),
+      ProviderEmbedSource(
+        id: 'filmu-tv',
+        name: 'FilmU · TV / Series',
+        url: 'https://embed.filmu.in/tv/$tmdbId/$season/$episode',
+        allowedHosts: const <String>{'filmu.in'},
+      ),
+      ProviderEmbedSource(
+        id: 'multiembed-tv',
+        name: 'Multiembed · TV / Series',
+        url: 'https://multiembed.mov/?video_id=$tmdbId&tmdb=1&s=$season&e=$episode',
+        allowedHosts: const <String>{'multiembed.mov'},
+      ),
+      ProviderEmbedSource(
+        id: 'nexstream-tv',
+        name: 'NexStream · TV / Series',
+        url: 'https://api.codespecters.com/embed/tv/$tmdbId/$season/$episode?apikey=' + _dynamicNexStreamDemoKey(),
+        allowedHosts: const <String>{'codespecters.com'},
+      ),
+      ProviderEmbedSource(
+        id: 'vidrift-tv',
+        name: 'VidRift · TV / Seasons & Episodes',
+        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
+        allowedHosts: vidriftHosts,
+        loadInIframe: true,
+      ),
+    ];
+
     // AniList often represents each anime season as a separate entry.
-    // Use its episode route only for season one; later seasons must keep the
-    // exact TMDB season/episode path instead of guessing an AniList offset.
+    // Keep its Sub/Dub sources first for season one, then offer every TV
+    // provider as a fallback for this exact TMDB season and episode.
     if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
         if (adminSource != null) adminSource,
@@ -379,35 +457,23 @@ class ProviderCatalog {
           id: 'vidrift-anime-sub',
           name: 'VidRift Anime · Sub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
-          allowedHosts: hosts,
+          allowedHosts: vidriftHosts,
           loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
           name: 'VidRift Anime · Dub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
-          allowedHosts: hosts,
+          allowedHosts: vidriftHosts,
           loadInIframe: true,
         ),
-        ProviderEmbedSource(
-          id: 'vidrift-tv-fallback',
-          name: 'VidRift TV · TMDB fallback',
-          url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
-          allowedHosts: hosts,
-          loadInIframe: true,
-        ),
+        ...tvProviders,
       ];
     }
 
     return <ProviderEmbedSource>[
       if (adminSource != null) adminSource,
-      ProviderEmbedSource(
-        id: 'vidrift-tv',
-        name: 'VidRift TV · Seasons & Episodes',
-        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
-        allowedHosts: hosts,
-        loadInIframe: true,
-      ),
+      ...tvProviders,
     ];
   }
 
