@@ -219,6 +219,286 @@ class ProviderCatalog {
       return null;
     }
 
+    // PeerTube embeds are provided by the instance that hosts the video.
+    // Accept only explicit watch/embed URLs supplied by the Admin source field.
+    final isPeerTubeEmbed = segments.length >= 3 &&
+        segments[0] == 'videos' &&
+        (segments[1] == 'watch' || segments[1] == 'embed');
+    if (isPeerTubeEmbed) {
+      final videoId = segments[2];
+      final isUuid = RegExp(
+        r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}
+    if (isArchive &&
+        segments.length >= 2 &&
+        const <String>{'details', 'embed'}.contains(segments.first)) {
+      final identifier = segments[1];
+      if (RegExp(r'^[A-Za-z0-9._-]{2,120}$').hasMatch(identifier)) {
+        return ProviderEmbedSource(
+          id: 'internet-archive',
+          name: 'Internet Archive',
+          url: 'https://archive.org/embed/${Uri.encodeComponent(identifier)}',
+          allowedHosts: const <String>{'archive.org'},
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /// Returns the built-in movie providers. Dailymotion is included only when
+  /// the Admin source URL points to a Dailymotion video or playlist.
+  /// Play4U requires the movie's real IMDb title ID; the others use TMDB ID.
+  static List<ProviderEmbedSource> forMovie({
+    required int tmdbId,
+    String? imdbId,
+    String? dailymotionUrl,
+    String? dailymotionPlayerId,
+    String? adminVideoUrl,
+  }) {
+    final adminSource = fromAdminUrl(
+      adminVideoUrl ?? dailymotionUrl ?? '',
+      dailymotionPlayerId: dailymotionPlayerId,
+    );
+    if (tmdbId <= 0) {
+      return adminSource == null
+          ? const <ProviderEmbedSource>[]
+          : <ProviderEmbedSource>[adminSource];
+    }
+
+    final id = tmdbId.toString();
+    final cleanImdbId = (imdbId ?? '').trim();
+    final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
+        .hasMatch(cleanImdbId);
+    final nexStreamKey = _dynamicNexStreamDemoKey();
+
+    return <ProviderEmbedSource>[
+      if (adminSource != null) adminSource,
+      ProviderEmbedSource(
+        id: 'play4u',
+        name: 'STREAM 1 · Play4U',
+        url: hasImdbId
+            ? 'https://play4u.org/watch/$cleanImdbId?embed=1'
+            : '',
+        allowedHosts: const <String>{'play4u.org'},
+        unavailableReason:
+            hasImdbId ? null : 'IMDb ID is not available for this movie.',
+      ),
+      ProviderEmbedSource(
+        id: 'yapgrid',
+        name: 'STREAM 2 · YapGrid',
+        url: 'https://yapgrid.com/embed/movie/$id?autoplay=1',
+        allowedHosts: const <String>{'yapgrid.com'},
+      ),
+      ProviderEmbedSource(
+        id: 'pvrplay',
+        name: 'STREAM 3 · PVRPlay',
+        url: 'https://$_pvrPlayHost/watch/movie/$id',
+        allowedHosts: const <String>{'pvrplay.fun'},
+      ),
+      ProviderEmbedSource(
+        id: 'cinesrc',
+        name: 'STREAM 4 · CineSRC',
+        url: 'https://cinesrc.st/embed/movie/$id',
+        allowedHosts: const <String>{'cinesrc.st'},
+      ),
+      ProviderEmbedSource(
+        id: 'framex',
+        name: 'STREAM 5 · Frame X',
+        url: 'https://framextv.xyz/embed/$id',
+        allowedHosts: const <String>{'framextv.xyz', 'framextv.cc'},
+      ),
+      ProviderEmbedSource(
+        id: 'streamrip',
+        name: 'STREAM 6 · Stream Rip',
+        url: 'https://streamrip.fun/play?type=movie&id=$id',
+        allowedHosts: const <String>{'streamrip.fun'},
+      ),
+      ProviderEmbedSource(
+        id: 'filmu',
+        name: 'STREAM 7 · FilmU',
+        url: 'https://embed.filmu.in/movie/$id',
+        allowedHosts: const <String>{'filmu.in'},
+      ),
+      ProviderEmbedSource(
+        id: 'multiembed',
+        name: 'STREAM 8 · Multiembed',
+        url: 'https://multiembed.mov/?video_id=$id&tmdb=1',
+        allowedHosts: const <String>{'multiembed.mov'},
+      ),
+      ProviderEmbedSource(
+        id: 'nexstream',
+        name: 'STREAM 9 · NexStream',
+        url: 'https://api.codespecters.com/embed/movie/$id?apikey=$nexStreamKey',
+        allowedHosts: const <String>{'codespecters.com'},
+      ),
+      ProviderEmbedSource(
+        id: 'vidrift-movie',
+        name: 'STREAM 10 · VidRift',
+        url: 'https://embed.vidrift.net/embed/movie/$id?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
+        allowedHosts: const <String>{
+          'embed.vidrift.net',
+          'embed.vidrift.in',
+        },
+        loadInIframe: true,
+      ),
+    ];
+  }
+
+  /// Builds the selected TMDB season/episode route. Anime Sub/Dub uses the
+  /// absolute episode index expected by the AniList embed; the TMDB route stays
+  /// available as a fallback for the exact selected season and episode.
+  static List<ProviderEmbedSource> forTv({
+    required int tmdbId,
+    int? aniListId,
+    int seasonNumber = 1,
+    int episodeNumber = 1,
+    int? aniListEpisodeNumber,
+    String? adminVideoUrl,
+    String? dailymotionPlayerId,
+  }) {
+    final adminSource = fromAdminUrl(
+      adminVideoUrl ?? '',
+      dailymotionPlayerId: dailymotionPlayerId,
+    );
+    if (tmdbId <= 0) {
+      return adminSource == null
+          ? const <ProviderEmbedSource>[]
+          : <ProviderEmbedSource>[adminSource];
+    }
+
+    final season = seasonNumber > 0 ? seasonNumber : 1;
+    final episode = episodeNumber > 0 ? episodeNumber : 1;
+    final animeEpisode = (aniListEpisodeNumber ?? episode) > 0
+        ? (aniListEpisodeNumber ?? episode)
+        : episode;
+    const hosts = <String>{
+      'embed.vidrift.net',
+      'embed.vidrift.in',
+    };
+    const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
+
+    // AniList often represents each anime season as a separate entry.
+    // Use its episode route only for season one; later seasons must keep the
+    // exact TMDB season/episode path instead of guessing an AniList offset.
+    if (aniListId != null && aniListId > 0 && season == 1) {
+      return <ProviderEmbedSource>[
+        if (adminSource != null) adminSource,
+        ProviderEmbedSource(
+          id: 'vidrift-anime-sub',
+          name: 'VidRift Anime · Sub',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
+          allowedHosts: hosts,
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'vidrift-anime-dub',
+          name: 'VidRift Anime · Dub',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
+          allowedHosts: hosts,
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'vidrift-tv-fallback',
+          name: 'VidRift TV · TMDB fallback',
+          url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
+          allowedHosts: hosts,
+          loadInIframe: true,
+        ),
+      ];
+    }
+
+    return <ProviderEmbedSource>[
+      if (adminSource != null) adminSource,
+      ProviderEmbedSource(
+        id: 'vidrift-tv',
+        name: 'VidRift TV · Seasons & Episodes',
+        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
+        allowedHosts: hosts,
+        loadInIframe: true,
+      ),
+    ];
+  }
+
+  /// Mirrors the reference project's five-minute NexStream demo-key window.
+  /// A provider-issued production API key can replace this if required.
+  static String _dynamicNexStreamDemoKey() {
+    final timeWindow =
+        DateTime.now().millisecondsSinceEpoch ~/ 300000;
+    final value = 'NEXSTREAM$timeWindow';
+    var hash = 0;
+
+    for (final unit in value.codeUnits) {
+      hash = ((hash << 5) - hash + unit) & 0xffffffff;
+    }
+
+    if (hash >= 0x80000000) hash -= 0x100000000;
+    final hex = hash.abs().toRadixString(16).padRight(8, '0');
+    return 'DEMO_$hex';
+  }
+
+  /// Returns the next available provider after a failed source. The order is
+  /// deterministic and never loops back to a provider that already failed.
+  static ProviderEmbedSource? nextAvailableAfter(
+    Iterable<ProviderEmbedSource> sources,
+    String failedSourceId, {
+    Set<String> excludedIds = const <String>{},
+  }) {
+    final items = sources.toList(growable: false);
+    final failedIndex = items.indexWhere((item) => item.id == failedSourceId);
+    if (failedIndex < 0) return null;
+
+    for (var index = failedIndex + 1; index < items.length; index++) {
+      final candidate = items[index];
+      if (candidate.isAvailable && !excludedIds.contains(candidate.id)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  /// Only HTTPS navigation on the provider's own domain (or its subdomains)
+  /// is allowed inside the embedded player.
+  static bool allowsNavigation(
+    ProviderEmbedSource source,
+    Uri uri,
+  ) {
+    if (uri.scheme.toLowerCase() != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      return false;
+    }
+
+    final host = uri.host.toLowerCase();
+    final approvedHosts = <String>{
+      ...source.allowedHosts,
+      ..._approvedRedirectHosts,
+    };
+    return approvedHosts.any((allowed) {
+      final domain = allowed.toLowerCase();
+      return host == domain || host.endsWith('.$domain');
+    });
+  }
+}
+,
+      ).hasMatch(videoId);
+      if (isUuid) {
+        final embedUrl = Uri(
+          scheme: 'https',
+          host: host,
+          pathSegments: <String>['videos', 'embed', videoId],
+          queryParameters: uri.queryParameters.isEmpty
+              ? null
+              : uri.queryParameters,
+        ).toString();
+        return ProviderEmbedSource(
+          id: 'peertube',
+          name: 'PeerTube',
+          url: embedUrl,
+          allowedHosts: <String>{host},
+        );
+      }
+    }
+
     final isArchive = host == 'archive.org' || host.endsWith('.archive.org');
     if (isArchive &&
         segments.length >= 2 &&
