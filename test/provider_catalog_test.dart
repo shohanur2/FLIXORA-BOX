@@ -24,7 +24,7 @@ void main() {
       ]);
       expect(
         sources.first.url,
-        'https://play4u.org/watch/tt0816692?embed=1',
+        'https://play4u.org/watch/tt0816692',
       );
       expect(
         sources[1].url,
@@ -126,7 +126,7 @@ void main() {
       expect(play4u.isAvailable, isTrue);
       expect(
         play4u.url,
-        'https://play4u.org/series/tt0903747/s-02/ep-05?cont=1',
+        'https://play4u.org/series/tt0903747/s-02/ep-05',
       );
     });
 
