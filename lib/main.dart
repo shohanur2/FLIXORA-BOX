@@ -101,6 +101,8 @@ List<String> _tmdbGenreNames(dynamic raw) {
   return [];
 }
 
+/// Legacy model name retained for compatibility; this represents any FLIXORA
+/// catalogue title, including movies, TV shows, web series, dramas and anime.
 class Movie {
   final int id;
   final int tmdbId;
@@ -164,7 +166,7 @@ class Movie {
         tmdbId: tmdbId > 0 ? tmdbId : fallback.tmdbId,
         sourceId: sourceId,
         source: source,
-        title: title.trim().isNotEmpty && title != 'Unknown Movie'
+        title: title.trim().isNotEmpty && title != 'Unknown Title'
             ? title
             : fallback.title,
         year: year != 'N/A' ? year : fallback.year,
@@ -193,7 +195,7 @@ class Movie {
     return Movie(
       id: movieId,
       tmdbId: movieId,
-      title: (json['title'] ?? json['name'] ?? 'Unknown Movie').toString(),
+      title: (json['title'] ?? json['name'] ?? 'Unknown Title').toString(),
       year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
       releaseDate: date,
       overview: (json['overview'] ?? 'No description available.').toString(),
@@ -253,7 +255,7 @@ class Movie {
           : (cachedSource == 'tmdb' ? cachedId : 0),
       sourceId: _toInt(json['sourceId']),
       source: cachedSource,
-      title: (json['title'] ?? 'Unknown Movie').toString(),
+      title: (json['title'] ?? 'Unknown Title').toString(),
       year: (json['year'] ?? 'N/A').toString(),
       overview: (json['overview'] ?? '').toString(),
       poster: (json['poster'] ?? '').toString(),
@@ -576,7 +578,7 @@ class TmdbService {
     Map<String, String> extraParams = const {},
     int pages = 1,
   }) async {
-    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
     final isTv = TmdbMediaType.isTvEndpoint(endpoint);
     final pageCount = pages.clamp(1, 3).toInt();
     final pageResults = await Future.wait<List<Movie>>(
@@ -618,7 +620,7 @@ class TmdbService {
   }
 
   static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
     Future<List<Movie>> searchType(String type) async {
       final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
         'api_key': apiKey, 'query': query, 'language': 'en-US',
@@ -675,7 +677,7 @@ class TmdbService {
   static Future<Map<String, dynamic>> details(
     int id, {String mediaType = 'movie'}
   ) async {
-    if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
+    if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
     final uri = Uri.parse('$base/$mediaType/$id').replace(queryParameters: {
       'api_key': apiKey, 'language': 'en-US',
       'append_to_response': 'external_ids',
@@ -2480,7 +2482,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               TextButton(
                 onPressed: () {
                   final isTvSection = title.contains('TV') ||
-                      title == 'Anime' || title == 'Korean & Asian Drama';
+                      title == 'Anime' || title == 'Drama' ||
+                      title == 'Web Series' || title == 'Korean & Asian Drama';
                   _openRanking(
                     isTvSection ? 'All Series' : 'Cinema',
                     isTvSection,
@@ -2894,6 +2897,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _withoutFlixoraDuplicates(trending)),
           _sectionBlock('Trending TV Series', trendingTv),
+          _sectionBlock('Drama', _deduplicateMovies([
+            ...trendingTv, ...popularTv, ...topRatedTv,
+            ...bengaliTv, ...koreanDrama, ...indianDramaTv,
+          ]).where((title) => title.mediaType == 'tv' && title.genres.any(
+            (genre) => genre.toLowerCase().contains('drama'),
+          )).toList()),
+          _sectionBlock('Web Series', _deduplicateMovies([
+            ...flixoraMovies, ...trendingTv, ...popularTv, ...topRatedTv,
+          ]).where((title) => title.mediaType == 'tv' && title.genres.any((genre) {
+            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
+            return normalized == 'web series' || normalized == 'webseries';
+          })).toList()),
           _sectionBlock('Anime', anime),
           _sectionBlock('Korean & Asian Drama', koreanDrama),
           _sectionBlock('Bengali Movies', bengaliMovies),
@@ -2998,7 +3013,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (searchResults.isEmpty) {
       return Center(
         child: Text(
-          _searchError ?? 'Search for a movie.',
+          _searchError ?? 'Search movies, TV shows, web series, dramas and anime.',
           style: const TextStyle(color: ink54),
         ),
       );
