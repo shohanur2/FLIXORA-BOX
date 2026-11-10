@@ -14,11 +14,13 @@ class ProviderEmbedPlayer extends StatefulWidget {
     super.key,
     required this.source,
     required this.onClose,
+    required this.onNext,
     required this.onFailure,
   });
 
   final ProviderEmbedSource source;
   final VoidCallback onClose;
+  final VoidCallback onNext;
   final VoidCallback onFailure;
 
   @override
@@ -354,6 +356,12 @@ window.addEventListener('message', function(event) {
                   icon: Icons.refresh_rounded,
                   tooltip: 'Reload stream',
                   onPressed: _retry,
+                ),
+                const SizedBox(width: 5),
+                _controlButton(
+                  icon: Icons.skip_next_rounded,
+                  tooltip: 'Try next stream',
+                  onPressed: widget.onNext,
                 ),
                 const SizedBox(width: 5),
                 _controlButton(
