@@ -154,7 +154,7 @@ class Movie {
   /// Admin-managed direct MP4/HLS source is attached. TV embeds are not
   /// enabled because the configured providers are movie endpoints.
   bool get canAttemptPlayback =>
-      hasPlayableVideoUrl || (mediaType != 'tv' && tmdbId > 0);
+      hasPlayableVideoUrl || (mediaType == 'movie' && tmdbId > 0);
 
   Movie withFallbackMetadata(Movie fallback) => Movie(
         id: id,
