@@ -22,6 +22,7 @@ import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/provider_embed_player.dart';
+import 'streaming/ott_catalog_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -599,6 +600,20 @@ class TmdbService {
     }
   }
 
+  static Future<Map<String, dynamic>> seasonDetails(int tvId, int seasonNumber) async {
+    if (apiKey.isEmpty || tvId <= 0 || seasonNumber < 0) {
+      throw Exception('TV season information is not available.');
+    }
+    final uri = Uri.parse('$base/tv/$tvId/season/$seasonNumber').replace(
+      queryParameters: {'api_key': apiKey, 'language': 'en-US'},
+    );
+    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) {
+      throw Exception('Could not load this season\\'s episodes.');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
   static Future<Map<String, dynamic>> details(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -1034,6 +1049,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _slide = 0;
   int _tab = 0;
   String _ottCategory = 'All Series';
+  String _ottRegion = 'BD';
+  String _ottMediaFilter = 'All';
+  List<OttProvider> _ottProviders = [];
+  OttProvider? _selectedOttProvider;
+  List<Movie> _ottProviderTitles = [];
+  bool _ottProvidersLoading = false;
+  bool _ottTitlesLoading = false;
+  String? _ottProvidersError;
+  String? _ottTitlesError;
   String _librarySection = 'Downloads';
   bool _showRanking = false;
   String _rankingCategory = 'Cinema';
@@ -1185,7 +1209,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     if (online) {
-      await loadHome();
+      await Future.wait<void>([loadHome(), _loadOttProviders()]);
     } else {
       setState(() {
         loading = false;
@@ -1396,7 +1420,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (online && wasOffline) {
-        await loadHome();
+        await Future.wait<void>([loadHome(), _loadOttProviders()]);
         if (_search.trim().isNotEmpty) {
           searchMovies(_search);
         }
@@ -2687,6 +2711,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: ListView(
         children: [
           _featuredSlider(),
+          _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _withoutFlixoraDuplicates(trending)),
           _sectionBlock('Trending TV Series', trendingTv),
@@ -2828,6 +2853,470 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             isOnline: _online,
           )));
       },
+    );
+  }
+
+
+  Future<void> _loadOttProviders() async {
+    if (apiKey.isEmpty || !_online) return;
+    if (mounted) {
+      setState(() {
+        _ottProvidersLoading = true;
+        _ottProvidersError = null;
+      });
+    }
+    try {
+      final providers = await OttCatalogService.getProviders(apiKey: apiKey);
+      if (!mounted) return;
+      final selectedId = _selectedOttProvider?.id;
+      setState(() {
+        _ottProviders = providers;
+        _ottProvidersLoading = false;
+        if (selectedId != null) {
+          _selectedOttProvider = providers.cast<OttProvider?>().firstWhere(
+            (provider) => provider?.id == selectedId,
+            orElse: () => null,
+          );
+        }
+      });
+      if (_selectedOttProvider != null) {
+        await _loadOttProviderTitles(_selectedOttProvider!);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _ottProvidersLoading = false;
+        _ottProvidersError = 'Could not load streaming platforms. Please retry.';
+      });
+      debugPrint('OTT provider catalogue error: $error');
+    }
+  }
+
+  Future<void> _loadOttProviderTitles(OttProvider provider) async {
+    if (!_online || apiKey.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _ottTitlesError = 'Connect to the internet to browse this platform.';
+          _ottProviderTitles = [];
+        });
+      }
+      return;
+    }
+    setState(() {
+      _selectedOttProvider = provider;
+      _ottTitlesLoading = true;
+      _ottTitlesError = null;
+      _ottProviderTitles = [];
+    });
+    try {
+      final rows = await OttCatalogService.getProviderTitles(
+        apiKey: apiKey,
+        providerId: provider.id,
+        region: _ottRegion,
+        mediaFilter: _ottMediaFilter == 'Movies' || _ottMediaFilter == 'TV Series'
+            ? _ottMediaFilter
+            : 'All',
+      );
+      final titles = rows.map((row) {
+        final mediaType = (row['media_type'] ?? 'movie').toString();
+        final catalogueMovie = Movie.fromJson(row, mediaType: mediaType);
+        if (mediaType == 'movie') {
+          for (final adminMovie in flixoraMovies) {
+            if (adminMovie.tmdbId > 0 &&
+                adminMovie.tmdbId == catalogueMovie.tmdbId) {
+              return adminMovie.withFallbackMetadata(catalogueMovie);
+            }
+          }
+        }
+        return catalogueMovie;
+      }).toList();
+      if (!mounted) return;
+      setState(() {
+        _ottProviderTitles = _deduplicateMovies(titles);
+        _ottTitlesLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _ottTitlesLoading = false;
+        _ottTitlesError = 'Could not load titles for ${provider.name}.';
+      });
+      debugPrint('OTT title discovery error: $error');
+    }
+  }
+
+  void _changeOttRegion(String? region) {
+    if (region == null || region == _ottRegion) return;
+    setState(() => _ottRegion = region);
+    final provider = _selectedOttProvider;
+    if (provider != null) unawaited(_loadOttProviderTitles(provider));
+  }
+
+  void _changeOttMediaFilter(String filter) {
+    if (_ottMediaFilter == filter) return;
+    setState(() => _ottMediaFilter = filter);
+    final provider = _selectedOttProvider;
+    if (provider != null) unawaited(_loadOttProviderTitles(provider));
+  }
+
+  void _openOttProvider(OttProvider provider) {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _tab = 1;
+      _search = '';
+      _searchController.clear();
+      _showRanking = false;
+      _ottMediaFilter = 'All';
+      _selectedOttProvider = provider;
+    });
+    unawaited(_loadOttProviderTitles(provider));
+  }
+
+  Widget _ottProviderLogo(OttProvider provider, {double size = 58}) {
+    return Container(
+      width: size,
+      height: size,
+      padding: const EdgeInsets.all(9),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202020),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: ink12),
+      ),
+      child: provider.logoUrl.isEmpty
+          ? const Icon(Icons.live_tv_rounded, color: gold, size: 25)
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(9),
+              child: Image.network(
+                provider.logoUrl,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(
+                  Icons.live_tv_rounded,
+                  color: gold,
+                  size: 25,
+                ),
+              ),
+            ),
+    );
+  }
+
+  Widget _ottHomeSection() {
+    if (_ottProviders.isEmpty && !_ottProvidersLoading) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 20, 12, 8),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Stream on OTT',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  _tab = 1;
+                  _search = '';
+                  _searchController.clear();
+                }),
+                child: const Text(
+                  'Explore all',
+                  style: TextStyle(color: gold, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_ottProvidersLoading && _ottProviders.isEmpty)
+          const SizedBox(
+            height: 78,
+            child: Center(
+              child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+            ),
+          )
+        else
+          SizedBox(
+            height: 104,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              scrollDirection: Axis.horizontal,
+              itemCount: _ottProviders.take(18).length,
+              separatorBuilder: (_, __) => const SizedBox(width: 13),
+              itemBuilder: (context, index) {
+                final provider = _ottProviders[index];
+                return GestureDetector(
+                  onTap: () => _openOttProvider(provider),
+                  child: SizedBox(
+                    width: 68,
+                    child: Column(
+                      children: [
+                        _ottProviderLogo(provider, size: 60),
+                        const SizedBox(height: 5),
+                        Text(
+                          provider.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: ink70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Movie> _filteredOttProviderTitles() {
+    final titles = _ottProviderTitles;
+    switch (_ottMediaFilter) {
+      case 'Movies':
+        return titles.where((movie) => movie.mediaType == 'movie').toList();
+      case 'TV Series':
+        return titles.where((movie) => movie.mediaType == 'tv').toList();
+      case 'Anime':
+        return titles.where((movie) =>
+          movie.mediaType == 'tv' &&
+          movie.genres.any((genre) => genre.toLowerCase() == 'animation') &&
+          (movie.originalLanguage.toLowerCase() == 'ja' ||
+              movie.originCountry.toUpperCase() == 'JP')
+        ).toList();
+      case 'Drama':
+        return titles.where((movie) => movie.genres.any(
+          (genre) => genre.toLowerCase() == 'drama',
+        )).toList();
+      case 'Documentary':
+        return titles.where((movie) => movie.genres.any(
+          (genre) => genre.toLowerCase() == 'documentary',
+        )).toList();
+      default:
+        return titles;
+    }
+  }
+
+  Widget _ottContent() {
+    const mediaFilters = [
+      'All', 'Movies', 'TV Series', 'Anime', 'Drama', 'Documentary',
+    ];
+    final selectedProvider = _selectedOttProvider;
+    final titles = _filteredOttProviderTitles();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Explore streaming platforms',
+                  style: TextStyle(color: ink60, fontSize: 13),
+                ),
+              ),
+              const Text('Region', style: TextStyle(color: ink54, fontSize: 11)),
+              const SizedBox(width: 7),
+              DropdownButton<String>(
+                value: _ottRegion,
+                dropdownColor: panel,
+                underline: const SizedBox.shrink(),
+                style: const TextStyle(
+                  color: white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+                items: const [
+                  DropdownMenuItem(value: 'BD', child: Text('🇧🇩 BD')),
+                  DropdownMenuItem(value: 'IN', child: Text('🇮🇳 IN')),
+                  DropdownMenuItem(value: 'US', child: Text('🇺🇸 US')),
+                  DropdownMenuItem(value: 'GB', child: Text('🇬🇧 UK')),
+                  DropdownMenuItem(value: 'CA', child: Text('🇨🇦 CA')),
+                  DropdownMenuItem(value: 'AU', child: Text('🇦🇺 AU')),
+                ],
+                onChanged: _changeOttRegion,
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 106,
+          child: _ottProvidersLoading && _ottProviders.isEmpty
+              ? const Center(child: CircularProgressIndicator(color: gold))
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _ottProviders.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 13),
+                  itemBuilder: (context, index) {
+                    final provider = _ottProviders[index];
+                    final selected = selectedProvider?.id == provider.id;
+                    return GestureDetector(
+                      onTap: () => _loadOttProviderTitles(provider),
+                      child: SizedBox(
+                        width: 70,
+                        child: Column(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(19),
+                                border: Border.all(
+                                  color: selected ? gold : Colors.transparent,
+                                  width: 2,
+                                ),
+                              ),
+                              child: _ottProviderLogo(provider, size: 58),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              provider.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: selected ? gold : ink70,
+                                fontSize: 10,
+                                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        if (_ottProvidersError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+            child: Text(
+              _ottProvidersError!,
+              style: const TextStyle(color: ink60, fontSize: 12),
+            ),
+          ),
+        if (selectedProvider == null)
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.touch_app_rounded, color: gold, size: 36),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Choose a platform to explore its catalogue',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: ink70, fontSize: 13),
+                  ),
+                  if (_ottProvidersError != null)
+                    TextButton(
+                      onPressed: _loadOttProviders,
+                      child: const Text('Retry'),
+                    ),
+                ],
+              ),
+            ),
+          )
+        else ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 5),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    selectedProvider.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                Text(
+                  _ottRegion,
+                  style: const TextStyle(color: gold, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 42,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              scrollDirection: Axis.horizontal,
+              itemCount: mediaFilters.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 7),
+              itemBuilder: (context, index) {
+                final filter = mediaFilters[index];
+                final selected = _ottMediaFilter == filter;
+                return ChoiceChip(
+                  label: Text(filter),
+                  selected: selected,
+                  onSelected: (_) => _changeOttMediaFilter(filter),
+                  selectedColor: gold,
+                  backgroundColor: panel,
+                  side: BorderSide(color: selected ? gold : ink24),
+                  labelStyle: TextStyle(
+                    color: selected ? white : ink70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                );
+              },
+            ),
+          ),
+          Expanded(
+            child: _ottTitlesLoading
+                ? const Center(child: CircularProgressIndicator(color: gold))
+                : _ottTitlesError != null
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _ottTitlesError!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: ink60),
+                            ),
+                            TextButton(
+                              onPressed: () => _loadOttProviderTitles(selectedProvider),
+                              child: const Text('Try again'),
+                            ),
+                          ],
+                        ),
+                      )
+                    : titles.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(22),
+                              child: Text(
+                                'No ${_ottMediaFilter.toLowerCase()} titles found for ${selectedProvider.name} in $_ottRegion. Try another region or category.',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: ink54, height: 1.4),
+                              ),
+                            ),
+                          )
+                        : _collectionContent(
+                            selectedProvider.name + ' · ' + _ottMediaFilter,
+                            titles,
+                          ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -4458,6 +4947,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   int _selectedAudioTrackIndex = 0;
   List<ProviderEmbedSource> _providerSources = [];
   ProviderEmbedSource? _selectedProviderSource;
+  List<Map<String, dynamic>> _tvSeasons = [];
+  List<Map<String, dynamic>> _tvEpisodes = [];
+  int _selectedSeasonNumber = 1;
+  int _selectedEpisodeNumber = 1;
+  int? _aniListId;
+  bool _loadingTvEpisodes = false;
+  String? _tvEpisodeError;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
 
@@ -4556,9 +5052,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
 
       if (isTv) {
+        final seasons = (details['seasons'] as List? ?? [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .where((item) => _toInt(item['season_number']) > 0)
+            .toList()
+          ..sort((a, b) => _toInt(a['season_number'])
+              .compareTo(_toInt(b['season_number'])));
+        final firstSeason = seasons.isNotEmpty
+            ? _toInt(seasons.first['season_number'])
+            : 1;
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _tvSeasons = seasons;
+            _selectedSeasonNumber = firstSeason;
+            _selectedEpisodeNumber = 1;
+          });
+        }
+
         // Anime is catalogued as TV by TMDB. Use AniList only when TMDB's
         // metadata identifies a Japanese animated series and an exact title
-        // match is found; otherwise keep the normal TMDB TV route.
+        // match is found; otherwise use the season-aware TMDB TV route.
         final genres = (details['genres'] as List? ?? [])
             .whereType<Map>()
             .map((genre) => (genre['name'] ?? '').toString().toLowerCase())
@@ -4582,15 +5096,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             year: year,
           );
         }
-
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _providerSources = ProviderCatalog.forTv(
-              tmdbId: id,
-              aniListId: aniListId,
-            );
-          });
-        }
+        _aniListId = aniListId;
+        await _loadTvSeasonEpisodes(firstSeason);
       } else {
         final externalIds = details['external_ids'];
         final imdbId = externalIds is Map
@@ -4610,6 +5117,239 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       debugPrint('Could not load player title metadata: $e');
       return {};
     }
+  }
+
+  int _aniListEpisodeNumber(int episodeNumber) {
+    var offset = 0;
+    for (final season in _tvSeasons) {
+      final seasonNumber = _toInt(season['season_number']);
+      if (seasonNumber > 0 && seasonNumber < _selectedSeasonNumber) {
+        offset += _toInt(season['episode_count']);
+      }
+    }
+    return offset + episodeNumber;
+  }
+
+  void _refreshTvProviderSources({bool selectProvider = false}) {
+    final id = widget.movie.tmdbId;
+    if (id <= 0 || widget.movie.mediaType != 'tv') return;
+    final sources = ProviderCatalog.forTv(
+      tmdbId: id,
+      aniListId: _aniListId,
+      seasonNumber: _selectedSeasonNumber,
+      episodeNumber: _selectedEpisodeNumber,
+      aniListEpisodeNumber: _aniListEpisodeNumber(_selectedEpisodeNumber),
+    );
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _providerSources = sources;
+        _selectedProviderSource = null;
+        _failedProviderIds.clear();
+        _errorMessage = null;
+      });
+    }
+    if (selectProvider && sources.isNotEmpty) {
+      final firstAvailable = sources.firstWhere(
+        (source) => source.isAvailable,
+        orElse: () => sources.first,
+      );
+      unawaited(_selectProviderSource(firstAvailable));
+    }
+  }
+
+  Future<void> _loadTvSeasonEpisodes(
+    int seasonNumber, {
+    bool selectProvider = false,
+  }) async {
+    if (widget.movie.tmdbId <= 0 || _isDisposed) return;
+    if (mounted) {
+      setState(() {
+        _loadingTvEpisodes = true;
+        _tvEpisodeError = null;
+        _selectedSeasonNumber = seasonNumber;
+        _selectedEpisodeNumber = 1;
+      });
+    }
+    List<Map<String, dynamic>> episodes = [];
+    String? errorMessage;
+    try {
+      final season = await TmdbService.seasonDetails(
+        widget.movie.tmdbId,
+        seasonNumber,
+      );
+      episodes = (season['episodes'] as List? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList()
+        ..sort((a, b) => _toInt(a['episode_number'])
+            .compareTo(_toInt(b['episode_number'])));
+    } catch (error) {
+      debugPrint('Could not load TV season $seasonNumber: $error');
+      errorMessage = 'Episode details are temporarily unavailable.';
+    }
+    final firstEpisode = episodes.isNotEmpty
+        ? _toInt(episodes.first['episode_number'])
+        : 1;
+    if (!mounted || _isDisposed) return;
+    setState(() {
+      _tvEpisodes = episodes;
+      _selectedEpisodeNumber = firstEpisode;
+      _loadingTvEpisodes = false;
+      _tvEpisodeError = errorMessage;
+    });
+    _refreshTvProviderSources(selectProvider: selectProvider);
+  }
+
+  void _selectTvEpisode(int episodeNumber) {
+    if (episodeNumber <= 0 || episodeNumber == _selectedEpisodeNumber) return;
+    setState(() => _selectedEpisodeNumber = episodeNumber);
+    _refreshTvProviderSources(selectProvider: true);
+  }
+
+  Widget _tvEpisodeSelector() {
+    if (widget.movie.mediaType != 'tv') return const SizedBox.shrink();
+    final seasonNumbers = _tvSeasons
+        .map((season) => _toInt(season['season_number']))
+        .where((number) => number > 0)
+        .toSet()
+        .toList()
+      ..sort();
+    if (seasonNumbers.isEmpty) seasonNumbers.add(1);
+    final episodeNumbers = _tvEpisodes
+        .map((episode) => _toInt(episode['episode_number']))
+        .where((number) => number > 0)
+        .toList();
+    if (episodeNumbers.isEmpty) episodeNumbers.add(1);
+    final safeSeason = seasonNumbers.contains(_selectedSeasonNumber)
+        ? _selectedSeasonNumber
+        : seasonNumbers.first;
+    final safeEpisode = episodeNumbers.contains(_selectedEpisodeNumber)
+        ? _selectedEpisodeNumber
+        : episodeNumbers.first;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 13),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: playerPanel,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0x3DFFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.video_library_rounded, color: playerGoldLight, size: 17),
+              SizedBox(width: 7),
+              Text(
+                'Choose season & episode',
+                style: TextStyle(color: playerWhite, fontWeight: FontWeight.w800, fontSize: 13),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  value: safeSeason,
+                  dropdownColor: playerPanel,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Season',
+                    labelStyle: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                    filled: true,
+                    fillColor: playerBg,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(color: playerWhite, fontSize: 12),
+                  items: seasonNumbers.map((number) => DropdownMenuItem<int>(
+                    value: number,
+                    child: Text('Season $number'),
+                  )).toList(),
+                  onChanged: _loadingTvEpisodes
+                      ? null
+                      : (number) {
+                          if (number != null && number != _selectedSeasonNumber) {
+                            _loadTvSeasonEpisodes(number, selectProvider: true);
+                          }
+                        },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonFormField<int>(
+                  value: safeEpisode,
+                  dropdownColor: playerPanel,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Episode',
+                    labelStyle: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                    filled: true,
+                    fillColor: playerBg,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(color: playerWhite, fontSize: 12),
+                  items: episodeNumbers.map((number) {
+                    final episode = _tvEpisodes.cast<Map<String, dynamic>?>().firstWhere(
+                      (item) => _toInt(item?['episode_number']) == number,
+                      orElse: () => null,
+                    );
+                    final name = (episode?['name'] ?? '').toString().trim();
+                    return DropdownMenuItem<int>(
+                      value: number,
+                      child: Text(
+                        name.isEmpty ? 'Episode $number' : '$number. $name',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: _loadingTvEpisodes ? null : (number) {
+                    if (number != null) _selectTvEpisode(number);
+                  },
+                ),
+              ),
+            ],
+          ),
+          if (_loadingTvEpisodes) ...[
+            const SizedBox(height: 9),
+            const LinearProgressIndicator(
+              minHeight: 2,
+              color: playerGold,
+              backgroundColor: Colors.white12,
+            ),
+          ],
+          if (_tvEpisodeError != null) ...[
+            const SizedBox(height: 7),
+            Text(
+              _tvEpisodeError!,
+              style: const TextStyle(color: Color(0xFFFFC56E), fontSize: 10),
+            ),
+          ],
+          if (_tvEpisodes.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Builder(builder: (context) {
+              final episode = _tvEpisodes.cast<Map<String, dynamic>?>().firstWhere(
+                (item) => _toInt(item?['episode_number']) == _selectedEpisodeNumber,
+                orElse: () => null,
+              );
+              final overview = (episode?['overview'] ?? '').toString().trim();
+              return Text(
+                overview.isEmpty
+                    ? 'Selected: S$_selectedSeasonNumber · E$_selectedEpisodeNumber'
+                    : overview,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10, height: 1.35),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
   }
 
   Future<void> _selectProviderSource(ProviderEmbedSource source) async {
@@ -4741,11 +5481,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (widget.localFilePath != null || widget.movie.tmdbId <= 0) {
       return const SizedBox.shrink();
     }
-
     if (_providerSources.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _tvEpisodeSelector(),
         const Text(
           'Available Streams',
           style: TextStyle(
@@ -4767,7 +5507,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           runSpacing: 8,
           children: _providerSources.map((source) {
             final selected = _selectedProviderSource?.id == source.id;
-            final label = source.name.replaceFirst(RegExp(r'^STREAM \d+ · '), '');
+            final label = source.name.replaceFirst(RegExp(r'^STREAM \\d+ · '), '');
             return ChoiceChip(
               label: Text(label),
               selected: selected,
