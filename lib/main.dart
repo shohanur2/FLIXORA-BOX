@@ -676,7 +676,9 @@ class InternetArchiveService {
 
       final files = (payload['files'] as List).whereType<Map>().where((file) {
         final name = (file['name'] ?? '').toString().toLowerCase();
-        return name.endsWith('.mp4') && file['private'] != 'true';
+        final isPrivate = file['private'] == true ||
+            file['private']?.toString().toLowerCase() == 'true';
+        return name.endsWith('.mp4') && !isPrivate;
       }).toList();
       if (files.isEmpty) return null;
       files.sort((a, b) {
