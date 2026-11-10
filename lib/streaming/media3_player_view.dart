@@ -72,6 +72,12 @@ class Media3PlayerController {
   Future<void> setResizeMode(String mode) =>
       _invoke('setResizeMode', {'mode': mode});
 
+  Future<void> setVolume(double volume) =>
+      _invoke('setVolume', {'volume': volume});
+
+  Future<void> setPlaybackSpeed(double speed) =>
+      _invoke('setPlaybackSpeed', {'speed': speed});
+
   Future<void> selectTrack({
     required int trackType,
     required int groupIndex,
