@@ -205,7 +205,7 @@ class ProviderCatalog {
     if (isVimeo) {
       final videoId = segments.reversed
           .firstWhere(
-            (part) => RegExp(r'^\\d{5,12}$').hasMatch(part),
+            (part) => RegExp(r'^\d{5,12}$').hasMatch(part),
             orElse: () => '',
           );
       if (videoId.isNotEmpty) {
