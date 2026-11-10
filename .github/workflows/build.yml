@@ -103,6 +103,30 @@ jobs:
         continue-on-error: true
         run: flutter analyze --no-pub
 
+      - name: Configure persistent FLIXORA release signing
+        env:
+          FLIXORA_KEYSTORE_BASE64: ${{ secrets.FLIXORA_KEYSTORE_BASE64 }}
+          FLIXORA_KEYSTORE_PASSWORD: ${{ secrets.FLIXORA_KEYSTORE_PASSWORD }}
+          FLIXORA_KEY_ALIAS: ${{ secrets.FLIXORA_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FLIXORA_KEYSTORE_BASE64" ] || [ -z "$FLIXORA_KEYSTORE_PASSWORD" ] || [ -z "$FLIXORA_KEY_ALIAS" ]; then
+            echo "Missing FLIXORA signing secrets. Add FLIXORA_KEYSTORE_BASE64, FLIXORA_KEYSTORE_PASSWORD and FLIXORA_KEY_ALIAS in repository Actions secrets."
+            exit 1
+          fi
+
+          printf '%s' "$FLIXORA_KEYSTORE_BASE64" | base64 --decode > android/app/flixora-upload-key.jks
+          test -s android/app/flixora-upload-key.jks
+
+          cat > android/key.properties <<EOF
+          storePassword=$FLIXORA_KEYSTORE_PASSWORD
+          keyPassword=$FLIXORA_KEYSTORE_PASSWORD
+          keyAlias=$FLIXORA_KEY_ALIAS
+          storeFile=flixora-upload-key.jks
+          EOF
+
+          echo "Persistent FLIXORA release signing configured."
+
       - name: Build APK
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
@@ -143,6 +167,9 @@ jobs:
 
           echo "APK successfully generated:"
           ls -lh "$APK"
+
+          BUILD_TOOLS_VERSION="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --print-certs "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
