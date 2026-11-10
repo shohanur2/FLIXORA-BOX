@@ -1618,23 +1618,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         popular = results[1];
         latest = results[2];
         topRated = results[3];
-        trendingTv = results[4];
-        popularTv = results[5];
-        topRatedTv = results[6];
-        anime = results[7];
-        koreanDrama = results[8];
-        bengaliMovies = results[9];
-        bengaliTv = results[10];
-        flixoraMovies = results[11];
-        bollywoodMovies = _deduplicateMovies([...results[12], ...results[22]]);
-        hollywoodMovies = results[13];
-        southIndianMovies = _deduplicateMovies([
+        // Keep the last successful catalogue when a transient TMDB request
+        // fails, so a temporary API issue does not empty a whole Home section.
+        trendingTv = results[4].isNotEmpty ? results[4] : trendingTv;
+        popularTv = results[5].isNotEmpty ? results[5] : popularTv;
+        topRatedTv = results[6].isNotEmpty ? results[6] : topRatedTv;
+        anime = results[7].isNotEmpty ? results[7] : anime;
+        bengaliMovies = results[9].isNotEmpty ? results[9] : bengaliMovies;
+        bengaliTv = results[10].isNotEmpty ? results[10] : bengaliTv;
+        flixoraMovies = results[11].isNotEmpty ? results[11] : flixoraMovies;
+
+        final refreshedBollywood = [...results[12], ...results[22]];
+        if (refreshedBollywood.isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies(refreshedBollywood);
+        }
+        if (results[13].isNotEmpty) hollywoodMovies = results[13];
+
+        final refreshedSouthIndian = [
           ...results[14], ...results[15], ...results[16], ...results[17],
-        ]);
-        indianDramaTv = results[18];
-        koreanDrama = _deduplicateMovies([
+        ];
+        if (refreshedSouthIndian.isNotEmpty) {
+          southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
+        }
+
+        if (results[18].isNotEmpty) indianDramaTv = results[18];
+        final refreshedKoreanDrama = [
           ...results[8], ...results[19], ...results[20], ...results[21],
-        ]);
+        ];
+        if (refreshedKoreanDrama.isNotEmpty) {
+          koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
+        }
         loading = false;
 
         if (_allMovies().isEmpty) {
