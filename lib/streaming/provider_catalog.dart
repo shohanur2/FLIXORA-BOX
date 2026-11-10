@@ -171,6 +171,27 @@ class ProviderCatalog {
         host == 'youtube-nocookie.com' ||
         host.endsWith('.youtube-nocookie.com');
     if (isYouTube) {
+      final playlistId = uri.queryParameters['list']?.trim() ?? '';
+      if (RegExp(r'^[A-Za-z0-9_-]{10,128}').hasMatch(playlistId)) {
+        return ProviderEmbedSource(
+          id: 'youtube-playlist',
+          name: 'YouTube Playlist',
+          url: Uri.https(
+            'www.youtube-nocookie.com',
+            '/embed/videoseries',
+            <String, String>{
+              'list': playlistId,
+              'playsinline': '1',
+            },
+          ).toString(),
+          allowedHosts: const <String>{
+            'youtube.com',
+            'youtube-nocookie.com',
+            'youtu.be',
+          },
+        );
+      }
+
       String? videoId;
       if (host == 'youtu.be') {
         if (segments.isNotEmpty) videoId = segments.first;
