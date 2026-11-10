@@ -143,7 +143,7 @@ jobs:
             if flutter build apk --release \
               --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
               --dart-define=SUPABASE_URL="$SUPABASE_URL" \
-              --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \\
+              --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
               --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID"; then
               echo "APK build successful."
               exit 0
