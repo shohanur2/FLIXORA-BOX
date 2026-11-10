@@ -5515,7 +5515,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           runSpacing: 8,
           children: _providerSources.map((source) {
             final selected = _selectedProviderSource?.id == source.id;
-            final label = source.name.replaceFirst(RegExp(r'^STREAM \\d+ · '), '');
+            final label = source.name.replaceFirst(RegExp(r'^STREAM \d+ · '), '');
             return ChoiceChip(
               label: Text(label),
               selected: selected,
