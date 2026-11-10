@@ -37,7 +37,7 @@ void main() {
       expect(sources[2].url, contains('/watch/movie/157336'));
       expect(sources[9].url,
           'https://embed.vidrift.net/embed/movie/157336?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1');
-      expect(sources.first.isAvailable, isFalse);
+      expect(sources.first.isAvailable, isTrue);
       expect(sources.skip(1).every((source) => source.isAvailable), isTrue);
       expect(sources.last.loadInIframe, isTrue);
     });
@@ -92,7 +92,7 @@ void main() {
   });
 
   group('ProviderCatalog TV and anime', () {
-    test('builds ten TV provider candidates and keeps Play4U disabled without an embed route', () {
+    test('builds ten TV provider candidates and requires an IMDb ID for Play4U', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1399);
 
       expect(sources, hasLength(10));
@@ -109,7 +109,7 @@ void main() {
         'vidrift-tv',
       ]);
       expect(sources.first.isAvailable, isFalse);
-      expect(sources.first.unavailableReason, contains('verified in-app episode embed'));
+      expect(sources.first.unavailableReason, contains('IMDb title ID'));
       expect(sources.last.loadInIframe, isTrue);
       expect(
         sources.last.url,
