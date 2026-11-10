@@ -159,7 +159,10 @@ class ProviderCatalog {
     };
     const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
 
-    if (aniListId != null && aniListId > 0) {
+    // AniList often represents each anime season as a separate entry.
+    // Use its episode route only for season one; later seasons must keep the
+    // exact TMDB season/episode path instead of guessing an AniList offset.
+    if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
         ProviderEmbedSource(
           id: 'vidrift-anime-sub',
