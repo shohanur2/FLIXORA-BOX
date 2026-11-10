@@ -64,7 +64,10 @@ class ProviderCatalog {
     String? playerId,
   }) {
     final uri = Uri.tryParse(rawUrl.trim());
-    if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+    if (uri == null ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
       return null;
     }
 
@@ -148,17 +151,21 @@ class ProviderCatalog {
     String? dailymotionUrl,
     String? dailymotionPlayerId,
   }) {
-    if (tmdbId <= 0) return const <ProviderEmbedSource>[];
+    final dailymotionSource = fromDailymotionUrl(
+      dailymotionUrl ?? '',
+      playerId: dailymotionPlayerId,
+    );
+    if (tmdbId <= 0) {
+      return dailymotionSource == null
+          ? const <ProviderEmbedSource>[]
+          : <ProviderEmbedSource>[dailymotionSource];
+    }
 
     final id = tmdbId.toString();
     final cleanImdbId = (imdbId ?? '').trim();
     final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
         .hasMatch(cleanImdbId);
     final nexStreamKey = _dynamicNexStreamDemoKey();
-    final dailymotionSource = fromDailymotionUrl(
-      dailymotionUrl ?? '',
-      playerId: dailymotionPlayerId,
-    );
 
     return <ProviderEmbedSource>[
       if (dailymotionSource != null) dailymotionSource,
