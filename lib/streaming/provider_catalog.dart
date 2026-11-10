@@ -44,6 +44,8 @@ class ProviderCatalog {
     'youtu.be',
     'vimeo.com',
     'archive.org',
+    'embed.vidrift.net',
+    'embed.vidrift.in',
   };
 
   /// Returns all nine built-in movie providers in reference-project order.
@@ -118,6 +120,63 @@ class ProviderCatalog {
         name: 'STREAM 9 · NexStream',
         url: 'https://api.codespecters.com/embed/movie/$id?apikey=$nexStreamKey',
         allowedHosts: const <String>{'codespecters.com'},
+      ),
+      ProviderEmbedSource(
+        id: 'vidrift-movie',
+        name: 'STREAM 10 · VidRift',
+        url: 'https://embed.vidrift.net/embed/movie/$id?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
+        allowedHosts: const <String>{
+          'embed.vidrift.net',
+          'embed.vidrift.in',
+        },
+      ),
+    ];
+  }
+
+  /// VidRift provides TV season/episode navigation inside its player.
+  /// When an exact AniList match exists, offer Sub and Dub routes first and
+  /// retain the TMDB TV route as a fallback.
+  static List<ProviderEmbedSource> forTv({
+    required int tmdbId,
+    int? aniListId,
+  }) {
+    if (tmdbId <= 0) return const <ProviderEmbedSource>[];
+
+    const hosts = <String>{
+      'embed.vidrift.net',
+      'embed.vidrift.in',
+    };
+    const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
+
+    if (aniListId != null && aniListId > 0) {
+      return <ProviderEmbedSource>[
+        ProviderEmbedSource(
+          id: 'vidrift-anime-sub',
+          name: 'VidRift Anime · Sub',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand',
+          allowedHosts: hosts,
+        ),
+        ProviderEmbedSource(
+          id: 'vidrift-anime-dub',
+          name: 'VidRift Anime · Dub',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand&dub=1',
+          allowedHosts: hosts,
+        ),
+        ProviderEmbedSource(
+          id: 'vidrift-tv-fallback',
+          name: 'VidRift TV · TMDB fallback',
+          url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
+          allowedHosts: hosts,
+        ),
+      ];
+    }
+
+    return <ProviderEmbedSource>[
+      ProviderEmbedSource(
+        id: 'vidrift-tv',
+        name: 'VidRift TV · Seasons & Episodes',
+        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
+        allowedHosts: hosts,
       ),
     ];
   }

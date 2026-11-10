@@ -3,13 +3,13 @@ import 'package:flixora/streaming/provider_catalog.dart';
 
 void main() {
   group('ProviderCatalog.forMovie', () {
-    test('builds all nine reference providers for a TMDB movie', () {
+    test('builds the nine existing providers plus VidRift for a TMDB movie', () {
       final sources = ProviderCatalog.forMovie(
         tmdbId: 157336,
         imdbId: 'tt0816692',
       );
 
-      expect(sources, hasLength(9));
+      expect(sources, hasLength(10));
       expect(sources.map((source) => source.id).toList(), [
         'play4u',
         'yapgrid',
@@ -20,6 +20,7 @@ void main() {
         'filmu',
         'multiembed',
         'nexstream',
+        'vidrift-movie',
       ]);
       expect(
         sources.first.url,
@@ -30,6 +31,8 @@ void main() {
         'https://yapgrid.com/embed/movie/157336?autoplay=1',
       );
       expect(sources[2].url, contains('/watch/movie/157336'));
+      expect(sources[9].url,
+          'https://embed.vidrift.net/embed/movie/157336?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1');
       expect(sources.every((source) => source.isAvailable), isTrue);
     });
 
@@ -65,7 +68,8 @@ void main() {
     });
 
     test('creates a NexStream URL with a dynamic demo key', () {
-      final source = ProviderCatalog.forMovie(tmdbId: 157336).last;
+      final source = ProviderCatalog.forMovie(tmdbId: 157336)
+          .singleWhere((item) => item.id == 'nexstream');
 
       expect(
         source.url,
@@ -73,6 +77,40 @@ void main() {
           r'^https://api\.codespecters\.com/embed/movie/157336\?apikey=DEMO_[0-9a-f]{8}$',
         )),
       );
+    });
+  });
+
+  group('ProviderCatalog TV and anime', () {
+    test('builds a VidRift TV route with seasons and episodes', () {
+      final sources = ProviderCatalog.forTv(tmdbId: 1399);
+
+      expect(sources, hasLength(1));
+      expect(sources.single.id, 'vidrift-tv');
+      expect(
+        sources.single.url,
+        'https://embed.vidrift.net/embed/tv/1399/1/1?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
+      );
+      expect(ProviderCatalog.allowsNavigation(
+        sources.single,
+        Uri.parse(sources.single.url),
+      ), isTrue);
+    });
+
+    test('builds separate AniList Sub and Dub routes with TMDB fallback', () {
+      final sources = ProviderCatalog.forTv(tmdbId: 1429, aniListId: 16498);
+
+      expect(sources.map((source) => source.id), [
+        'vidrift-anime-sub',
+        'vidrift-anime-dub',
+        'vidrift-tv-fallback',
+      ]);
+      expect(sources[0].url, contains('/embed/anilist/16498/1'));
+      expect(sources[1].url, contains('&dub=1'));
+      expect(sources[2].url, contains('/embed/tv/1429/1/1'));
+    });
+
+    test('does not create TV providers without a TMDB ID', () {
+      expect(ProviderCatalog.forTv(tmdbId: 0), isEmpty);
     });
   });
 
@@ -99,7 +137,7 @@ void main() {
       expect(
         ProviderCatalog.nextAvailableAfter(
           sources,
-          'nexstream',
+          'vidrift-movie',
           excludedIds: const <String>{},
         ),
         isNull,

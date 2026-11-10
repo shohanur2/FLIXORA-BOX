@@ -19,6 +19,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
+import 'streaming/anilist_service.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/provider_embed_player.dart';
 
@@ -154,7 +155,8 @@ class Movie {
   /// Admin-managed direct MP4/HLS source is attached. TV embeds are not
   /// enabled because the configured providers are movie endpoints.
   bool get canAttemptPlayback =>
-      hasPlayableVideoUrl || (mediaType == 'movie' && tmdbId > 0);
+      hasPlayableVideoUrl ||
+      ((mediaType == 'movie' || mediaType == 'tv') && tmdbId > 0);
 
   Movie withFallbackMetadata(Movie fallback) => Movie(
         id: id,
@@ -4530,7 +4532,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
-    _providerSources = ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
+    _providerSources = widget.movie.mediaType == 'tv'
+        ? ProviderCatalog.forTv(tmdbId: widget.movie.tmdbId)
+        : ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
@@ -4545,25 +4549,65 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final id = widget.movie.tmdbId;
     if (id <= 0) return {};
     try {
+      final isTv = widget.movie.mediaType == 'tv';
       final details = await TmdbService.details(
         id,
-        mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+        mediaType: isTv ? 'tv' : 'movie',
       );
-      final externalIds = details['external_ids'];
-      final imdbId = externalIds is Map
-          ? (externalIds['imdb_id'] ?? '').toString()
-          : '';
-      if (mounted && !_isDisposed && widget.movie.mediaType != 'tv') {
-        setState(() {
-          _providerSources = ProviderCatalog.forMovie(
-            tmdbId: id,
-            imdbId: imdbId,
+
+      if (isTv) {
+        // Anime is catalogued as TV by TMDB. Use AniList only when TMDB's
+        // metadata identifies a Japanese animated series and an exact title
+        // match is found; otherwise keep the normal TMDB TV route.
+        final genres = (details['genres'] as List? ?? [])
+            .whereType<Map>()
+            .map((genre) => (genre['name'] ?? '').toString().toLowerCase())
+            .toSet();
+        final language =
+            (details['original_language'] ?? '').toString().toLowerCase();
+        final countries = (details['origin_country'] as List? ?? [])
+            .map((country) => country.toString().toUpperCase())
+            .toSet();
+        final isAnime = genres.contains('animation') &&
+            (language == 'ja' || countries.contains('JP'));
+
+        int? aniListId;
+        if (isAnime) {
+          final firstAirDate = (details['first_air_date'] ?? '').toString();
+          final year = firstAirDate.length >= 4
+              ? firstAirDate.substring(0, 4)
+              : widget.movie.year;
+          aniListId = await AniListService.findMatchingAnimeId(
+            title: (details['name'] ?? widget.movie.title).toString(),
+            year: year,
           );
-        });
+        }
+
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _providerSources = ProviderCatalog.forTv(
+              tmdbId: id,
+              aniListId: aniListId,
+            );
+          });
+        }
+      } else {
+        final externalIds = details['external_ids'];
+        final imdbId = externalIds is Map
+            ? (externalIds['imdb_id'] ?? '').toString()
+            : '';
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _providerSources = ProviderCatalog.forMovie(
+              tmdbId: id,
+              imdbId: imdbId,
+            );
+          });
+        }
       }
       return details;
     } catch (e) {
-      debugPrint('Could not load player movie metadata: $e');
+      debugPrint('Could not load player title metadata: $e');
       return {};
     }
   }
@@ -4694,8 +4738,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _providerSelector() {
-    if (widget.localFilePath != null || widget.movie.mediaType == 'tv' ||
-        widget.movie.tmdbId <= 0) {
+    if (widget.localFilePath != null || widget.movie.tmdbId <= 0) {
       return const SizedBox.shrink();
     }
 
@@ -4714,7 +4757,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         const SizedBox(height: 4),
         Text(
           _playerIsOnline
-              ? 'Choose a stream to play inside FLIXORA'
+              ? 'Choose a movie, series or anime stream to play inside FLIXORA'
               : 'Connect to the internet to use online streams',
           style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
         ),
@@ -6612,7 +6655,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   style: TextStyle(color: playerWhite,
                       fontSize: 15, fontWeight: FontWeight.w800)),
               SizedBox(height: 5),
-              Text('Select an available provider to start playback inside FLIXORA.',
+              Text('Select an available movie, TV or anime provider to start playback inside FLIXORA.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
             ],
