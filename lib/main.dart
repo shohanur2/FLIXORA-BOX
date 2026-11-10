@@ -8907,7 +8907,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerResources() {
-    final isProviderStream = _selectedProviderSource != null;
+    final isProviderStream =
+        _selectedProviderSource != null && !_selectedProviderSource!.isDirectMedia;
     final providerLanguages = widget.movie.audioLanguages
         .map((language) => language.trim())
         .where((language) => language.isNotEmpty)
