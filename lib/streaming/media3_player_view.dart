@@ -63,12 +63,6 @@ class Media3PlayerController {
   Future<void> seekTo(int positionMs) =>
       _invoke('seekTo', {'positionMs': positionMs});
 
-  Future<void> setVideoDecoder(String mode) =>
-      _invoke('setVideoDecoder', {'mode': mode});
-
-  Future<void> setAudioDecoder(String mode) =>
-      _invoke('setAudioDecoder', {'mode': mode});
-
   Future<void> setResizeMode(String mode) =>
       _invoke('setResizeMode', {'mode': mode});
 
