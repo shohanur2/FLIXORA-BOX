@@ -609,7 +609,7 @@ class TmdbService {
     );
     final response = await http.get(uri).timeout(const Duration(seconds: 20));
     if (response.statusCode != 200) {
-      throw Exception('Could not load this season\\'s episodes.');
+      throw Exception("Could not load this season's episodes.");
     }
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
