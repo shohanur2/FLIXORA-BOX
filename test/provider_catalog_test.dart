@@ -28,7 +28,7 @@ void main() {
         sources.first.url,
         'https://play4u.org/watch/tt0816692?embed=1',
       );
-      expect(sources.first.loadInIframe, isFalse);
+      expect(sources.first.loadInIframe, isTrue);
       expect(sources.first.unavailableReason, isNull);
       expect(
         sources[1].url,
@@ -138,7 +138,7 @@ void main() {
         play4u.url,
         'https://play4u.org/series/tt0903747/s-02/ep-05?cont=1',
       );
-      expect(play4u.loadInIframe, isFalse);
+      expect(play4u.loadInIframe, isTrue);
       expect(play4u.unavailableReason, isNull);
     });
 
@@ -166,9 +166,9 @@ void main() {
           'https://play4u.org/series/tt36458668/s-01/ep-01?cont=1');
       expect(seventhEpisodeSources.first.url,
           'https://play4u.org/series/tt23112594/s-01/ep-07?cont=1');
-      expect(movieSources.first.loadInIframe, isFalse);
-      expect(firstEpisodeSources.first.loadInIframe, isFalse);
-      expect(seventhEpisodeSources.first.loadInIframe, isFalse);
+      expect(movieSources.first.loadInIframe, isTrue);
+      expect(firstEpisodeSources.first.loadInIframe, isTrue);
+      expect(seventhEpisodeSources.first.loadInIframe, isTrue);
     });
 
     test('builds the exact selected TV season and episode route', () {

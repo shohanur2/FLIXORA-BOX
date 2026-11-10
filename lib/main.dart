@@ -22,6 +22,7 @@ import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/episode_number_mapper.dart';
 import 'streaming/provider_catalog.dart';
+import 'streaming/featured_carousel_layout.dart';
 import 'streaming/authorized_provider_service.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
@@ -330,6 +331,8 @@ class FlixoraCachedImage extends StatelessWidget {
   final bool isOnline;
   final Widget? placeholder;
   final Widget? fallback;
+  final int? memCacheWidth;
+  final int? memCacheHeight;
 
   const FlixoraCachedImage({
     super.key,
@@ -338,6 +341,8 @@ class FlixoraCachedImage extends StatelessWidget {
     required this.isOnline,
     this.placeholder,
     this.fallback,
+    this.memCacheWidth,
+    this.memCacheHeight,
   });
 
   @override
@@ -348,6 +353,9 @@ class FlixoraCachedImage extends StatelessWidget {
       return CachedNetworkImage(
         imageUrl: imageUrl,
         fit: fit,
+        memCacheWidth: memCacheWidth,
+        memCacheHeight: memCacheHeight,
+        useOldImageOnUrlChange: true,
         placeholder: (_, __) => placeholder ?? Container(color: panel),
         errorWidget: (_, __, ___) => empty,
       );
@@ -358,7 +366,12 @@ class FlixoraCachedImage extends StatelessWidget {
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
         if (file != null && file.existsSync()) {
-          return Image.file(file, fit: fit);
+          return Image.file(
+            file,
+            fit: fit,
+            cacheWidth: memCacheWidth,
+            cacheHeight: memCacheHeight,
+          );
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return placeholder ?? Container(color: panel);
@@ -370,36 +383,69 @@ class FlixoraCachedImage extends StatelessWidget {
 }
 
 class InternetService {
+  static DateTime? _lastCheckAt;
+  static bool? _lastCheckResult;
+  static Future<bool>? _inFlight;
+
   static Future<bool> isOnline() async {
     try {
       final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) return false;
-
-      // Test real Internet reachability, not just Wi-Fi/mobile connectivity.
-      final endpoints = <Uri>[
-        Uri.parse('https://www.google.com/generate_204'),
-        Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
-      ];
-
-      for (final endpoint in endpoints) {
-        try {
-          final response = await http
-              .get(endpoint)
-              .timeout(const Duration(seconds: 4));
-          if (response.statusCode == 204 || response.statusCode == 200) {
-            return true;
-          }
-        } catch (_) {
-          // Try the fallback endpoint.
-        }
+      if (connectivity.contains(ConnectivityResult.none)) {
+        _lastCheckAt = DateTime.now();
+        _lastCheckResult = false;
+        return false;
       }
-      return false;
+
+      final now = DateTime.now();
+      if (_lastCheckAt != null &&
+          _lastCheckResult != null &&
+          now.difference(_lastCheckAt!) < const Duration(seconds: 5)) {
+        return _lastCheckResult!;
+      }
+
+      final pending = _inFlight;
+      if (pending != null) return pending;
+
+      final check = _probeInternet();
+      _inFlight = check;
+      try {
+        final result = await check;
+        _lastCheckAt = DateTime.now();
+        _lastCheckResult = result;
+        return result;
+      } finally {
+        _inFlight = null;
+      }
     } catch (_) {
+      _lastCheckAt = DateTime.now();
+      _lastCheckResult = false;
       return false;
     }
   }
-}
 
+  static Future<bool> _probeInternet() async {
+    final endpoints = <Uri>[
+      Uri.parse('https://www.google.com/generate_204'),
+      Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
+      Uri.parse('https://image.tmdb.org/t/p/w92/'),
+      Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
+    ];
+
+    final reachable = await Future.wait<bool>(
+      endpoints.map((endpoint) async {
+        try {
+          final response = await http
+              .get(endpoint)
+              .timeout(const Duration(seconds: 3));
+          return response.statusCode < 500;
+        } catch (_) {
+          return false;
+        }
+      }),
+    );
+    return reachable.any((value) => value);
+  }
+}
 class MovieCache {
   static const String trendingKey = 'flixora_trending';
   static const String popularKey = 'flixora_popular';
@@ -1279,7 +1325,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _initializeApp();
     _listenToConnectivity();
     _networkTimer = Timer.periodic(
-      const Duration(seconds: 12),
+      const Duration(seconds: 30),
       (_) => _refreshConnectionStatus(),
     );
 
@@ -1583,12 +1629,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> loadHome() async {
     if (_refreshing) return;
-
     _refreshing = true;
 
     try {
       final online = await InternetService.isOnline();
-
       if (!mounted) return;
 
       if (!online) {
@@ -1608,7 +1652,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         homeError = null;
       });
 
-      final results = await Future.wait<List<Movie>>([
+      // Render primary Home sections before loading every secondary catalog.
+      final coreResults = await Future.wait<List<Movie>>([
         TmdbService.getMovies('trending/movie/week').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
@@ -1616,13 +1661,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('trending/tv/week', pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('tv/popular', pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('tv/top_rated', pages: 3).catchError((_) => <Movie>[]),
+        FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
+      ]);
+
+      if (!mounted) return;
+      setState(() {
+        trending = coreResults[0].isNotEmpty ? coreResults[0] : trending;
+        popular = coreResults[1].isNotEmpty ? coreResults[1] : popular;
+        latest = coreResults[2].isNotEmpty ? coreResults[2] : latest;
+        topRated = coreResults[3].isNotEmpty ? coreResults[3] : topRated;
+        trendingTv = coreResults[4].isNotEmpty ? coreResults[4] : trendingTv;
+        popularTv = coreResults[5].isNotEmpty ? coreResults[5] : popularTv;
+        topRatedTv = coreResults[6].isNotEmpty ? coreResults[6] : topRatedTv;
+        flixoraMovies = coreResults[7].isNotEmpty ? coreResults[7] : flixoraMovies;
+
+        // Admin records stay canonical and take priority over TMDB duplicates.
+        final refreshedTrendingMovies = _homeTrendingMovies();
+        if (refreshedTrendingMovies.isNotEmpty) {
+          trending = refreshedTrendingMovies;
+        }
+
+        loading = false;
+        homeError = _allMovies().isEmpty ? 'Unable to load movies.' : null;
+        final visibleCount = _homeTrendingMovies().length.clamp(0, 5).toInt();
+        if (visibleCount == 0 || _slide >= visibleCount) _slide = 0;
+      });
+
+      _syncFeaturedCarouselAfterDataChange();
+      await Future.wait([
+        MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.popularKey, popular),
+        MovieCache.saveList(MovieCache.latestKey, latest),
+        MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
+        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
+        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+      ]);
+
+      // Secondary catalogs now fill their sections without delaying first paint.
+      final secondaryResults = await Future.wait<List<Movie>>([
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16', 'with_origin_country': 'JP',
           'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ko',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'ko', 'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
@@ -1630,7 +1714,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
@@ -1656,102 +1739,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'sort_by': 'popularity.desc',
         }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
+          'with_origin_country': 'IN', 'sort_by': 'popularity.desc',
         }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ja',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'ja', 'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'zh',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'zh', 'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'th',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'th', 'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
-        // Hindi-language films made outside India are also frequently
-        // catalogued as Bollywood titles; include them without the country gate.
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'hi', 'sort_by': 'popularity.desc',
         }, pages: 3).catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
-
       setState(() {
-        trending = results[0].isNotEmpty ? results[0] : trending;
-        popular = results[1].isNotEmpty ? results[1] : popular;
-        latest = results[2].isNotEmpty ? results[2] : latest;
-        topRated = results[3].isNotEmpty ? results[3] : topRated;
-        // Keep the last successful catalogue when a transient TMDB request
-        // fails, so a temporary API issue does not empty a whole Home section.
-        trendingTv = results[4].isNotEmpty ? results[4] : trendingTv;
-        popularTv = results[5].isNotEmpty ? results[5] : popularTv;
-        topRatedTv = results[6].isNotEmpty ? results[6] : topRatedTv;
-        anime = results[7].isNotEmpty ? results[7] : anime;
-        bengaliMovies = results[9].isNotEmpty ? results[9] : bengaliMovies;
-        bengaliTv = results[10].isNotEmpty ? results[10] : bengaliTv;
-        flixoraMovies = results[11].isNotEmpty ? results[11] : flixoraMovies;
+        if (secondaryResults[0].isNotEmpty) anime = secondaryResults[0];
+        if (secondaryResults[2].isNotEmpty) bengaliMovies = secondaryResults[2];
+        if (secondaryResults[3].isNotEmpty) bengaliTv = secondaryResults[3];
 
-        final refreshedTrendingMovies = _homeTrendingMovies();
-        if (refreshedTrendingMovies.isNotEmpty) {
-          trending = refreshedTrendingMovies;
-        }
-
-        final refreshedBollywood = [...results[12], ...results[22]];
+        final refreshedBollywood = [...secondaryResults[4], ...secondaryResults[14]];
         if (refreshedBollywood.isNotEmpty) {
           bollywoodMovies = _deduplicateMovies(refreshedBollywood);
         }
-        if (results[13].isNotEmpty) hollywoodMovies = results[13];
+        if (secondaryResults[5].isNotEmpty) hollywoodMovies = secondaryResults[5];
 
         final refreshedSouthIndian = [
-          ...results[14], ...results[15], ...results[16], ...results[17],
+          ...secondaryResults[6], ...secondaryResults[7],
+          ...secondaryResults[8], ...secondaryResults[9],
         ];
         if (refreshedSouthIndian.isNotEmpty) {
           southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
         }
 
-        if (results[18].isNotEmpty) indianDramaTv = results[18];
+        if (secondaryResults[10].isNotEmpty) indianDramaTv = secondaryResults[10];
         final refreshedKoreanDrama = [
-          ...results[8], ...results[19], ...results[20], ...results[21],
+          ...secondaryResults[1], ...secondaryResults[11],
+          ...secondaryResults[12], ...secondaryResults[13],
         ];
         if (refreshedKoreanDrama.isNotEmpty) {
           koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
         }
-        loading = false;
-
-        if (_allMovies().isEmpty) {
-          homeError = 'Unable to load movies.';
-        } else {
-          homeError = null;
-        }
-
-        final slideCount = _homeTrendingMovies().length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
-
-        if (visibleCount == 0) {
-          _slide = 0;
-        } else if (_slide >= visibleCount) {
-          _slide = 0;
-        }
       });
 
       await Future.wait([
-        MovieCache.saveList(MovieCache.trendingKey, trending),
-        MovieCache.saveList(MovieCache.popularKey, popular),
-        MovieCache.saveList(MovieCache.latestKey, latest),
-        MovieCache.saveList(MovieCache.topRatedKey, topRated),
-        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
-        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
-        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
         MovieCache.saveList(MovieCache.animeKey, anime),
         MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
         MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
         MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
-        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
         MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
         MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
@@ -1759,7 +1797,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ]);
     } catch (e) {
       if (!mounted) return;
-
       setState(() {
         loading = false;
         if (_allMovies().isEmpty) homeError = e.toString();
@@ -2693,8 +2730,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
   }
+  void _scrollFeaturedCardTo(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_featuredCardsController.hasClients) return;
+      final position = _featuredCardsController.position;
+      if (!position.hasContentDimensions) return;
+      final target = FeaturedCarouselLayout.targetScrollOffset(
+        index: index,
+        viewportWidth: position.viewportDimension,
+        maxScrollExtent: position.maxScrollExtent,
+      );
+      if ((position.pixels - target).abs() < 1) return;
+      _featuredCardsController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _syncFeaturedCarouselAfterDataChange() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final visibleCount = _homeTrendingMovies().take(5).length;
+      if (visibleCount == 0) {
+        if (_sliderController.hasClients) _sliderController.jumpToPage(0);
+        if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
+        return;
+      }
+      final currentPage = _sliderController.hasClients
+          ? (_sliderController.page?.round() ?? 0)
+          : 0;
+      if (currentPage >= visibleCount) {
+        if (_slide != 0) setState(() => _slide = 0);
+        if (_sliderController.hasClients) _sliderController.jumpToPage(0);
+        if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
+        return;
+      }
+      final selectedIndex = _slide.clamp(0, visibleCount - 1).toInt();
+      if (selectedIndex != _slide) setState(() => _slide = selectedIndex);
+      _scrollFeaturedCardTo(selectedIndex);
+    });
+  }
+
   Widget _featuredSlider() {
-    final slides = _homeTrendingMovies().take(5).toList();
+    final slides = _homeTrendingMovies().take(5).toList(growable: false);
 
     if (slides.isEmpty) {
       return const SizedBox(height: 12);
@@ -2712,20 +2792,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (_slide != index && mounted) {
                 setState(() => _slide = index);
               }
-              if (_featuredCardsController.hasClients) {
-                const cardWidth = 198.0;
-                const cardExtent = 206.0;
-                const leadingInset = 16.0;
-                final viewport = _featuredCardsController.position.viewportDimension;
-                final target = (leadingInset + index * cardExtent + cardWidth / 2 - viewport / 2)
-                    .clamp(0.0, _featuredCardsController.position.maxScrollExtent)
-                    .toDouble();
-                _featuredCardsController.animateTo(
-                  target,
-                  duration: const Duration(milliseconds: 350),
-                  curve: Curves.easeOutCubic,
-                );
-              }
+              _scrollFeaturedCardTo(index);
             },
             itemBuilder: (context, index) {
               final movie = slides[index];
@@ -2791,22 +2858,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
-      height: 52,
+      height: 78,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
-            const cardWidth = 238.0;
-            const cardExtent = 248.0;
-            const leadingInset = 16.0;
-            final viewport = notification.metrics.viewportDimension;
-            final selected = ((notification.metrics.pixels + viewport / 2 -
-                        leadingInset - cardWidth / 2) /
-                    cardExtent)
-                .round()
-                .clamp(0, movies.length - 1)
-                .toInt();
+            final selected = FeaturedCarouselLayout.indexForScrollOffset(
+              pixels: notification.metrics.pixels,
+              viewportWidth: notification.metrics.viewportDimension,
+              itemCount: movies.length,
+            );
             if (selected != _slide) {
               _sliderController.animateToPage(
                 selected,
@@ -2833,10 +2895,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             return GestureDetector(
               onTap: _isOpeningTitle ? null : () => _playMovie(movie),
               child: Container(
-                width: 238,
-                margin: const EdgeInsets.symmetric(horizontal: 5),
+                width: FeaturedCarouselLayout.cardWidth,
+                margin: const EdgeInsets.symmetric(
+                  horizontal: FeaturedCarouselLayout.cardMargin,
+                ),
                 child: SizedBox(
-                  height: 52,
+                  height: 78,
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
@@ -2846,7 +2910,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         top: 12,
                         bottom: 0,
                         child: Container(
-                          padding: const EdgeInsets.only(left: 44, right: 6),
+                          padding: const EdgeInsets.only(left: 64, right: 6),
                           decoration: BoxDecoration(
                             color: panel,
                             borderRadius: BorderRadius.circular(9),
@@ -2899,8 +2963,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           borderRadius: BorderRadius.circular(6),
                           child: movie.posterUrl.isEmpty
                               ? Container(
-                                  width: 34,
-                                  height: 46,
+                                  width: 52,
+                                  height: 72,
                                   color: const Color(0xFF292929),
                                   child: const Icon(Icons.movie, color: gold, size: 18),
                                 )
@@ -2908,14 +2972,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   imageUrl: movie.posterUrl,
                                   isOnline: _online,
                                   fit: BoxFit.cover,
+                                   memCacheWidth: 156,
+                                   memCacheHeight: 216,
                                   placeholder: Container(
-                                    width: 34,
-                                    height: 46,
+                                    width: 52,
+                                  height: 72,
                                     color: const Color(0xFF292929),
                                   ),
                                   fallback: Container(
-                                    width: 34,
-                                    height: 46,
+                                    width: 52,
+                                  height: 72,
                                     color: const Color(0xFF292929),
                                     child: const Icon(Icons.movie, color: gold, size: 18),
                                   ),
@@ -3868,7 +3934,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, index) {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-            return GestureDetector(onTap: () => _openMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onTap: _isOpeningTitle ? null : () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
@@ -3907,7 +3973,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
           ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
+          IconButton(tooltip: 'Play', onPressed: _isOpeningTitle ? null : () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
         ]);
       },
     );
@@ -4327,24 +4393,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         itemBuilder: (context, index) {
           final movie = movies[index];
           return Padding(padding: const EdgeInsets.only(bottom: 18), child: SizedBox(height: 112, child: Row(children: [
-            ClipRRect(borderRadius: BorderRadius.circular(7), child: SizedBox(width: 76, height: 108, child: Stack(fit: StackFit.expand, children: [
-              movie.posterUrl.isEmpty
-                  ? Container(color: panel, child: const Icon(Icons.movie, color: gold))
-                  : FlixoraCachedImage(
-                      imageUrl: movie.posterUrl,
-                      isOnline: _online,
-                      fit: BoxFit.cover,
-                      fallback: Container(color: panel, child: const Icon(Icons.movie, color: gold)),
-                    ),
-              Positioned(left: 0, top: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4), decoration: BoxDecoration(color: index == 0 ? const Color(0xFFE83E9B) : const Color(0xFF2787E8), borderRadius: const BorderRadius.only(bottomRight: Radius.circular(7))), child: Text((index + 1).toString().padLeft(2, '0'), style: const TextStyle(color: white, fontWeight: FontWeight.w900, fontSize: 12)))),
-            ]))),
+            GestureDetector(
+              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(7),
+                child: SizedBox(
+                  width: 76,
+                  height: 108,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      movie.posterUrl.isEmpty
+                          ? Container(color: panel, child: const Icon(Icons.movie, color: gold))
+                          : FlixoraCachedImage(
+                              imageUrl: movie.posterUrl,
+                              isOnline: _online,
+                              fit: BoxFit.cover,
+                              memCacheWidth: 228,
+                              memCacheHeight: 324,
+                              fallback: Container(color: panel, child: const Icon(Icons.movie, color: gold)),
+                            ),
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: index == 0 ? const Color(0xFFE83E9B) : const Color(0xFF2787E8),
+                            borderRadius: const BorderRadius.only(bottomRight: Radius.circular(7)),
+                          ),
+                          child: Text(
+                            (index + 1).toString().padLeft(2, '0'),
+                            style: const TextStyle(color: white, fontWeight: FontWeight.w900, fontSize: 12),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(movie.title, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 14, fontWeight: FontWeight.w700)),
               const Spacer(),
               Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
+            IconButton(onPressed: _isOpeningTitle ? null : () => _playMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
@@ -5284,6 +5379,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  DateTime? _lastPositionUiUpdate;
+  int _lastResumeSaveSecond = 0;
 
   bool _isPlaying = false;
   bool _isBuffering = false;
@@ -6704,7 +6801,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _refreshPlayerConnection();
     _playerConnectionTimer?.cancel();
     _playerConnectionTimer = Timer.periodic(
-      const Duration(seconds: 10),
+      const Duration(seconds: 30),
       (_) => _refreshPlayerConnection(),
     );
   }
@@ -6733,10 +6830,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() => _position = value);
 
-      if (_duration.inSeconds > 0) {
-        _saveResumePosition(value);
+      final now = DateTime.now();
+      if (_lastPositionUiUpdate == null ||
+          now.difference(_lastPositionUiUpdate!) >=
+              const Duration(milliseconds: 250) ||
+          value == _duration) {
+        _lastPositionUiUpdate = now;
+        setState(() => _position = value);
+      }
+
+      if (_duration.inSeconds > 0 &&
+          (value.inSeconds - _lastResumeSaveSecond).abs() >= 5) {
+        _lastResumeSaveSecond = value.inSeconds;
+        unawaited(_saveResumePosition(value));
       }
     });
 
