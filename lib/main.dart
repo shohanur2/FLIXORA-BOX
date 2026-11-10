@@ -709,7 +709,8 @@ class FlixoraMovieService {
       );
     }).where((movie) =>
         movie.sourceId > 0 &&
-        (includeWithoutVideo || movie.hasPlayableVideoUrl)).toList();
+        (movie.hasPlayableVideoUrl ||
+            (includeWithoutVideo && movie.mediaType == 'movie' && movie.tmdbId > 0))).toList();
   }
 
   static Future<List<Map<String, String>>> getDownloadQualities(
@@ -764,7 +765,11 @@ class FlixoraMovieService {
           .eq('is_published', true)
           .order('created_at', ascending: false);
 
-      return mapPlayableRows(client, response as List);
+      return mapPlayableRows(
+        client,
+        response as List,
+        includeWithoutVideo: true,
+      );
     } catch (e) {
       debugPrint('Could not load published movies: $e');
       return [];
@@ -783,7 +788,11 @@ class FlixoraMovieService {
           .ilike('title', '%${query.trim()}%')
           .order('created_at', ascending: false);
 
-      return mapPlayableRows(client, response as List);
+      return mapPlayableRows(
+        client,
+        response as List,
+        includeWithoutVideo: true,
+      );
     } catch (e) {
       debugPrint('Movie search failed: $e');
       return [];
