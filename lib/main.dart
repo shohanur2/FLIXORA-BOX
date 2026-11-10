@@ -2677,17 +2677,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     color: panel,
                                     child: const Icon(Icons.movie, color: gold, size: 32),
                                   )
-                                : CachedNetworkImage(
+                                : FlixoraCachedImage(
                                     imageUrl: movie.posterUrl,
+                                    isOnline: _online,
                                     fit: BoxFit.cover,
-                                    fadeInDuration: const Duration(milliseconds: 120),
-                                    placeholder: (_, __) => Container(
+                                    placeholder: Container(
                                       color: panel,
                                       child: const Center(
                                         child: CircularProgressIndicator(color: gold, strokeWidth: 2),
                                       ),
                                     ),
-                                    errorWidget: (_, __, ___) => Container(
+                                    fallback: Container(
                                       color: panel,
                                       child: const Icon(Icons.movie, color: gold),
                                     ),
@@ -2769,11 +2769,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   children: [
                     movie.backdropUrl.isEmpty
                         ? Container(color: panel)
-                        : CachedNetworkImage(
+                        : FlixoraCachedImage(
                             imageUrl: movie.backdropUrl,
+                            isOnline: _online,
                             fit: BoxFit.cover,
-                            placeholder: (_, __) => Container(color: panel),
-                            errorWidget: (_, __, ___) => Container(color: panel),
+                            placeholder: Container(color: panel),
+                            fallback: Container(color: panel),
                           ),
                     const DecoratedBox(
                       decoration: BoxDecoration(
@@ -2936,17 +2937,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   color: const Color(0xFF292929),
                                   child: const Icon(Icons.movie, color: gold, size: 18),
                                 )
-                              : CachedNetworkImage(
+                              : FlixoraCachedImage(
                                   imageUrl: movie.posterUrl,
-                                  width: 34,
-                                  height: 46,
+                                  isOnline: _online,
                                   fit: BoxFit.cover,
-                                  placeholder: (_, __) => Container(
+                                  placeholder: Container(
                                     width: 34,
                                     height: 46,
                                     color: const Color(0xFF292929),
                                   ),
-                                  errorWidget: (_, __, ___) => Container(
+                                  fallback: Container(
                                     width: 34,
                                     height: 46,
                                     color: const Color(0xFF292929),
@@ -3114,11 +3114,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   color: gold,
                                 ),
                               )
-                            : CachedNetworkImage(
+                            : FlixoraCachedImage(
                                 imageUrl: movie.posterUrl,
+                                isOnline: _online,
                                 fit: BoxFit.cover,
-                                fadeInDuration: const Duration(milliseconds: 120),
-                                errorWidget: (_, __, ___) => Container(
+                                fallback: Container(
                                   color: panel,
                                   child: const Icon(
                                     Icons.movie,
@@ -4368,7 +4368,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final movie = movies[index];
           return Padding(padding: const EdgeInsets.only(bottom: 18), child: SizedBox(height: 112, child: Row(children: [
             ClipRRect(borderRadius: BorderRadius.circular(7), child: SizedBox(width: 76, height: 108, child: Stack(fit: StackFit.expand, children: [
-              movie.posterUrl.isEmpty ? Container(color: panel, child: const Icon(Icons.movie, color: gold)) : CachedNetworkImage(imageUrl: movie.posterUrl, fit: BoxFit.cover, errorWidget: (_, __, ___) => Container(color: panel, child: const Icon(Icons.movie, color: gold))),
+              movie.posterUrl.isEmpty
+                  ? Container(color: panel, child: const Icon(Icons.movie, color: gold))
+                  : FlixoraCachedImage(
+                      imageUrl: movie.posterUrl,
+                      isOnline: _online,
+                      fit: BoxFit.cover,
+                      fallback: Container(color: panel, child: const Icon(Icons.movie, color: gold)),
+                    ),
               Positioned(left: 0, top: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4), decoration: BoxDecoration(color: index == 0 ? const Color(0xFFE83E9B) : const Color(0xFF2787E8), borderRadius: const BorderRadius.only(bottomRight: Radius.circular(7))), child: Text((index + 1).toString().padLeft(2, '0'), style: const TextStyle(color: white, fontWeight: FontWeight.w900, fontSize: 12)))),
             ]))),
             const SizedBox(width: 10),
