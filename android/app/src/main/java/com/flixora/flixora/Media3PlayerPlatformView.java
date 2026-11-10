@@ -297,6 +297,7 @@ final class Media3PlayerPlatformView implements PlatformView,
         state.put("isPlaying", player.isPlaying());
         state.put("isBuffering", player.getPlaybackState() == Player.STATE_BUFFERING);
         state.put("isReady", player.getPlaybackState() == Player.STATE_READY);
+        state.put("isCompleted", player.getPlaybackState() == Player.STATE_ENDED);
         state.put("playbackState", player.getPlaybackState());
         state.put("videoDecoderMode", decoderManager.getVideoMode().name());
         state.put("audioDecoderMode", decoderManager.getAudioMode().name());
