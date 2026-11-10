@@ -2902,6 +2902,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       return;
     }
+    final requestedRegion = _ottRegion;
+    final requestedFilter = _ottMediaFilter;
     setState(() {
       _selectedOttProvider = provider;
       _ottTitlesLoading = true;
@@ -2912,9 +2914,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final rows = await OttCatalogService.getProviderTitles(
         apiKey: apiKey,
         providerId: provider.id,
-        region: _ottRegion,
-        mediaFilter: _ottMediaFilter == 'Movies' || _ottMediaFilter == 'TV Series'
-            ? _ottMediaFilter
+        region: requestedRegion,
+        mediaFilter: requestedFilter == 'Movies' || requestedFilter == 'TV Series'
+            ? requestedFilter
             : 'All',
       );
       final titles = rows.map((row) {
@@ -2930,13 +2932,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         return catalogueMovie;
       }).toList();
-      if (!mounted) return;
+      if (!mounted ||
+          _selectedOttProvider?.id != provider.id ||
+          _ottRegion != requestedRegion ||
+          _ottMediaFilter != requestedFilter) return;
       setState(() {
         _ottProviderTitles = _deduplicateMovies(titles);
         _ottTitlesLoading = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted ||
+          _selectedOttProvider?.id != provider.id ||
+          _ottRegion != requestedRegion ||
+          _ottMediaFilter != requestedFilter) return;
       setState(() {
         _ottTitlesLoading = false;
         _ottTitlesError = 'Could not load titles for ${provider.name}.';
