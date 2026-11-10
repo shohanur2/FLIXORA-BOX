@@ -5989,7 +5989,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         if (_selectedProviderSource != null) ...[
           const SizedBox(height: 7),
           Text(
-            'Playing with ${_selectedProviderSource!.name}',
+            'Selected stream: ${_selectedProviderSource!.name}',
             style: const TextStyle(color: playerGoldLight, fontSize: 11),
           ),
         ],
@@ -7954,6 +7954,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
         source: providerSource,
         onClose: _closeProviderSource,
+        onNext: () => _tryNextProvider(providerSource),
         onFailure: () => _tryNextProvider(providerSource),
       );
     }
