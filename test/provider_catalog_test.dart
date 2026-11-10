@@ -32,7 +32,8 @@ void main() {
       expect(sources[2].url, contains('/watch/movie/157336'));
       expect(sources[9].url,
           'https://embed.vidrift.net/embed/movie/157336?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1');
-      expect(sources.every((source) => source.isAvailable), isTrue);
+      expect(sources.first.isAvailable, isFalse);
+      expect(sources.skip(1).every((source) => source.isAvailable), isTrue);
       expect(sources.last.loadInIframe, isTrue);
     });
 
