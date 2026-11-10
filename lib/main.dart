@@ -24,6 +24,8 @@ import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/ott_catalog_service.dart';
+import 'archive_service.dart';
+import 'archive_screen.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -2288,6 +2290,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  int _archiveMovieId(String identifier) {
+    var value = 0;
+    for (final unit in identifier.codeUnits) {
+      value = ((value * 31) + unit) & 0x7fffffff;
+    }
+    return value == 0 ? 1 : value;
+  }
+
+  void _openArchiveMovie(ArchiveMovie archiveMovie) {
+    final videoUrl = archiveMovie.videoUrl?.trim() ?? '';
+    if (videoUrl.isEmpty) return;
+    final movie = Movie(
+      id: _archiveMovieId(archiveMovie.identifier),
+      source: 'archive',
+      title: archiveMovie.title,
+      year: archiveMovie.year,
+      overview: archiveMovie.description,
+      poster: '',
+      backdrop: '',
+      rating: 0,
+      releaseDate: archiveMovie.year,
+      videoUrl: videoUrl,
+      mediaType: 'movie',
+    );
+    unawaited(_openMovie(movie));
+  }
+
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
@@ -4385,6 +4414,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
+      case 4:
+        return ArchiveScreen(onMovieSelected: _openArchiveMovie);
       default:
         return _homeContent();
     }
@@ -4425,6 +4456,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
+    if (_tab == 4) return 'Free Movies';
     return 'FLIXORA';
   }
 
@@ -4568,6 +4600,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                _bottomNavItem(4, Icons.local_movies_outlined, Icons.local_movies, 'Free'),
               ],
             ),
           ),
