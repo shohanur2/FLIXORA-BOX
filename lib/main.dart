@@ -5899,7 +5899,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _isOpening = true;
     var failed = false;
     try {
-      await _player.open(Media(source.url));
+      await _player.open(Media(source.url, httpHeaders: source.httpHeaders));
       if (!mounted || _isDisposed) return;
       _currentVideoUrl = source.url;
       await _restoreResumePosition();
