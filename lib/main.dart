@@ -153,9 +153,8 @@ class Movie {
         uri.host.isNotEmpty;
   }
 
-  /// Movies with a TMDB ID can use the in-app provider fallback when no
-  /// Admin-managed direct MP4/HLS source is attached. TV embeds are not
-  /// enabled because the configured providers are movie endpoints.
+  /// Movie and TV titles can use their matching provider route when no
+  /// Admin-managed direct MP4/HLS source is attached.
   bool get canAttemptPlayback =>
       hasPlayableVideoUrl ||
       ((mediaType == 'movie' || mediaType == 'tv') && tmdbId > 0);
@@ -225,7 +224,7 @@ class Movie {
       sourceId: dbId,
       tmdbId: tmdbId,
       source: 'flixora',
-      title: (json['title'] ?? 'Unknown Movie').toString(),
+      title: (json['title'] ?? 'Unknown Title').toString(),
       year: date.length >= 4 ? date.substring(0, 4) : 'N/A',
       releaseDate: date,
       overview: (json['description'] ?? 'No description available.').toString(),
@@ -236,7 +235,9 @@ class Movie {
       runtime: (json['runtime'] as num?)?.toDouble(),
       videoUrl: (json['video_url'] ?? '').toString(),
       downloadUrl: (json['download_url'] ?? '').toString(),
-      mediaType: 'movie',
+      mediaType: (json['media_type'] ?? 'movie').toString() == 'tv'
+          ? 'tv'
+          : 'movie',
     );
   }
 
@@ -784,7 +785,9 @@ class FlixoraMovieService {
     }).where((movie) =>
         movie.sourceId > 0 &&
         (movie.hasPlayableVideoUrl ||
-            (includeWithoutVideo && movie.mediaType == 'movie' && movie.tmdbId > 0))).toList();
+            (includeWithoutVideo &&
+                (movie.mediaType == 'movie' || movie.mediaType == 'tv') &&
+                movie.tmdbId > 0))).toList();
   }
 
   static Future<List<Map<String, String>>> getDownloadQualities(
@@ -1162,19 +1165,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _appLanguage = 'English';
   String _preferredQuality = 'Auto';
 
-  Set<int> get _flixoraTmdbIds {
+  Set<String> get _flixoraTmdbIds {
     return flixoraMovies
-        .map((movie) => movie.tmdbId)
-        .where((id) => id > 0)
+        .where((title) => title.tmdbId > 0)
+        .map((title) => '${title.mediaType}:${title.tmdbId}')
         .toSet();
   }
 
-  List<Movie> _withoutFlixoraDuplicates(List<Movie> movies) {
+  List<Movie> _withoutFlixoraDuplicates(List<Movie> titles) {
     final adminIds = _flixoraTmdbIds;
-
-    return movies.where((movie) {
-      if (movie.mediaType != 'movie' || movie.tmdbId <= 0) return true;
-      return !adminIds.contains(movie.tmdbId);
+    return titles.where((title) {
+      if (title.tmdbId <= 0) return true;
+      return !adminIds.contains('${title.mediaType}:${title.tmdbId}');
     }).toList();
   }
 
@@ -2116,7 +2118,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Movie? _cachedFlixoraMatch(Movie movie) {
     if (movie.tmdbId <= 0) return null;
     for (final candidate in [...flixoraMovies, ...searchResults]) {
-      if (candidate.isFlixora && candidate.tmdbId == movie.tmdbId) {
+      if (candidate.isFlixora &&
+          candidate.tmdbId == movie.tmdbId &&
+          candidate.mediaType == movie.mediaType) {
         return candidate;
       }
     }
@@ -2129,7 +2133,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final client = supabaseClient;
 
     if (!_online || client == null) {
-      return requested.isFlixora || requested.mediaType == 'tv'
+      return requested.isFlixora
           ? requested
           : (_cachedFlixoraMatch(requested) ?? requested);
     }
@@ -2142,11 +2146,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .select()
             .eq('id', requested.sourceId)
             .limit(1);
-      } else if (requested.tmdbId > 0 && requested.mediaType == 'movie') {
+      } else if (requested.tmdbId > 0 &&
+          (requested.mediaType == 'movie' || requested.mediaType == 'tv')) {
         response = await client
             .from('movies')
             .select()
             .eq('tmdb_id', requested.tmdbId)
+            .eq('media_type', requested.mediaType)
             .order('created_at', ascending: false)
             .limit(1);
       }
@@ -2169,13 +2175,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (requested.isFlixora) return null;
-      if (requested.mediaType == 'tv') return requested;
       return _cachedFlixoraMatch(requested) ?? requested;
     } catch (e) {
       debugPrint('Could not resolve Admin movie record: $e');
       // Keep the already-loaded published Admin entry usable if the network
       // lookup fails; otherwise fall back to the requested TMDB catalogue item.
-      return requested.isFlixora || requested.mediaType == 'tv'
+      return requested.isFlixora
           ? requested
           : (_cachedFlixoraMatch(requested) ?? requested);
     }
@@ -2186,7 +2191,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     if (resolvedMovie == null) {
-      _showMessage('This movie is currently unavailable.');
+      _showMessage('This title is currently unavailable.');
       return;
     }
 
@@ -2289,7 +2294,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     if (selectedMovie == null) {
-      _showMessage('This movie is currently unavailable.');
+      _showMessage('This title is currently unavailable.');
       return;
     }
 
@@ -2376,7 +2381,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'Trending TV Series':
       case 'Popular TV Series':
       case 'Top Rated TV Series':
-        return const ['All Series', 'Top Series', 'New Bengali', 'Anime', 'Asian Drama', 'Indian Drama'];
+        return const [
+          'All Series', 'Top Series', 'New Bengali', 'Anime',
+          'Drama', 'Web Series', 'Asian Drama', 'Indian Drama',
+        ];
       case 'Anime':
         return const ['Popular', 'Action', 'Adventure', 'Fantasy', 'New Release'];
       case 'Korean & Asian Drama':
@@ -2411,6 +2419,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...topRatedTv, ...popularTv, ...trendingTv,
           ]);
           return series..sort((a, b) => b.rating.compareTo(a.rating));
+        case 'Drama':
+          return items.where((title) => title.genres.any(
+            (genre) => genre.toLowerCase().contains('drama'),
+          )).toList();
+        case 'Web Series':
+          return items.where((title) => title.genres.any((genre) {
+            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
+            return normalized == 'web series' || normalized == 'webseries';
+          })).toList();
       }
     }
     if (filter == 'All' || filter == 'Cinema' || filter == 'All Series' || filter == 'Popular') {
@@ -3084,12 +3101,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final titles = rows.map((row) {
         final mediaType = (row['media_type'] ?? 'movie').toString();
         final catalogueMovie = Movie.fromJson(row, mediaType: mediaType);
-        if (mediaType == 'movie') {
-          for (final adminMovie in flixoraMovies) {
-            if (adminMovie.tmdbId > 0 &&
-                adminMovie.tmdbId == catalogueMovie.tmdbId) {
-              return adminMovie.withFallbackMetadata(catalogueMovie);
-            }
+        for (final adminTitle in flixoraMovies) {
+          if (adminTitle.tmdbId > 0 &&
+              adminTitle.tmdbId == catalogueMovie.tmdbId &&
+              adminTitle.mediaType == mediaType) {
+            return adminTitle.withFallbackMetadata(catalogueMovie);
           }
         }
         return catalogueMovie;
@@ -3259,11 +3275,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'TV Series':
         return titles.where((movie) => movie.mediaType == 'tv').toList();
       case 'Anime':
-        return titles.where((movie) =>
-          movie.genres.any((genre) => genre.toLowerCase() == 'animation') &&
-          (movie.originalLanguage.toLowerCase() == 'ja' ||
-              movie.originCountry.toUpperCase() == 'JP')
-        ).toList();
+        return titles.where((title) {
+          final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
+          return genres.contains('anime') ||
+              (genres.contains('animation') &&
+                  (title.originalLanguage.toLowerCase() == 'ja' ||
+                      title.originCountry.toUpperCase() == 'JP'));
+        }).toList();
       case 'Drama':
         return titles.where((movie) => movie.genres.any(
           (genre) => genre.toLowerCase() == 'drama',
@@ -4080,6 +4098,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies(bengaliTv);
         case 'Anime':
           return _deduplicateMovies(anime);
+        case 'Drama': {
+          return _deduplicateMovies([
+            ...topRatedTv, ...popularTv, ...trendingTv,
+            ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
+          ]).where((title) => title.mediaType == 'tv' && title.genres.any(
+            (genre) => genre.toLowerCase().contains('drama'),
+          )).toList();
+        }
+        case 'Web Series': {
+          return _deduplicateMovies([
+            ...topRatedTv, ...popularTv, ...trendingTv, ...flixoraMovies,
+          ]).where((title) => title.mediaType == 'tv' && title.genres.any((genre) {
+            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
+            return normalized == 'web series' || normalized == 'webseries';
+          })).toList();
+        }
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
         case 'Indian Drama':
@@ -4121,7 +4155,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ];
     const tvCategories = [
       'All Series', 'Top Series', 'New Bengali',
-      'Anime', 'Asian Drama', 'Indian Drama',
+      'Anime', 'Drama', 'Web Series', 'Asian Drama', 'Indian Drama',
     ];
     final categories = _rankingTv ? tvCategories : movieCategories;
     final movies = _rankingMovies();
