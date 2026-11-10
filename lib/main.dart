@@ -5133,6 +5133,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     year: movie.year,
                     mediaType: movie.mediaType,
                     tmdbId: movie.tmdbId,
+                    client: supabaseClient,
                   ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
