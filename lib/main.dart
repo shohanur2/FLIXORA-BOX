@@ -5879,7 +5879,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       // An Admin-supplied Dailymotion link takes priority for that title.
       // Otherwise preserve the existing Play4U-first provider order.
       final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
-      final preferredId = adminSource?.id ?? 'play4u';
+      final preferredId = adminSource?.id ??
+          (widget.movie.mediaType == 'tv' ? 'play4u-tv' : 'play4u');
       final preferred = _providerSources.where(
         (source) => source.id == preferredId && source.isAvailable,
       );
