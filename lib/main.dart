@@ -20,6 +20,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
+import 'streaming/episode_number_mapper.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
@@ -5528,14 +5529,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   int _aniListEpisodeNumber(int episodeNumber) {
-    var offset = 0;
-    for (final season in _tvSeasons) {
-      final seasonNumber = _toInt(season['season_number']);
-      if (seasonNumber > 0 && seasonNumber < _selectedSeasonNumber) {
-        offset += _toInt(season['episode_count']);
-      }
-    }
-    return offset + episodeNumber;
+    return EpisodeNumberMapper.toAbsoluteEpisodeNumber(
+          seasons: _tvSeasons,
+          seasonNumber: _selectedSeasonNumber,
+          episodeNumber: episodeNumber,
+        ) ??
+        episodeNumber;
   }
 
   void _refreshTvProviderSources({bool selectProvider = false}) {
