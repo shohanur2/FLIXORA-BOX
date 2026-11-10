@@ -146,225 +146,71 @@ class ExternalCatalogData {
 class ExternalCatalogService {
   ExternalCatalogService._();
 
-  static const String omdbApiKey = String.fromEnvironment('OMDB_API_KEY');
-  static const String watchmodeApiKey =
-      String.fromEnvironment('WATCHMODE_API_KEY');
-  static const String tasteDiveApiKey =
-      String.fromEnvironment('TASTEDIVE_API_KEY');
-  static const String traktClientId =
-      String.fromEnvironment('TRAKT_CLIENT_ID');
-
-  static bool get hasAnyConfigured =>
-      omdbApiKey.isNotEmpty ||
-      watchmodeApiKey.isNotEmpty ||
-      tasteDiveApiKey.isNotEmpty ||
-      traktClientId.isNotEmpty;
-
+  /// API credentials stay in Supabase Edge Function secrets, never in the APK.
   static Future<ExternalCatalogData> load({
+    required SupabaseClient client,
     required String title,
     required String year,
     required String mediaType,
     required int tmdbId,
     String region = 'BD',
   }) async {
-    final omdbFuture = omdbApiKey.isEmpty
-        ? Future<OmdbMetadata?>.value(null)
-        : getOmdb(title: title, year: year, mediaType: mediaType);
-    final watchmodeFuture = watchmodeApiKey.isEmpty || tmdbId <= 0
-        ? Future<List<WatchmodeSource>>.value(const <WatchmodeSource>[])
-        : getWatchmodeSources(
-            tmdbId: tmdbId,
-            mediaType: mediaType,
-            region: region,
-          );
-    final similarFuture = tasteDiveApiKey.isEmpty
-        ? Future<List<TasteDiveSuggestion>>.value(
-            const <TasteDiveSuggestion>[],
-          )
-        : getSimilar(title: title, mediaType: mediaType);
-    final traktFuture = traktClientId.isEmpty || tmdbId <= 0
-        ? Future<TraktTitleInfo?>.value(null)
-        : getTraktTitleInfo(tmdbId: tmdbId, mediaType: mediaType);
-
-    final values = await Future.wait<Object?>([
-      omdbFuture,
-      watchmodeFuture,
-      similarFuture,
-      traktFuture,
-    ]);
-
-    return ExternalCatalogData(
-      omdb: values[0] as OmdbMetadata?,
-      watchmode: values[1] as List<WatchmodeSource>,
-      similar: values[2] as List<TasteDiveSuggestion>,
-      trakt: values[3] as TraktTitleInfo?,
-    );
-  }
-
-  static Future<OmdbMetadata?> getOmdb({
-    required String title,
-    required String year,
-    required String mediaType,
-  }) async {
-    if (omdbApiKey.trim().isEmpty || title.trim().isEmpty) return null;
     try {
-      final parameters = <String, String>{
-        'apikey': omdbApiKey,
-        't': title.trim(),
-        'plot': 'short',
-        'type': mediaType == 'tv' ? 'series' : 'movie',
-      };
-      if (RegExp(r'^\\d{4}$').hasMatch(year.trim())) {
-        parameters['y'] = year.trim();
-      }
-      final response = await http
-          .get(Uri.https('www.omdbapi.com', '/', parameters))
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return null;
-      final json = jsonDecode(response.body);
-      if (json is! Map || json['Response']?.toString() != 'True') return null;
-      return OmdbMetadata.fromJson(Map<String, dynamic>.from(json));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static Future<List<WatchmodeSource>> getWatchmodeSources({
-    required int tmdbId,
-    required String mediaType,
-    String region = 'BD',
-  }) async {
-    if (watchmodeApiKey.trim().isEmpty || tmdbId <= 0) {
-      return const <WatchmodeSource>[];
-    }
-    final type = mediaType == 'tv' ? 'tv' : 'movie';
-    try {
-      final response = await http
-          .get(
-            Uri.https(
-              'api.watchmode.com',
-              '/v1/title/$type-$tmdbId/sources/',
-              <String, String>{
-                'apiKey': watchmodeApiKey,
-                if (region.trim().isNotEmpty)
-                  'regions': region.trim().toUpperCase(),
-              },
-            ),
-          )
-          .timeout(const Duration(seconds: 15));
-      if (response.statusCode != 200) return const <WatchmodeSource>[];
-      final json = jsonDecode(response.body);
-      if (json is! List) return const <WatchmodeSource>[];
-      final sources = json
-          .whereType<Map>()
-          .map((item) => WatchmodeSource.fromJson(
-                Map<String, dynamic>.from(item),
-              ))
-          .where((source) => source.name.isNotEmpty)
-          .toList();
-      sources.sort((a, b) {
-        const order = <String, int>{
-          'sub': 0,
-          'free': 1,
-          'tve': 2,
-          'rent': 3,
-          'buy': 4,
-        };
-        return (order[a.type.toLowerCase()] ?? 9)
-            .compareTo(order[b.type.toLowerCase()] ?? 9);
-      });
-      return sources;
-    } catch (_) {
-      return const <WatchmodeSource>[];
-    }
-  }
-
-  static Future<TraktTitleInfo?> getTraktTitleInfo({
-    required int tmdbId,
-    required String mediaType,
-  }) async {
-    if (traktClientId.trim().isEmpty || tmdbId <= 0) return null;
-    final kind = mediaType == 'tv' ? 'show' : 'movie';
-    try {
-      final response = await http.get(
-        Uri.https('api.trakt.tv', '/search/tmdb/$tmdbId', {
-          'type': kind,
-          'extended': 'full',
-        }),
-        headers: <String, String>{
-          'Content-Type': 'application/json',
-          'trakt-api-version': '2',
-          'trakt-api-key': traktClientId,
-          'User-Agent': 'FLIXORA/1.0.9',
+      final response = await client.functions.invoke(
+        'external-catalog',
+        body: <String, dynamic>{
+          'title': title,
+          'year': year,
+          'mediaType': mediaType,
+          'tmdbId': tmdbId,
+          'region': region,
         },
-      ).timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return null;
-      final payload = jsonDecode(response.body);
-      if (payload is! List || payload.isEmpty || payload.first is! Map) {
-        return null;
-      }
-      final first = Map<String, dynamic>.from(payload.first as Map);
-      final item = first[kind];
-      if (item is! Map) return null;
-      final rating = item['rating'];
-      final votes = item['votes'];
-      final rank = item['rank'];
-      final traktId = (item['ids'] is Map)
-          ? (item['ids'] as Map)['trakt']
-          : null;
-      final info = TraktTitleInfo(
-        rating: rating is num ? rating.toDouble() : null,
-        votes: votes is num ? votes.toInt() : null,
-        rank: rank is num ? rank.toInt() : null,
-        traktUrl: traktId is num ? 'https://trakt.tv/$kind/$traktId' : '',
       );
-      return info.hasContent ? info : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  static Future<List<TasteDiveSuggestion>> getSimilar({
-    required String title,
-    required String mediaType,
-  }) async {
-    if (tasteDiveApiKey.trim().isEmpty || title.trim().isEmpty) {
-      return const <TasteDiveSuggestion>[];
-    }
-    try {
-      final kind = mediaType == 'tv' ? 'show' : 'movie';
-      final response = await http
-          .get(
-            Uri.https(
-              'tastedive.com',
-              '/api/similar',
-              <String, String>{
-                'k': tasteDiveApiKey,
-                'q': '$kind:${title.trim()}',
-                'type': kind,
-                'info': '1',
-                'limit': '8',
-              },
-            ),
-          )
-          .timeout(const Duration(seconds: 12));
-      if (response.statusCode != 200) return const <TasteDiveSuggestion>[];
-      final json = jsonDecode(response.body);
-      if (json is! Map || json['Similar'] is! Map) {
-        return const <TasteDiveSuggestion>[];
+      if (response.status < 200 || response.status >= 300 ||
+          response.data is! Map) {
+        return const ExternalCatalogData();
       }
-      final rows = (json['Similar'] as Map)['Results'];
-      if (rows is! List) return const <TasteDiveSuggestion>[];
-      return rows
-          .whereType<Map>()
-          .map((item) => TasteDiveSuggestion.fromJson(
-                Map<String, dynamic>.from(item),
-              ))
-          .where((item) => item.name.isNotEmpty)
-          .take(8)
-          .toList();
+      final data = Map<String, dynamic>.from(response.data as Map);
+      final rawOmdb = data['omdb'];
+      final rawWatchmode = data['watchmode'];
+      final rawSimilar = data['similar'];
+      final rawTrakt = data['trakt'];
+
+      return ExternalCatalogData(
+        omdb: rawOmdb is Map
+            ? OmdbMetadata.fromJson(Map<String, dynamic>.from(rawOmdb))
+            : null,
+        watchmode: rawWatchmode is List
+            ? rawWatchmode
+                .whereType<Map>()
+                .map((item) => WatchmodeSource.fromJson(
+                      Map<String, dynamic>.from(item),
+                    ))
+                .where((item) => item.name.isNotEmpty)
+                .toList()
+            : const <WatchmodeSource>[],
+        similar: rawSimilar is List
+            ? rawSimilar
+                .whereType<Map>()
+                .map((item) => TasteDiveSuggestion.fromJson(
+                      Map<String, dynamic>.from(item),
+                    ))
+                .where((item) => item.name.isNotEmpty)
+                .take(8)
+                .toList()
+            : const <TasteDiveSuggestion>[],
+        trakt: rawTrakt is Map
+            ? TraktTitleInfo(
+                rating: (rawTrakt['rating'] as num?)?.toDouble(),
+                votes: (rawTrakt['votes'] as num?)?.toInt(),
+                rank: (rawTrakt['rank'] as num?)?.toInt(),
+                traktUrl: (rawTrakt['traktUrl'] ?? '').toString(),
+              )
+            : null,
+      );
     } catch (_) {
-      return const <TasteDiveSuggestion>[];
+      // External discovery is optional; it must never block the FLIXORA player.
+      return const ExternalCatalogData();
     }
   }
 }
@@ -376,8 +222,10 @@ class ExternalCatalogSection extends StatefulWidget {
     required this.year,
     required this.mediaType,
     required this.tmdbId,
+    required this.client,
   });
 
+  final SupabaseClient? client;
   final String title;
   final String year;
   final String mediaType;
@@ -394,7 +242,10 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
   @override
   void initState() {
     super.initState();
-    _future = ExternalCatalogService.load(
+    _future = widget.client == null
+        ? Future<ExternalCatalogData>.value(const ExternalCatalogData())
+        : ExternalCatalogService.load(
+      client: widget.client!,
       title: widget.title,
       year: widget.year,
       mediaType: widget.mediaType,
@@ -404,7 +255,7 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
 
   @override
   Widget build(BuildContext context) {
-    if (!ExternalCatalogService.hasAnyConfigured) {
+    if (widget.client == null) {
       return const SizedBox.shrink();
     }
 
