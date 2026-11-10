@@ -276,6 +276,14 @@ void main() {
       );
     });
 
+    test('preserves a custom PeerTube instance port', () {
+      const videoId = '52a10666-3a18-4e73-93da-e8d3c12c305a';
+      final source = ProviderCatalog.fromAdminUrl(
+        'https://videos.example.org:8443/videos/watch/$videoId',
+      );
+      expect(source?.url,
+          'https://videos.example.org:8443/videos/embed/$videoId');
+    });
     test('rejects PeerTube routes with non-UUID video IDs', () {
       expect(
         ProviderCatalog.fromAdminUrl(
