@@ -94,7 +94,10 @@ class ProviderCatalog {
     } else if (segments.length >= 2 && segments[0] == 'playlist') {
       playlistId = segments[1];
     } else if (segments.length >= 2 && segments[0] == 'player') {
-      embeddedPlayerId = segments[1].replaceFirst(RegExp(r'\\.html?$'), '');
+      final playerSegment = segments[1];
+      embeddedPlayerId = playerSegment.endsWith('.html')
+          ? playerSegment.substring(0, playerSegment.length - 5)
+          : playerSegment;
       videoId = uri.queryParameters['video'];
       playlistId = uri.queryParameters['playlist'];
     }
