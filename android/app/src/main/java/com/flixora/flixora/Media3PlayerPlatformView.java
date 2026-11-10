@@ -14,6 +14,9 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.Format;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.Tracks;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -188,6 +191,13 @@ final class Media3PlayerPlatformView implements PlatformView,
                     player.setPlaybackSpeed(speed == null ? 1f : Math.max(0.25f, Math.min(3f, speed.floatValue())));
                     result.success(null);
                     break;
+                case "selectTrack":
+                    selectTrack(
+                            (int) longValue(call.argument("trackType"), C.TRACK_TYPE_AUDIO),
+                            (int) longValue(call.argument("groupIndex"), -1L),
+                            (int) longValue(call.argument("trackIndex"), -1L));
+                    result.success(null);
+                    break;
                 case "setResizeMode":
                     String resizeMode = stringValue(call.argument("mode"));
                     playerView.setResizeMode("ZOOM".equalsIgnoreCase(resizeMode)
@@ -294,7 +304,53 @@ final class Media3PlayerPlatformView implements PlatformView,
         DecoderMode activeAudio = decoderManager.getActiveAudioMode();
         state.put("activeVideoDecoderMode", activeVideo == null ? "" : activeVideo.name());
         state.put("activeAudioDecoderMode", activeAudio == null ? "" : activeAudio.name());
+        state.put("audioTracks", describeTracks(C.TRACK_TYPE_AUDIO));
+        state.put("textTracks", describeTracks(C.TRACK_TYPE_TEXT));
         return state;
+    }
+
+
+    private void selectTrack(int trackType, int groupIndex, int trackIndex) {
+        androidx.media3.common.TrackSelectionParameters.Builder builder =
+                player.getTrackSelectionParameters().buildUpon();
+        if (groupIndex < 0 || trackIndex < 0) {
+            builder.clearOverridesOfType(trackType);
+            if (trackType == C.TRACK_TYPE_TEXT) {
+                builder.setTrackTypeDisabled(trackType, true);
+            } else {
+                builder.setTrackTypeDisabled(trackType, false);
+            }
+        } else {
+            Tracks.Group group = player.getCurrentTracks().getGroups().get(groupIndex);
+            TrackSelectionOverride override =
+                    new TrackSelectionOverride(group.getMediaTrackGroup(), trackIndex);
+            builder.setTrackTypeDisabled(trackType, false);
+            builder.clearOverridesOfType(trackType);
+            builder.addOverride(override);
+        }
+        player.setTrackSelectionParameters(builder.build());
+    }
+
+    private java.util.List<Map<String, Object>> describeTracks(int trackType) {
+        java.util.List<Map<String, Object>> tracks = new java.util.ArrayList<>();
+        java.util.List<Tracks.Group> groups = player.getCurrentTracks().getGroups();
+        for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+            Tracks.Group group = groups.get(groupIndex);
+            if (group.getType() != trackType) continue;
+            for (int trackIndex = 0; trackIndex < group.length; trackIndex++) {
+                if (!group.isTrackSupported(trackIndex)) continue;
+                Format format = group.getTrackFormat(trackIndex);
+                Map<String, Object> track = new HashMap<>();
+                track.put("groupIndex", groupIndex);
+                track.put("trackIndex", trackIndex);
+                track.put("language", format.language == null ? "" : format.language);
+                track.put("label", format.label == null ? "" : format.label);
+                track.put("mimeType", format.sampleMimeType == null ? "" : format.sampleMimeType);
+                track.put("selected", group.isTrackSelected(trackIndex));
+                tracks.add(track);
+            }
+        }
+        return tracks;
     }
 
     private void emitState() {
