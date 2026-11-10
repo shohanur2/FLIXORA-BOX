@@ -27,6 +27,10 @@ class ProviderCatalog {
   static const String _pvrPlayHost =
       'dbhnmkjasgbvsdkjbskkvnskjbfckldsnckjbckjnxkjcsknxjvkjxnvcxknvku.pvrplay.fun';
 
+  /// Configure this through the DAILYMOTION_PLAYER_ID GitHub Actions secret.
+  static const String _dailymotionPlayerId =
+      String.fromEnvironment('DAILYMOTION_PLAYER_ID');
+
   // Redirect destinations approved by FLIXORA-REFERENCE's playback security
   // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
   static const Set<String> _approvedRedirectHosts = <String>{
@@ -48,13 +52,98 @@ class ProviderCatalog {
     'archive.org',
     'embed.vidrift.net',
     'embed.vidrift.in',
+    'geo.dailymotion.com',
+    'dailymotion.com',
+    'dai.ly',
   };
 
-  /// Returns all nine built-in movie providers in reference-project order.
+  /// Converts an Admin-provided Dailymotion URL into the current Player-ID
+  /// based embed URL. Dailymotion requires a valid Player ID for playback.
+  static ProviderEmbedSource? fromDailymotionUrl(
+    String rawUrl, {
+    String? playerId,
+  }) {
+    final uri = Uri.tryParse(rawUrl.trim());
+    if (uri == null || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+      return null;
+    }
+
+    final host = uri.host.toLowerCase();
+    final isDailymotionHost = host == 'dai.ly' ||
+        host == 'dailymotion.com' ||
+        host.endsWith('.dailymotion.com');
+    if (!isDailymotionHost) return null;
+
+    final segments = uri.pathSegments.where((part) => part.isNotEmpty).toList();
+    String? videoId;
+    String? playlistId;
+    String? embeddedPlayerId;
+
+    if (host == 'dai.ly') {
+      if (segments.isNotEmpty) videoId = segments.first;
+    } else if (segments.length >= 3 &&
+        segments[0] == 'embed' &&
+        segments[1] == 'video') {
+      videoId = segments[2];
+    } else if (segments.length >= 2 && segments[0] == 'video') {
+      videoId = segments[1];
+    } else if (segments.length >= 3 &&
+        segments[0] == 'embed' &&
+        segments[1] == 'playlist') {
+      playlistId = segments[2];
+    } else if (segments.length >= 2 && segments[0] == 'playlist') {
+      playlistId = segments[1];
+    } else if (segments.length >= 2 && segments[0] == 'player') {
+      embeddedPlayerId = segments[1].replaceFirst(RegExp(r'\\.html?$'), '');
+      videoId = uri.queryParameters['video'];
+      playlistId = uri.queryParameters['playlist'];
+    }
+
+    final validContentId = RegExp(r'^[A-Za-z0-9]{3,64}$');
+    if ((videoId == null || !validContentId.hasMatch(videoId)) &&
+        (playlistId == null || !validContentId.hasMatch(playlistId))) {
+      return null;
+    }
+
+    final configuredPlayerId = (playerId ?? _dailymotionPlayerId).trim();
+    final effectivePlayerId = configuredPlayerId.isNotEmpty
+        ? configuredPlayerId
+        : (embeddedPlayerId ?? '').trim();
+    final hasPlayerId = RegExp(r'^[A-Za-z0-9]{3,64}$')
+        .hasMatch(effectivePlayerId);
+    final embedUrl = hasPlayerId
+        ? Uri.https(
+            'geo.dailymotion.com',
+            '/player/$effectivePlayerId.html',
+            videoId != null
+                ? <String, String>{'video': videoId}
+                : <String, String>{'playlist': playlistId!},
+          ).toString()
+        : '';
+
+    return ProviderEmbedSource(
+      id: 'dailymotion',
+      name: 'Dailymotion',
+      url: embedUrl,
+      allowedHosts: const <String>{
+        'geo.dailymotion.com',
+        'dailymotion.com',
+        'dai.ly',
+      },
+      unavailableReason: hasPlayerId
+          ? null
+          : 'A Dailymotion Player ID is required. Add DAILYMOTION_PLAYER_ID to GitHub Actions secrets.',
+    );
+  }
+
+  /// Returns the built-in movie providers. Dailymotion is included only when
+  /// the Admin source URL points to a Dailymotion video or playlist.
   /// Play4U requires the movie's real IMDb title ID; the others use TMDB ID.
   static List<ProviderEmbedSource> forMovie({
     required int tmdbId,
     String? imdbId,
+    String? dailymotionUrl,
+    String? dailymotionPlayerId,
   }) {
     if (tmdbId <= 0) return const <ProviderEmbedSource>[];
 
@@ -63,8 +152,13 @@ class ProviderCatalog {
     final hasImdbId = RegExp(r'^tt\d+$', caseSensitive: false)
         .hasMatch(cleanImdbId);
     final nexStreamKey = _dynamicNexStreamDemoKey();
+    final dailymotionSource = fromDailymotionUrl(
+      dailymotionUrl ?? '',
+      playerId: dailymotionPlayerId,
+    );
 
     return <ProviderEmbedSource>[
+      if (dailymotionSource != null) dailymotionSource,
       ProviderEmbedSource(
         id: 'play4u',
         name: 'STREAM 1 · Play4U',
