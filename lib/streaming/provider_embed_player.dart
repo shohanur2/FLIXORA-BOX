@@ -105,11 +105,13 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
               return NavigationDecision.prevent;
             }
 
-            // Providers commonly host the player in a separate HTTPS iframe.
-            // Permit secure subframes, but keep top-level navigation on the
-            // selected provider's approved domain.
+            // Provider pages may use separate player hosts. Only explicitly
+            // approved HTTPS player hosts are allowed in subframes.
             if (!request.isMainFrame) {
-              return uri.scheme.toLowerCase() == 'https'
+              return ProviderCatalog.allowsSubframeNavigation(
+                widget.source,
+                uri,
+              )
                   ? NavigationDecision.navigate
                   : NavigationDecision.prevent;
             }
