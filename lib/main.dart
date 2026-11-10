@@ -150,6 +150,12 @@ class Movie {
         uri.host.isNotEmpty;
   }
 
+  /// Movies with a TMDB ID can use the in-app provider fallback when no
+  /// Admin-managed direct MP4/HLS source is attached. TV embeds are not
+  /// enabled because the configured providers are movie endpoints.
+  bool get canAttemptPlayback =>
+      hasPlayableVideoUrl || (mediaType != 'tv' && tmdbId > 0);
+
   Movie withFallbackMetadata(Movie fallback) => Movie(
         id: id,
         tmdbId: tmdbId > 0 ? tmdbId : fallback.tmdbId,
@@ -617,8 +623,9 @@ class FlixoraMovieService {
   /// Quality rows are keyed by the Supabase movies.id, not the TMDB ID.
   static Future<List<Movie>> mapPlayableRows(
     SupabaseClient client,
-    List<dynamic> rawRows,
-  ) async {
+    List<dynamic> rawRows, {
+    bool includeWithoutVideo = false,
+  }) async {
     final rows = rawRows
         .whereType<Map>()
         .map((row) => Map<String, dynamic>.from(row))
@@ -700,7 +707,9 @@ class FlixoraMovieService {
         originCountry: movie.originCountry,
         audioLanguages: audioLanguagesByMovie[movieId] ?? const [],
       );
-    }).where((movie) => movie.sourceId > 0 && movie.hasPlayableVideoUrl).toList();
+    }).where((movie) =>
+        movie.sourceId > 0 &&
+        (includeWithoutVideo || movie.hasPlayableVideoUrl)).toList();
   }
 
   static Future<List<Map<String, String>>> getDownloadQualities(
@@ -1971,6 +1980,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final playable = await FlixoraMovieService.mapPlayableRows(
           client,
           [row],
+          includeWithoutVideo: true,
         );
         if (playable.isEmpty) return null;
 
@@ -2136,8 +2146,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (!selectedMovie.hasPlayableVideoUrl) {
-      _showMessage('This title is not currently available to stream on FLIXORA.');
+    if (!selectedMovie.canAttemptPlayback) {
+      _showMessage('This title has no supported FLIXORA playback source.');
       return;
     }
 
@@ -4265,7 +4275,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 25),
-                  if (movie.hasPlayableVideoUrl)
+                  if (movie.canAttemptPlayback)
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -4292,7 +4302,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 10),
                       child: Text(
-                        'This title is not currently available to stream on FLIXORA.',
+                        'No supported FLIXORA playback source is linked to this title yet.',
                         style: TextStyle(color: ink60, fontSize: 13),
                       ),
                     ),
