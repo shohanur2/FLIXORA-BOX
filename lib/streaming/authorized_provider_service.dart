@@ -73,7 +73,7 @@ class AuthorizedProviderService {
     Future<List<ProviderEmbedSource>> Function() task,
   ) async {
     try {
-      return await task().timeout(const Duration(seconds: 22));
+      return await task().timeout(const Duration(seconds: 12));
     } catch (_) {
       return const <ProviderEmbedSource>[];
     }
