@@ -2318,9 +2318,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_openMovie(movie));
   }
 
+  void _showNoInternetScreen() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const NoInternetScreen(),
+      ),
+    );
+  }
+
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
+      final hasInternet = await InternetService.isOnline();
+      if (!mounted) return;
+      if (!hasInternet) {
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
+        _showNoInternetScreen();
+        return;
+      }
+      if (!_online) setState(() => _online = true);
+
       final resolvedMovie = await _resolveMovieForOpening(movie);
       if (!mounted) return;
 
@@ -2451,7 +2472,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _online = false;
         _connectionKnown = true;
       });
-      _showMessage('Connect to the internet to stream this title.');
+      _showNoInternetScreen();
       return;
     }
 
@@ -4651,7 +4672,7 @@ class NoInternetScreen extends StatelessWidget {
               ),
               const SizedBox(height: 20),
               const Text(
-                'No Internet Connection',
+                'Connect to the internet',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: white,
@@ -4661,11 +4682,12 @@ class NoInternetScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Please check your internet connection and try again.',
+                'When your internet connection is restored: Explore various movies, TV series and more',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: ink,
                   fontSize: 15,
+                  height: 1.5,
                   fontWeight: FontWeight.w700,
                 ),
               ),
