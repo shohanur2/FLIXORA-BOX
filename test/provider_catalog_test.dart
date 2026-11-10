@@ -109,6 +109,7 @@ void main() {
       expect(sources[0].url, contains('/embed/anilist/16498/1'));
       expect(sources[1].url, contains('&dub=1'));
       expect(sources[2].url, contains('/embed/tv/1429/1/1'));
+      expect(sources.every((source) => source.loadInIframe), isTrue);
     });
 
     test('does not create TV providers without a TMDB ID', () {

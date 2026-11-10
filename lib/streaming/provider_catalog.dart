@@ -165,12 +165,14 @@ class ProviderCatalog {
           name: 'VidRift Anime · Dub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand&dub=1',
           allowedHosts: hosts,
+          loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-tv-fallback',
           name: 'VidRift TV · TMDB fallback',
           url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
           allowedHosts: hosts,
+          loadInIframe: true,
         ),
       ];
     }

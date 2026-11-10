@@ -60,6 +60,16 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   Future<void> _configureAndLoad() async {
     try {
       await _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+      if (widget.source.loadInIframe) {
+        await _controller.addJavaScriptChannel(
+          'FlixoraBridge',
+          onMessageReceived: (message) {
+            if (message.message == 'exit' && mounted && !_disposed) {
+              widget.onClose();
+            }
+          },
+        );
+      }
       await _controller.setBackgroundColor(Colors.black);
       await _controller.enableZoom(false);
       await _controller.setNavigationDelegate(
@@ -187,6 +197,15 @@ iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:#000}
 </head>
 <body>
 <iframe src="${widget.source.url}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<script>
+window.addEventListener('message', function(event) {
+  if (event.origin !== 'https://embed.vidrift.net' &&
+      event.origin !== 'https://embed.vidrift.in') return;
+  if (event.data && event.data.type === 'vidrift:exit') {
+    FlixoraBridge.postMessage('exit');
+  }
+});
+</script>
 </body>
 </html>
 ''';
