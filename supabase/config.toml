@@ -1,0 +1,2 @@
+[functions.external-catalog]
+verify_jwt = true

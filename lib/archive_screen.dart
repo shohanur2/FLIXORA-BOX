@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'archive_service.dart';
 
 class ArchiveScreen extends StatefulWidget {
-  const ArchiveScreen({super.key});
+  const ArchiveScreen({super.key, required this.onMovieSelected});
+
+  final ValueChanged<ArchiveMovie> onMovieSelected;
 
   @override
   State<ArchiveScreen> createState() => _ArchiveScreenState();
@@ -15,6 +17,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
   List<ArchiveMovie> movies = [];
   bool loading = false;
   String? error;
+  final Set<String> _opening = <String>{};
 
   @override
   void initState() {
@@ -57,18 +60,38 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
     }
   }
 
+  Future<void> _openMovie(ArchiveMovie movie) async {
+    if (_opening.contains(movie.identifier)) return;
+    setState(() => _opening.add(movie.identifier));
+    try {
+      final details = await ArchiveService.getMovieDetails(movie);
+      if (!mounted) return;
+      if (details.videoUrl == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This item has no verified public-domain or CC0 MP4 stream.',
+            ),
+          ),
+        );
+        return;
+      }
+      widget.onMovieSelected(details);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load this Archive video.')),
+      );
+    } finally {
+      if (mounted) setState(() => _opening.remove(movie.identifier));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF080808),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF080808),
-        foregroundColor: const Color(0xFFD6AD45),
-        title: const Text(
-          'Free Movies',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-      ),
+      appBar: null,
       body: Column(
         children: [
           Padding(
@@ -103,7 +126,7 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
             child: Text(
-              'Internet Archive • Public-domain and rights-cleared content only',
+              'Internet Archive • Playback is limited to verified Public Domain / CC0 MP4 files',
               style: TextStyle(
                 color: Colors.white54,
                 fontSize: 12,
@@ -164,6 +187,17 @@ class _ArchiveScreenState extends State<ArchiveScreen> {
                                     ),
                                   ),
                                   isThreeLine: true,
+                                  trailing: _opening.contains(movie.identifier)
+                                      ? const SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        )
+                                      : const Icon(
+                                          Icons.play_circle_fill,
+                                          color: Color(0xFFD6AD45),
+                                        ),
+                                  onTap: () => _openMovie(movie),
                                 ),
                               );
                             },

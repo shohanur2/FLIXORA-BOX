@@ -23,7 +23,7 @@ void main() {
     );
   }
 
-  group('Movie playback eligibility', () {
+  group('Media title playback eligibility', () {
     test('TMDB movie without a direct URL can use provider fallback', () {
       final movie = buildMovie();
 
@@ -48,11 +48,33 @@ void main() {
       expect(movie.canAttemptPlayback, isFalse);
     });
 
-    test('TV titles do not use movie-only provider fallback', () {
-      final movie = buildMovie(mediaType: 'tv');
+    test('TV shows, web series, dramas and anime can use the TV route', () {
+      final title = buildMovie(mediaType: 'tv');
 
-      expect(movie.hasPlayableVideoUrl, isFalse);
-      expect(movie.canAttemptPlayback, isFalse);
+      expect(title.hasPlayableVideoUrl, isFalse);
+      expect(title.canAttemptPlayback, isTrue);
+    });
+
+    test('Supabase TV content retains its media type', () {
+      final title = Movie.fromSupabase({
+        'id': 12,
+        'tmdb_id': 1399,
+        'title': 'Example Series',
+        'media_type': 'tv',
+      });
+
+      expect(title.mediaType, 'tv');
+      expect(title.canAttemptPlayback, isTrue);
+    });
+
+    test('legacy Supabase rows remain movies by default', () {
+      final title = Movie.fromSupabase({
+        'id': 13,
+        'tmdb_id': 157336,
+        'title': 'Interstellar',
+      });
+
+      expect(title.mediaType, 'movie');
     });
   });
 }
