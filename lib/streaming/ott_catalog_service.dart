@@ -119,27 +119,45 @@ class OttCatalogService {
             : const ['movie', 'tv'];
 
     Future<List<Map<String, dynamic>>> load(String mediaType) async {
-      final uri = Uri.parse(_base + '/discover/' + mediaType)
-          .replace(queryParameters: {
-        'api_key': apiKey,
-        'language': 'en-US',
-        'page': '1',
-        'sort_by': 'popularity.desc',
-        'watch_region': normalizedRegion,
-        'with_watch_providers': providerId.toString(),
-        'with_watch_monetization_types': 'flatrate|free|ads',
-      });
-      final response = await http.get(uri).timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200) return const [];
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      return (data['results'] as List? ?? [])
-          .whereType<Map>()
-          .map((item) {
-            final result = Map<String, dynamic>.from(item);
-            result['media_type'] = mediaType;
-            return result;
-          })
-          .toList();
+      final pages = await Future.wait(
+        List<int>.generate(3, (index) => index + 1).map((page) async {
+          final uri = Uri.parse(_base + '/discover/' + mediaType)
+              .replace(queryParameters: {
+            'api_key': apiKey,
+            'language': 'en-US',
+            'page': page.toString(),
+            'sort_by': 'popularity.desc',
+            'watch_region': normalizedRegion,
+            'with_watch_providers': providerId.toString(),
+            'with_watch_monetization_types': 'flatrate|free|ads',
+          });
+          try {
+            http.Response? response;
+            for (var attempt = 0; attempt < 3; attempt++) {
+              response = await http.get(uri).timeout(const Duration(seconds: 20));
+              if (response.statusCode == 200 ||
+                  (response.statusCode != 429 && response.statusCode < 500) ||
+                  attempt == 2) {
+                break;
+              }
+              await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+            }
+            if (response.statusCode != 200) return <Map<String, dynamic>>[];
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            return (data['results'] as List? ?? [])
+                .whereType<Map>()
+                .map((item) {
+                  final result = Map<String, dynamic>.from(item);
+                  result['media_type'] = mediaType;
+                  return result;
+                })
+                .toList();
+          } catch (_) {
+            return <Map<String, dynamic>>[];
+          }
+        }),
+      );
+      return pages.expand((items) => items).toList();
     }
 
     final results = await Future.wait(mediaTypes.map(load));
