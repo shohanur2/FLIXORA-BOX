@@ -229,4 +229,75 @@ void main() {
       );
     });
   });
+
+  group('ProviderCatalog.fromAdminUrl', () {
+    test('converts YouTube watch and short links to in-app embeds', () {
+      final watch = ProviderCatalog.fromAdminUrl(
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      );
+      final short = ProviderCatalog.fromAdminUrl(
+        'https://youtu.be/dQw4w9WgXcQ',
+      );
+
+      expect(watch?.id, 'youtube');
+      expect(watch?.url, contains('youtube-nocookie.com/embed/dQw4w9WgXcQ'));
+      expect(short?.url, watch?.url);
+    });
+
+    test('converts Vimeo links to the Vimeo player', () {
+      final source = ProviderCatalog.fromAdminUrl(
+        'https://vimeo.com/123456789',
+      );
+
+      expect(source?.id, 'vimeo');
+      expect(source?.url, 'https://player.vimeo.com/video/123456789');
+    });
+
+    test('converts Internet Archive detail links to the embed player', () {
+      final source = ProviderCatalog.fromAdminUrl(
+        'https://archive.org/details/feature_film',
+      );
+
+      expect(source?.id, 'internet-archive');
+      expect(source?.url, 'https://archive.org/embed/feature_film');
+    });
+
+    test('does not pretend Dailymotion is available without a Player ID', () {
+      final source = ProviderCatalog.fromAdminUrl(
+        'https://www.dailymotion.com/video/x84sh87',
+      );
+
+      expect(source?.id, 'dailymotion');
+      expect(source?.isAvailable, isFalse);
+      expect(source?.unavailableReason, contains('Player ID'));
+    });
+
+    test('keeps Admin embed sources available without a TMDB ID', () {
+      final sources = ProviderCatalog.forMovie(
+        tmdbId: 0,
+        adminVideoUrl: 'https://youtu.be/dQw4w9WgXcQ',
+      );
+
+      expect(sources, hasLength(1));
+      expect(sources.single.id, 'youtube');
+      expect(sources.single.isAvailable, isTrue);
+    });
+
+    test('rejects unrelated, malformed and unsafe embed URLs', () {
+      expect(
+        ProviderCatalog.fromAdminUrl('https://example.com/video/123456'),
+        isNull,
+      );
+      expect(
+        ProviderCatalog.fromAdminUrl('javascript:alert(1)'),
+        isNull,
+      );
+      expect(
+        ProviderCatalog.fromAdminUrl(
+          'https://user:pass@www.youtube.com/watch?v=dQw4w9WgXcQ',
+        ),
+        isNull,
+      );
+    });
+  });
 }

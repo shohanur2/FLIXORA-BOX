@@ -24,6 +24,9 @@ import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/ott_catalog_service.dart';
+import 'streaming/external_catalog_service.dart';
+import 'archive_service.dart';
+import 'archive_screen.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -2288,6 +2291,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  int _archiveMovieId(String identifier) {
+    var value = 0;
+    for (final unit in identifier.codeUnits) {
+      value = ((value * 31) + unit) & 0x7fffffff;
+    }
+    return value == 0 ? 1 : value;
+  }
+
+  void _openArchiveMovie(ArchiveMovie archiveMovie) {
+    final videoUrl = archiveMovie.videoUrl?.trim() ?? '';
+    if (videoUrl.isEmpty) return;
+    final movie = Movie(
+      id: _archiveMovieId(archiveMovie.identifier),
+      source: 'archive',
+      title: archiveMovie.title,
+      year: archiveMovie.year,
+      overview: archiveMovie.description,
+      poster: '',
+      backdrop: '',
+      rating: 0,
+      releaseDate: archiveMovie.year,
+      videoUrl: videoUrl,
+      mediaType: 'movie',
+    );
+    unawaited(_openMovie(movie));
+  }
+
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
@@ -4385,6 +4415,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
+      case 4:
+        return ArchiveScreen(onMovieSelected: _openArchiveMovie);
       default:
         return _homeContent();
     }
@@ -4425,6 +4457,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
+    if (_tab == 4) return 'Free Movies';
     return 'FLIXORA';
   }
 
@@ -4568,6 +4601,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                _bottomNavItem(4, Icons.local_movies_outlined, Icons.local_movies, 'Free'),
               ],
             ),
           ),
@@ -5094,6 +5128,13 @@ class MovieDetailsScreen extends StatelessWidget {
                       fontSize: 14,
                     ),
                   ),
+                  ExternalCatalogSection(
+                    title: movie.title,
+                    year: movie.year,
+                    mediaType: movie.mediaType,
+                    tmdbId: movie.tmdbId,
+                    client: supabaseClient,
+                  ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
                     SizedBox(
@@ -5326,6 +5367,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     final legacyUrl = widget.movie.videoUrl.trim();
+    // Dailymotion share links are provider pages, not direct media files.
+    // Route them through the dedicated Player-ID embed source instead.
+    if (ProviderCatalog.fromAdminUrl(legacyUrl) != null) return '';
     final legacyUri = Uri.tryParse(legacyUrl);
     if (legacyUri != null &&
         (legacyUri.scheme == 'http' || legacyUri.scheme == 'https') &&
@@ -5350,8 +5394,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _playerIsOnline = widget.isOnline;
     _providerSources = widget.movie.mediaType == 'tv'
-        ? ProviderCatalog.forTv(tmdbId: widget.movie.tmdbId)
-        : ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
+        ? ProviderCatalog.forTv(
+            tmdbId: widget.movie.tmdbId,
+            adminVideoUrl: widget.movie.videoUrl,
+          )
+        : ProviderCatalog.forMovie(
+            tmdbId: widget.movie.tmdbId,
+            dailymotionUrl: widget.movie.videoUrl,
+            adminVideoUrl: widget.movie.videoUrl,
+          );
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
@@ -5429,6 +5480,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             _providerSources = ProviderCatalog.forMovie(
               tmdbId: id,
               imdbId: imdbId,
+              dailymotionUrl: widget.movie.videoUrl,
+            adminVideoUrl: widget.movie.videoUrl,
             );
           });
         }
@@ -5453,13 +5506,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _refreshTvProviderSources({bool selectProvider = false}) {
     final id = widget.movie.tmdbId;
-    if (id <= 0 || widget.movie.mediaType != 'tv') return;
+    if (widget.movie.mediaType != 'tv') return;
     final sources = ProviderCatalog.forTv(
       tmdbId: id,
       aniListId: _aniListId,
       seasonNumber: _selectedSeasonNumber,
       episodeNumber: _selectedEpisodeNumber,
       aniListEpisodeNumber: _aniListEpisodeNumber(_selectedEpisodeNumber),
+      adminVideoUrl: widget.movie.videoUrl,
     );
     if (mounted && !_isDisposed) {
       setState(() {
@@ -5787,11 +5841,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _movieDetailsFuture;
       if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
-      // Match the reference project's Play4U-first policy. If this movie has no
-    // IMDb ID, select the first usable TMDB-based provider instead.
-    final preferred = _providerSources.where(
-      (source) => source.id == 'play4u' && source.isAvailable,
-    );
+      // An Admin-supplied Dailymotion link takes priority for that title.
+      // Otherwise preserve the existing Play4U-first provider order.
+      final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
+      final preferredId = adminSource?.id ?? 'play4u';
+      final preferred = _providerSources.where(
+        (source) => source.id == preferredId && source.isAvailable,
+      );
     final fallback = preferred.isNotEmpty
         ? preferred.first
         : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
@@ -5874,7 +5930,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _providerSelector() {
-    if (widget.localFilePath != null || widget.movie.tmdbId <= 0) {
+    if (widget.localFilePath != null ||
+        (widget.movie.tmdbId <= 0 && _providerSources.isEmpty)) {
       return const SizedBox.shrink();
     }
     if (_providerSources.isEmpty) return const SizedBox.shrink();
@@ -5928,6 +5985,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             );
           }).toList(),
         ),
+        if (_providerSources.any((source) =>
+            source.id == 'dailymotion' && !source.isAvailable)) ...[
+          const SizedBox(height: 7),
+          const Text(
+            'Dailymotion needs a Player ID. Add DAILYMOTION_PLAYER_ID in GitHub Actions secrets to enable playback.',
+            style: TextStyle(color: Color(0xFFFFC76A), fontSize: 11),
+          ),
+        ],
         if (_selectedProviderSource != null) ...[
           const SizedBox(height: 7),
           Text(

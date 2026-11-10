@@ -7,6 +7,7 @@ on:
     branches:
       - main
       - design/white-gold-cinematic
+      - feature/**
   pull_request:
     branches:
       - main
@@ -132,6 +133,7 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DAILYMOTION_PLAYER_ID: ${{ secrets.DAILYMOTION_PLAYER_ID }}
           GRADLE_OPTS: >-
             -Dorg.gradle.internal.http.connectionTimeout=120000
             -Dorg.gradle.internal.http.socketTimeout=120000
@@ -142,7 +144,8 @@ jobs:
             if flutter build apk --release \
               --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
               --dart-define=SUPABASE_URL="$SUPABASE_URL" \
-              --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"; then
+              --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
+              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID"; then
               echo "APK build successful."
               exit 0
             fi
