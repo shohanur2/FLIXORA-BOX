@@ -3097,7 +3097,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return titles.where((movie) => movie.mediaType == 'tv').toList();
       case 'Anime':
         return titles.where((movie) =>
-          movie.mediaType == 'tv' &&
           movie.genres.any((genre) => genre.toLowerCase() == 'animation') &&
           (movie.originalLanguage.toLowerCase() == 'ja' ||
               movie.originCountry.toUpperCase() == 'JP')
