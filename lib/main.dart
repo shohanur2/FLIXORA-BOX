@@ -1196,6 +1196,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).toList();
   }
 
+  /// Keep the Home hero and Trending Movies row populated if TMDB's
+  /// trending endpoint temporarily returns an empty response. Admin records
+  /// stay first so they retain precedence over matching TMDB catalogue items.
+  List<Movie> _homeTrendingMovies() {
+    final primary = _withoutFlixoraDuplicates(trending)
+        .where((title) => title.mediaType == 'movie')
+        .toList();
+    final candidates = <Movie>[
+      ...flixoraMovies.where((title) => title.mediaType == 'movie'),
+      ...primary,
+    ];
+
+    if (primary.length < 5) {
+      candidates.addAll(_withoutFlixoraDuplicates(popular)
+          .where((title) => title.mediaType == 'movie'));
+      candidates.addAll(_withoutFlixoraDuplicates(latest)
+          .where((title) => title.mediaType == 'movie'));
+      candidates.addAll(_withoutFlixoraDuplicates(topRated)
+          .where((title) => title.mediaType == 'movie'));
+    }
+
+    return _deduplicateMovies(candidates);
+  }
+
+  bool _isAnimeTitle(Movie title) {
+    final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
+    return genres.contains('anime') ||
+        (genres.contains('animation') &&
+            (title.originalLanguage.toLowerCase() == 'ja' ||
+                title.originCountry.toUpperCase() == 'JP'));
+  }
+
+  /// TMDB does not define "Web Series" as a TV genre. Prefer titles explicitly
+  /// tagged by FLIXORA Admin; if none exist yet, show the available non-anime
+  /// TV catalogue instead of leaving the Home section blank.
+  List<Movie> _webSeriesTitles() {
+    final catalogue = _deduplicateMovies([
+      ...flixoraMovies,
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ].where((title) => title.mediaType == 'tv').toList());
+
+    final tagged = catalogue.where((title) => title.genres.any((genre) {
+      final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
+      return normalized == 'web series' || normalized == 'webseries';
+    })).toList();
+
+    if (tagged.isNotEmpty) return tagged;
+
+    final fallback = catalogue.where((title) => !_isAnimeTitle(title)).toList()
+      ..sort((a, b) => b.rating.compareTo(a.rating));
+    return fallback;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1224,7 +1282,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (_) {
         if (!mounted || _tab != 0) return;
 
-        final slideCount = _withoutFlixoraDuplicates(trending).length;
+        final slideCount = _homeTrendingMovies().length;
         final visibleCount = slideCount < 5 ? slideCount : 5;
 
         if (visibleCount == 0) return;
@@ -1618,10 +1676,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
 
       setState(() {
-        trending = results[0];
-        popular = results[1];
-        latest = results[2];
-        topRated = results[3];
+        trending = results[0].isNotEmpty ? results[0] : trending;
+        popular = results[1].isNotEmpty ? results[1] : popular;
+        latest = results[2].isNotEmpty ? results[2] : latest;
+        topRated = results[3].isNotEmpty ? results[3] : topRated;
         // Keep the last successful catalogue when a transient TMDB request
         // fails, so a temporary API issue does not empty a whole Home section.
         trendingTv = results[4].isNotEmpty ? results[4] : trendingTv;
@@ -1631,6 +1689,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bengaliMovies = results[9].isNotEmpty ? results[9] : bengaliMovies;
         bengaliTv = results[10].isNotEmpty ? results[10] : bengaliTv;
         flixoraMovies = results[11].isNotEmpty ? results[11] : flixoraMovies;
+
+        final refreshedTrendingMovies = _homeTrendingMovies();
+        if (refreshedTrendingMovies.isNotEmpty) {
+          trending = refreshedTrendingMovies;
+        }
 
         final refreshedBollywood = [...results[12], ...results[22]];
         if (refreshedBollywood.isNotEmpty) {
@@ -1660,8 +1723,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           homeError = null;
         }
 
-        final slideCount =
-            _withoutFlixoraDuplicates(trending).length;
+        final slideCount = _homeTrendingMovies().length;
         final visibleCount = slideCount < 5 ? slideCount : 5;
 
         if (visibleCount == 0) {
@@ -2431,10 +2493,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList();
         case 'Web Series':
-          return items.where((title) => title.genres.any((genre) {
-            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
-            return normalized == 'web series' || normalized == 'webseries';
-          })).toList();
+          return _webSeriesTitles();
       }
     }
     if (filter == 'All' || filter == 'Cinema' || filter == 'All Series' || filter == 'Popular') {
@@ -2599,7 +2658,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _featuredSlider() {
-    final slides = _withoutFlixoraDuplicates(trending).take(5).toList();
+    final slides = _homeTrendingMovies().take(5).toList();
 
     if (slides.isEmpty) {
       return const SizedBox(height: 12);
@@ -2905,7 +2964,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _featuredSlider(),
           _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
-          _sectionBlock('Trending Movies', _withoutFlixoraDuplicates(trending)),
+          _sectionBlock('Trending Movies', _homeTrendingMovies()),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
@@ -2916,12 +2975,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
-          _sectionBlock('Web Series', _deduplicateMovies([
-            ...flixoraMovies, ...trendingTv, ...popularTv, ...topRatedTv,
-          ]).where((title) => title.mediaType == 'tv' && title.genres.any((genre) {
-            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
-            return normalized == 'web series' || normalized == 'webseries';
-          })).toList()),
+          _sectionBlock('Web Series', _webSeriesTitles()),
           _sectionBlock('Anime', _deduplicateMovies([
             ...anime,
             ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
@@ -4149,14 +4203,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList();
         }
-        case 'Web Series': {
-          return _deduplicateMovies([
-            ...topRatedTv, ...popularTv, ...trendingTv, ...flixoraMovies,
-          ]).where((title) => title.mediaType == 'tv' && title.genres.any((genre) {
-            final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
-            return normalized == 'web series' || normalized == 'webseries';
-          })).toList();
-        }
+        case 'Web Series':
+          return _webSeriesTitles();
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
         case 'Indian Drama':
