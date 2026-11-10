@@ -7,6 +7,7 @@ on:
     branches:
       - main
       - design/white-gold-cinematic
+      - feature/**
   pull_request:
     branches:
       - main
