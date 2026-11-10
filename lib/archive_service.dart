@@ -7,13 +7,22 @@ class ArchiveMovie {
   final String title;
   final String year;
   final String description;
+  final String licenseUrl;
   final String? videoUrl;
+
+  bool get isPublicDomainOrCc0 {
+    final license = licenseUrl.toLowerCase();
+    return license.contains('publicdomain') ||
+        license.contains('/zero/1.0') ||
+        license.contains('creativecommons.org/publicdomain/zero');
+  }
 
   const ArchiveMovie({
     required this.identifier,
     required this.title,
     required this.year,
     required this.description,
+    this.licenseUrl = '',
     this.videoUrl,
   });
 }
@@ -28,7 +37,7 @@ class ArchiveService {
       '$baseUrl/advancedsearch.php',
     ).replace(queryParameters: {
       'q': 'mediatype:movies AND title:(${query.trim()})',
-      'fl[]': 'identifier,title,year,description',
+      'fl[]': 'identifier,title,year,description,licenseurl',
       'rows': '20',
       'page': '1',
       'output': 'json',
@@ -52,6 +61,7 @@ class ArchiveService {
         year: item['year']?.toString() ?? 'N/A',
         description:
             item['description']?.toString() ?? '',
+        licenseUrl: item['licenseurl']?.toString() ?? '',
       );
     }).where((movie) => movie.identifier.isNotEmpty).toList();
   }
@@ -75,13 +85,16 @@ class ArchiveService {
     final metadata = data['metadata'] ?? {};
     final files = data['files'] as List? ?? [];
 
-    // Only identify MP4 files here.
-    // Playback/download must be limited to files
-    // whose rights permit that use.
-    final mp4Files = files.where((file) {
+    // Only expose public-domain or CC0 files for direct playback.
+    // Other Creative Commons variants may impose attribution or non-commercial
+    // restrictions, so they are not enabled automatically.
+    final licenseUrl = (metadata['licenseurl'] ?? '').toString();
+    final rightsCleared = licenseUrl.toLowerCase().contains('publicdomain') ||
+        licenseUrl.toLowerCase().contains('/zero/1.0');
+    final mp4Files = rightsCleared ? files.where((file) {
       final name = file['name']?.toString().toLowerCase() ?? '';
       return name.endsWith('.mp4');
-    }).toList();
+    }).toList() : <dynamic>[];
 
     String? videoUrl;
 
@@ -97,6 +110,7 @@ class ArchiveService {
       year: metadata['year']?.toString() ?? movie.year,
       description:
           metadata['description']?.toString() ?? movie.description,
+      licenseUrl: licenseUrl,
       videoUrl: videoUrl,
     );
   }
