@@ -5328,7 +5328,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final legacyUrl = widget.movie.videoUrl.trim();
     // Dailymotion share links are provider pages, not direct media files.
     // Route them through the dedicated Player-ID embed source instead.
-    if (ProviderCatalog.fromDailymotionUrl(legacyUrl) != null) return '';
+    if (ProviderCatalog.fromAdminUrl(legacyUrl) != null) return '';
     final legacyUri = Uri.tryParse(legacyUrl);
     if (legacyUri != null &&
         (legacyUri.scheme == 'http' || legacyUri.scheme == 'https') &&
@@ -5353,10 +5353,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _playerIsOnline = widget.isOnline;
     _providerSources = widget.movie.mediaType == 'tv'
-        ? ProviderCatalog.forTv(tmdbId: widget.movie.tmdbId)
+        ? ProviderCatalog.forTv(
+            tmdbId: widget.movie.tmdbId,
+            adminVideoUrl: widget.movie.videoUrl,
+          )
         : ProviderCatalog.forMovie(
             tmdbId: widget.movie.tmdbId,
             dailymotionUrl: widget.movie.videoUrl,
+            adminVideoUrl: widget.movie.videoUrl,
           );
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
@@ -5436,6 +5440,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               tmdbId: id,
               imdbId: imdbId,
               dailymotionUrl: widget.movie.videoUrl,
+            adminVideoUrl: widget.movie.videoUrl,
             );
           });
         }
@@ -5460,13 +5465,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _refreshTvProviderSources({bool selectProvider = false}) {
     final id = widget.movie.tmdbId;
-    if (id <= 0 || widget.movie.mediaType != 'tv') return;
+    if (widget.movie.mediaType != 'tv') return;
     final sources = ProviderCatalog.forTv(
       tmdbId: id,
       aniListId: _aniListId,
       seasonNumber: _selectedSeasonNumber,
       episodeNumber: _selectedEpisodeNumber,
       aniListEpisodeNumber: _aniListEpisodeNumber(_selectedEpisodeNumber),
+      adminVideoUrl: widget.movie.videoUrl,
     );
     if (mounted && !_isDisposed) {
       setState(() {
@@ -5796,9 +5802,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
       // An Admin-supplied Dailymotion link takes priority for that title.
       // Otherwise preserve the existing Play4U-first provider order.
-      final hasDailymotionLink =
-          ProviderCatalog.fromDailymotionUrl(widget.movie.videoUrl) != null;
-      final preferredId = hasDailymotionLink ? 'dailymotion' : 'play4u';
+      final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
+      final preferredId = adminSource?.id ?? 'play4u';
       final preferred = _providerSources.where(
         (source) => source.id == preferredId && source.isAvailable,
       );
@@ -5885,8 +5890,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _providerSelector() {
     if (widget.localFilePath != null ||
-        (widget.movie.tmdbId <= 0 &&
-            !_providerSources.any((source) => source.id == 'dailymotion'))) {
+        (widget.movie.tmdbId <= 0 && _providerSources.isEmpty)) {
       return const SizedBox.shrink();
     }
     if (_providerSources.isEmpty) return const SizedBox.shrink();
