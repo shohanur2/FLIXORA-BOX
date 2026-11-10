@@ -563,34 +563,6 @@ class ProviderCatalog {
     });
   }
 
-  /// Only HTTPS navigation on the provider's own domain (or its subdomains)
-  /// is allowed inside the embedded player.
-  static bool allowsNavigation(
-    ProviderEmbedSource source,
-    Uri uri,
-  ) {
-    if (uri.scheme.toLowerCase() != 'https' ||
-        uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty) {
-      return false;
-    }
-
-    final host = uri.host.toLowerCase();
-    final approvedHosts = <String>{
-      ...source.allowedHosts,
-      ..._approvedRedirectHosts,
-    };
-    return approvedHosts.any((allowed) {
-      final domain = allowed.toLowerCase();
-      return host == domain || host.endsWith('.$domain');
-    });
-  }
-}
-, caseSensitive: false).hasMatch(id)
-        ? id
-        : null;
-  }
-
   /// Reference route: https://play4u.org/watch/{imdbId}?embed=1
   static String _play4uMovieUrl(String? imdbId) {
     final id = _validatedPlay4uImdbId(imdbId);
