@@ -253,6 +253,37 @@ void main() {
       expect(source?.url, 'https://player.vimeo.com/video/123456789');
     });
 
+    test('converts PeerTube watch and embed URLs to the instance embed player', () {
+      const videoId = '52a10666-3a18-4e73-93da-e8d3c12c305a';
+      final watch = ProviderCatalog.fromAdminUrl(
+        'https://videos.example.org/videos/watch/$videoId',
+      );
+      final embed = ProviderCatalog.fromAdminUrl(
+        'https://videos.example.org/videos/embed/$videoId',
+      );
+
+      expect(watch?.id, 'peertube');
+      expect(watch?.url,
+          'https://videos.example.org/videos/embed/$videoId');
+      expect(embed?.url, watch?.url);
+      expect(
+        ProviderCatalog.allowsNavigation(
+          watch!,
+          Uri.parse(watch.url),
+        ),
+        isTrue,
+      );
+    });
+
+    test('rejects PeerTube routes with non-UUID video IDs', () {
+      expect(
+        ProviderCatalog.fromAdminUrl(
+          'https://videos.example.org/videos/watch/not-a-video-id',
+        ),
+        isNull,
+      );
+    });
+
     test('converts Internet Archive detail links to the embed player', () {
       final source = ProviderCatalog.fromAdminUrl(
         'https://archive.org/details/feature_film',
