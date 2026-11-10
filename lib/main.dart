@@ -24,6 +24,7 @@ import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/ott_catalog_service.dart';
+import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
 
@@ -5126,6 +5127,12 @@ class MovieDetailsScreen extends StatelessWidget {
                       height: 1.6,
                       fontSize: 14,
                     ),
+                  ),
+                  ExternalCatalogSection(
+                    title: movie.title,
+                    year: movie.year,
+                    mediaType: movie.mediaType,
+                    tmdbId: movie.tmdbId,
                   ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
