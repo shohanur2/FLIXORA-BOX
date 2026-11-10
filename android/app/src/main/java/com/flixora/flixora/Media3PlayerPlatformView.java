@@ -79,9 +79,10 @@ final class Media3PlayerPlatformView implements PlatformView,
         applyRequestHeaders(creationParams.get("headers"));
 
         DefaultTrackSelector trackSelector = new DefaultTrackSelector(context);
-        NextRenderersFactory renderersFactory = new NextRenderersFactory(context)
-                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-                .setEnableDecoderFallback(true);
+        NextRenderersFactory renderersFactory = new NextRenderersFactory(context);
+        renderersFactory.setExtensionRendererMode(
+                DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON);
+        renderersFactory.setEnableDecoderFallback(true);
 
         DefaultDataSource.Factory dataSourceFactory =
                 new DefaultDataSource.Factory(context, httpDataSourceFactory);
@@ -95,7 +96,6 @@ final class Media3PlayerPlatformView implements PlatformView,
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build();
 
-        decoderManager.attach(player);
 
         playerView = new PlayerView(context);
         playerView.setBackgroundColor(Color.BLACK);
@@ -280,8 +280,6 @@ final class Media3PlayerPlatformView implements PlatformView,
         state.put("isReady", player.getPlaybackState() == Player.STATE_READY);
         state.put("isCompleted", player.getPlaybackState() == Player.STATE_ENDED);
         state.put("playbackState", player.getPlaybackState());
-        state.put("videoDecoderMode", decoderManager.getVideoMode().name());
-        state.put("audioDecoderMode", decoderManager.getAudioMode().name());
         state.put("videoDecoderMode", "AUTO");
         state.put("audioDecoderMode", "AUTO");
         state.put("activeVideoDecoderMode", "");
