@@ -134,10 +134,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           DAILYMOTION_PLAYER_ID: ${{ secrets.DAILYMOTION_PLAYER_ID }}
-          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
-          WATCHMODE_API_KEY: ${{ secrets.WATCHMODE_API_KEY }}
-          TASTEDIVE_API_KEY: ${{ secrets.TASTEDIVE_API_KEY }}
-          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
           GRADLE_OPTS: >-
             -Dorg.gradle.internal.http.connectionTimeout=120000
             -Dorg.gradle.internal.http.socketTimeout=120000
@@ -149,11 +145,7 @@ jobs:
               --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
               --dart-define=SUPABASE_URL="$SUPABASE_URL" \
               --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID" \
-              --dart-define=OMDB_API_KEY="$OMDB_API_KEY" \
-              --dart-define=WATCHMODE_API_KEY="$WATCHMODE_API_KEY" \
-              --dart-define=TASTEDIVE_API_KEY="$TASTEDIVE_API_KEY" \
-              --dart-define=TRAKT_CLIENT_ID="$TRAKT_CLIENT_ID"; then
+              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID"; then
               echo "APK build successful."
               exit 0
             fi
