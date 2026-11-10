@@ -64,8 +64,19 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
         await _controller.addJavaScriptChannel(
           'FlixoraBridge',
           onMessageReceived: (message) {
-            if (message.message == 'exit' && mounted && !_disposed) {
+            if (!mounted || _disposed || _failureReported) return;
+            if (message.message == 'exit') {
               widget.onClose();
+            } else if (message.message == 'iframe-loaded') {
+              _cancelLoadTimeout();
+              setState(() {
+                _isLoading = false;
+                _progress = 100;
+              });
+            } else if (message.message == 'iframe-error') {
+              _reportProviderFailure(
+                'The embedded player could not load. Trying another available stream.',
+              );
             }
           },
         );
@@ -87,6 +98,13 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
           },
           onPageFinished: (_) {
             if (!mounted || _disposed || _failureReported) return;
+            // For an iframe wrapper, the outer HTML page can finish before
+            // the actual player frame. Keep the timeout active until the
+            // player frame reports that it loaded.
+            if (widget.source.loadInIframe) {
+              setState(() => _progress = 100);
+              return;
+            }
             _cancelLoadTimeout();
             setState(() {
               _isLoading = false;
@@ -94,7 +112,20 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
             });
           },
           onWebResourceError: (error) {
-            if (!mounted || _disposed || error.isForMainFrame == false) return;
+            if (!mounted || _disposed) return;
+            if (error.isForMainFrame == false) {
+              final failedUri = Uri.tryParse(error.url ?? '');
+              if (failedUri != null &&
+                  ProviderCatalog.allowsSubframeNavigation(
+                    widget.source,
+                    failedUri,
+                  )) {
+                _reportProviderFailure(
+                  'The embedded video frame could not load. Trying another available stream.',
+                );
+              }
+              return;
+            }
             _reportProviderFailure(
               'This provider page could not load. Check your internet connection or try another stream.',
             );
@@ -198,8 +229,15 @@ iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:#000}
 </style>
 </head>
 <body>
-<iframe src="${widget.source.url}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<iframe id="flixora-player-frame" src="${widget.source.url}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
 <script>
+const playerFrame = document.getElementById('flixora-player-frame');
+playerFrame.addEventListener('load', function() {
+  FlixoraBridge.postMessage('iframe-loaded');
+});
+playerFrame.addEventListener('error', function() {
+  FlixoraBridge.postMessage('iframe-error');
+});
 window.addEventListener('message', function(event) {
   if (event.origin !== 'https://embed.vidrift.net' &&
       event.origin !== 'https://embed.vidrift.in') return;
