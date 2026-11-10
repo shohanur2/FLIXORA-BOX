@@ -10,6 +10,7 @@ class ProviderEmbedSource {
     this.unavailableReason,
     this.loadInIframe = false,
     this.languageLabel,
+    this.isDirectMedia = false,
   });
 
   final String id;
@@ -22,6 +23,9 @@ class ProviderEmbedSource {
   /// Optional language/track label for sources with a known variant, e.g.
   /// Anime Sub or Dub. Null means the provider controls language selection.
   final String? languageLabel;
+
+  /// True when [url] is a direct media resource for media_kit/Media3.
+  final bool isDirectMedia;
 
   bool get isAvailable => url.isNotEmpty;
 }
