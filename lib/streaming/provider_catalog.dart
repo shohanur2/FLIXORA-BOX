@@ -172,7 +172,15 @@ class ProviderCatalog {
         host.endsWith('.youtube-nocookie.com');
     if (isYouTube) {
       final playlistId = uri.queryParameters['list']?.trim() ?? '';
-      if (RegExp(r'^[A-Za-z0-9_-]{10,128}').hasMatch(playlistId)) {
+      final validPlaylistId = playlistId.length >= 10 &&
+          playlistId.length <= 128 &&
+          playlistId.codeUnits.every((unit) =>
+              (unit >= 48 && unit <= 57) ||
+              (unit >= 65 && unit <= 90) ||
+              (unit >= 97 && unit <= 122) ||
+              unit == 45 ||
+              unit == 95);
+      if (validPlaylistId) {
         return ProviderEmbedSource(
           id: 'youtube-playlist',
           name: 'YouTube Playlist',
