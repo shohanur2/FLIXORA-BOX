@@ -136,15 +136,23 @@ class ProviderCatalog {
     ];
   }
 
-  /// VidRift provides TV season/episode navigation inside its player.
-  /// When an exact AniList match exists, offer Sub and Dub routes first and
-  /// retain the TMDB TV route as a fallback.
+  /// Builds the selected TMDB season/episode route. Anime Sub/Dub uses the
+  /// absolute episode index expected by the AniList embed; the TMDB route stays
+  /// available as a fallback for the exact selected season and episode.
   static List<ProviderEmbedSource> forTv({
     required int tmdbId,
     int? aniListId,
+    int seasonNumber = 1,
+    int episodeNumber = 1,
+    int? aniListEpisodeNumber,
   }) {
     if (tmdbId <= 0) return const <ProviderEmbedSource>[];
 
+    final season = seasonNumber > 0 ? seasonNumber : 1;
+    final episode = episodeNumber > 0 ? episodeNumber : 1;
+    final animeEpisode = (aniListEpisodeNumber ?? episode) > 0
+        ? (aniListEpisodeNumber ?? episode)
+        : episode;
     const hosts = <String>{
       'embed.vidrift.net',
       'embed.vidrift.in',
@@ -156,21 +164,21 @@ class ProviderCatalog {
         ProviderEmbedSource(
           id: 'vidrift-anime-sub',
           name: 'VidRift Anime · Sub',
-          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
           allowedHosts: hosts,
           loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
           name: 'VidRift Anime · Dub',
-          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand&dub=1',
+          url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
           allowedHosts: hosts,
           loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-tv-fallback',
           name: 'VidRift TV · TMDB fallback',
-          url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
+          url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
           allowedHosts: hosts,
           loadInIframe: true,
         ),
@@ -181,7 +189,7 @@ class ProviderCatalog {
       ProviderEmbedSource(
         id: 'vidrift-tv',
         name: 'VidRift TV · Seasons & Episodes',
-        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
+        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
         allowedHosts: hosts,
         loadInIframe: true,
       ),
