@@ -82,7 +82,7 @@ void main() {
   });
 
   group('ProviderCatalog TV and anime', () {
-    test('builds ten TV provider routes and keeps Play4U unavailable without IMDb ID', () {
+    test('builds ten TV provider candidates and keeps Play4U disabled without an embed route', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1399);
 
       expect(sources, hasLength(10));
