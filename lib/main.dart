@@ -5180,7 +5180,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             children: [
               Expanded(
                 child: DropdownButtonFormField<int>(
-                  value: safeSeason,
+                  initialValue: safeSeason,
                   dropdownColor: playerPanel,
                   isExpanded: true,
                   decoration: const InputDecoration(
@@ -5208,7 +5208,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: DropdownButtonFormField<int>(
-                  value: safeEpisode,
+                  initialValue: safeEpisode,
                   dropdownColor: playerPanel,
                   isExpanded: true,
                   decoration: const InputDecoration(
