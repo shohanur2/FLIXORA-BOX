@@ -339,6 +339,9 @@ class ProviderCatalog {
   /// Builds the selected TMDB season/episode route. Anime Sub/Dub uses the
   /// absolute episode index expected by the AniList embed; the TMDB route stays
   /// available as a fallback for the exact selected season and episode.
+  /// Builds provider routes for the exact selected TV season and episode.
+  /// Anime gets dedicated Sub/Dub embeds when an AniList ID is available,
+  /// followed by TMDB-based TV fallbacks for titles without those sources.
   static List<ProviderEmbedSource> forTv({
     required int tmdbId,
     int? aniListId,
@@ -363,15 +366,54 @@ class ProviderCatalog {
     final animeEpisode = (aniListEpisodeNumber ?? episode) > 0
         ? (aniListEpisodeNumber ?? episode)
         : episode;
-    const hosts = <String>{
+    const vidriftHosts = <String>{
       'embed.vidrift.net',
       'embed.vidrift.in',
     };
     const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
 
+    final tvFallbacks = <ProviderEmbedSource>[
+      if (adminSource != null) adminSource,
+      ProviderEmbedSource(
+        id: 'cinesrc-tv',
+        name: 'CineSRC · TV / Drama',
+        url: 'https://cinesrc.st/embed/tv/$tmdbId?s=$season&e=$episode',
+        allowedHosts: const <String>{'cinesrc.st'},
+        loadInIframe: true,
+      ),
+      ProviderEmbedSource(
+        id: 'vidsrc-tv',
+        name: 'VidSrc · TV / Drama',
+        url: 'https://embed.vidsrc.pk/tv/$tmdbId/$season-$episode',
+        allowedHosts: const <String>{'embed.vidsrc.pk'},
+        loadInIframe: true,
+      ),
+      ProviderEmbedSource(
+        id: 'pureembed-tv',
+        name: 'Pure Embed · TV / Drama',
+        url: 'https://puretoons.in/tv/$tmdbId/$season/$episode?source=multi',
+        allowedHosts: const <String>{'puretoons.in'},
+        loadInIframe: true,
+      ),
+      ProviderEmbedSource(
+        id: 'peestream-tv',
+        name: 'PeeStream · TV / Drama',
+        url: 'https://peestream.in/embed/?tmdbId=$tmdbId&type=tv&season=$season&episode=$episode',
+        allowedHosts: const <String>{'peestream.in'},
+        loadInIframe: true,
+      ),
+      ProviderEmbedSource(
+        id: 'vidrift-tv',
+        name: 'VidRift · TV / Seasons & Episodes',
+        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
+        allowedHosts: vidriftHosts,
+        loadInIframe: true,
+      ),
+    ];
+
     // AniList often represents each anime season as a separate entry.
-    // Use its episode route only for season one; later seasons must keep the
-    // exact TMDB season/episode path instead of guessing an AniList offset.
+    // Use anime episode embeds only for season one; later seasons keep the
+    // exact TMDB season/episode route instead of guessing an AniList offset.
     if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
         if (adminSource != null) adminSource,
@@ -379,36 +421,69 @@ class ProviderCatalog {
           id: 'vidrift-anime-sub',
           name: 'VidRift Anime · Sub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
-          allowedHosts: hosts,
+          allowedHosts: vidriftHosts,
           loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
           name: 'VidRift Anime · Dub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
-          allowedHosts: hosts,
+          allowedHosts: vidriftHosts,
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'animeembed-sub',
+          name: 'AnimeEmbed · Sub',
+          url: 'https://animeembed.com/embed/ani/$aniListId/$animeEpisode?track=sub',
+          allowedHosts: const <String>{'animeembed.com'},
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'animeembed-dub',
+          name: 'AnimeEmbed · Dub',
+          url: 'https://animeembed.com/embed/ani/$aniListId/$animeEpisode?track=dub',
+          allowedHosts: const <String>{'animeembed.com'},
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'anilink-sub',
+          name: 'AniLink · Sub',
+          url: 'https://anilink.cc/watch/$aniListId/$animeEpisode?variant=sub',
+          allowedHosts: const <String>{'anilink.cc'},
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'anilink-dub',
+          name: 'AniLink · Dub',
+          url: 'https://anilink.cc/watch/$aniListId/$animeEpisode?variant=dub',
+          allowedHosts: const <String>{'anilink.cc'},
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'pureembed-tv-fallback',
+          name: 'Pure Embed · Anime TV fallback',
+          url: 'https://puretoons.in/tv/$tmdbId/$season/$episode?source=multi',
+          allowedHosts: const <String>{'puretoons.in'},
+          loadInIframe: true,
+        ),
+        ProviderEmbedSource(
+          id: 'cinesrc-tv-fallback',
+          name: 'CineSRC · Anime TV fallback',
+          url: 'https://cinesrc.st/embed/tv/$tmdbId?s=$season&e=$episode',
+          allowedHosts: const <String>{'cinesrc.st'},
           loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-tv-fallback',
-          name: 'VidRift TV · TMDB fallback',
+          name: 'VidRift · TMDB TV fallback',
           url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
-          allowedHosts: hosts,
+          allowedHosts: vidriftHosts,
           loadInIframe: true,
         ),
       ];
     }
 
-    return <ProviderEmbedSource>[
-      if (adminSource != null) adminSource,
-      ProviderEmbedSource(
-        id: 'vidrift-tv',
-        name: 'VidRift TV · Seasons & Episodes',
-        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
-        allowedHosts: hosts,
-        loadInIframe: true,
-      ),
-    ];
+    return tvFallbacks;
   }
 
   /// Mirrors the reference project's five-minute NexStream demo-key window.
