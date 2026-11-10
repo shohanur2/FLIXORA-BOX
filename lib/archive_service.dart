@@ -37,11 +37,11 @@ class ArchiveService {
     final titleClause = cleanQuery.isEmpty ||
             cleanQuery.toLowerCase() == 'public domain'
         ? ''
-        : ' AND title:"\$cleanQuery"';
+        : ' AND title:"$cleanQuery"';
     final uri = Uri.parse(
       '$baseUrl/advancedsearch.php',
     ).replace(queryParameters: {
-      'q': 'mediatype:movies AND licenseurl:http*publicdomain*\$titleClause',
+      'q': 'mediatype:movies AND licenseurl:http*publicdomain*$titleClause',
       'fl[]': 'identifier,title,year,description,licenseurl',
       'rows': '20',
       'page': '1',
