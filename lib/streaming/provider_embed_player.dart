@@ -171,7 +171,29 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
       }
 
       _startLoadTimeout();
-      await _controller.loadRequest(Uri.parse(widget.source.url));
+      if (widget.source.loadInIframe) {
+        // VidRift documents iframe embedding as its supported integration.
+        // Keep it inside FLIXORA's WebView so its full player controls and
+        // episode navigation work without opening an external browser.
+        final html = '''
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}
+iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:#000}
+</style>
+</head>
+<body>
+<iframe src="${widget.source.url}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+</body>
+</html>
+''';
+        await _controller.loadHtmlString(html);
+      } else {
+        await _controller.loadRequest(Uri.parse(widget.source.url));
+      }
     } catch (_) {
       if (!mounted) return;
       _reportProviderFailure(

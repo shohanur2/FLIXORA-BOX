@@ -34,12 +34,13 @@ void main() {
       expect(sources[9].url,
           'https://embed.vidrift.net/embed/movie/157336?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1');
       expect(sources.every((source) => source.isAvailable), isTrue);
+      expect(sources.last.loadInIframe, isTrue);
     });
 
     test('keeps Play4U visible but unavailable without a valid IMDb ID', () {
       final sources = ProviderCatalog.forMovie(tmdbId: 157336);
 
-      expect(sources, hasLength(9));
+      expect(sources, hasLength(10));
       expect(sources.first.id, 'play4u');
       expect(sources.first.isAvailable, isFalse);
       expect(sources.first.unavailableReason, isNotNull);
@@ -86,6 +87,7 @@ void main() {
 
       expect(sources, hasLength(1));
       expect(sources.single.id, 'vidrift-tv');
+      expect(sources.single.loadInIframe, isTrue);
       expect(
         sources.single.url,
         'https://embed.vidrift.net/embed/tv/1399/1/1?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',

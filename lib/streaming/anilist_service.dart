@@ -69,7 +69,7 @@ query ($search: String) {
         ].any((candidate) =>
             candidate.trim().isNotEmpty &&
             _normalizeTitle(candidate) == normalizedQuery);
-        if (titleMatches && int.tryParse('\${item['id']}') != null) {
+        if (titleMatches && int.tryParse('${item['id']}') != null) {
           exactMatches.add(item);
         }
       }
@@ -80,15 +80,15 @@ query ($search: String) {
         exactMatches.sort((a, b) {
           final aDate = a['startDate'];
           final bDate = b['startDate'];
-          final aYear = aDate is Map ? int.tryParse('\${aDate['year']}') : null;
-          final bYear = bDate is Map ? int.tryParse('\${bDate['year']}') : null;
+          final aYear = aDate is Map ? int.tryParse('${aDate['year']}') : null;
+          final bYear = bDate is Map ? int.tryParse('${bDate['year']}') : null;
           final aDistance = aYear == null ? 9999 : (aYear - requestedYear).abs();
           final bDistance = bYear == null ? 9999 : (bYear - requestedYear).abs();
           return aDistance.compareTo(bDistance);
         });
       }
 
-      return int.tryParse('\${exactMatches.first['id']}');
+      return int.tryParse('${exactMatches.first['id']}');
     } catch (_) {
       return null;
     }

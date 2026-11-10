@@ -8,6 +8,7 @@ class ProviderEmbedSource {
     required this.url,
     required this.allowedHosts,
     this.unavailableReason,
+    this.loadInIframe = false,
   });
 
   final String id;
@@ -15,6 +16,7 @@ class ProviderEmbedSource {
   final String url;
   final Set<String> allowedHosts;
   final String? unavailableReason;
+  final bool loadInIframe;
 
   bool get isAvailable => url.isNotEmpty;
 }
@@ -129,6 +131,7 @@ class ProviderCatalog {
           'embed.vidrift.net',
           'embed.vidrift.in',
         },
+        loadInIframe: true,
       ),
     ];
   }
@@ -155,6 +158,7 @@ class ProviderCatalog {
           name: 'VidRift Anime · Sub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/1$brand',
           allowedHosts: hosts,
+          loadInIframe: true,
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
@@ -177,6 +181,7 @@ class ProviderCatalog {
         name: 'VidRift TV · Seasons & Episodes',
         url: 'https://embed.vidrift.net/embed/tv/$tmdbId/1/1$brand',
         allowedHosts: hosts,
+        loadInIframe: true,
       ),
     ];
   }
