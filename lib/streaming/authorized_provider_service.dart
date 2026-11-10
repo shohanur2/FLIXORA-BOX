@@ -300,6 +300,7 @@ class AuthorizedProviderService {
     required String name,
     required Uri uri,
     String? language,
+    Map<String, String> httpHeaders = const <String, String>{},
   }) {
     return ProviderEmbedSource(
       id: id,
@@ -308,6 +309,7 @@ class AuthorizedProviderService {
       allowedHosts: <String>{uri.host.toLowerCase()},
       isDirectMedia: true,
       languageLabel: language,
+      httpHeaders: httpHeaders,
     );
   }
 
@@ -623,6 +625,10 @@ class AuthorizedProviderService {
               name: '4KHDHub · ' + filename + ' · Mirror ' + (index + 1).toString(),
               uri: mediaUri,
               language: _languageFromTitle(filename),
+              httpHeaders: <String, String>{
+                'Referer': _fourKBaseUrl,
+                'User-Agent': _userAgent,
+              },
             ));
             if (output.length >= 4) return output;
           }
@@ -637,6 +643,10 @@ class AuthorizedProviderService {
           name: '4KHDHub · ' + filename,
           uri: uri,
           language: _languageFromTitle(filename),
+          httpHeaders: <String, String>{
+            'Referer': _fourKBaseUrl,
+            'User-Agent': _userAgent,
+          },
         ));
         if (output.length >= 4) return output;
       }
