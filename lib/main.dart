@@ -5890,29 +5890,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     });
 
     if (source.isDirectMedia) {
-      _isOpening = true;
-      try {
-        await _player.open(Media(source.url));
-        if (!mounted || _isDisposed) return;
-        _currentVideoUrl = source.url;
-        await _restoreResumePosition();
-        if (!mounted || _isDisposed) return;
+      await _openDirectProviderSource(source);
+    }
+  }
+
+  Future<void> _openDirectProviderSource(ProviderEmbedSource source) async {
+    _isOpening = true;
+    var failed = false;
+    try {
+      await _player.open(Media(source.url));
+      if (!mounted || _isDisposed) return;
+      _currentVideoUrl = source.url;
+      await _restoreResumePosition();
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _initialized = true;
+        _errorMessage = null;
+      });
+      _startHideTimer();
+    } catch (_) {
+      failed = true;
+      if (mounted && !_isDisposed) {
         setState(() {
-          _initialized = true;
-          _errorMessage = null;
+          _initialized = false;
+          _errorMessage = 'Could not open ' + source.name + '. Trying another stream...';
         });
-        _startHideTimer();
-      } catch (error) {
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _initialized = false;
-            _errorMessage = 'Could not open ' + source.name + '. Trying another stream...';
-          });
-        }
-        _tryNextProvider(source);
-      } finally {
-        _isOpening = false;
       }
+    } finally {
+      _isOpening = false;
+    }
+    if (failed && mounted && !_isDisposed) {
+      _tryNextProvider(source);
     }
   }
 
@@ -5968,6 +5976,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _initialized = false;
         _errorMessage = null;
       });
+      if (fallback.isDirectMedia) {
+        await _openDirectProviderSource(fallback);
+      }
     } finally {
       _isSelectingDefaultProvider = false;
     }
@@ -6001,7 +6012,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     setState(() {
       _selectedProviderSource = selectedNextSource;
       _errorMessage = null;
+      _initialized = !selectedNextSource.isDirectMedia;
     });
+    if (selectedNextSource.isDirectMedia) {
+      unawaited(_openDirectProviderSource(selectedNextSource));
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
