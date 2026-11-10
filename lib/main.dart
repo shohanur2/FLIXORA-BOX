@@ -546,6 +546,30 @@ class MovieCache {
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
 
+  /// Retries transient TMDB throttling and server errors instead of silently
+  /// leaving a category with only one page of results.
+  static Future<http.Response> _getWithRetry(Uri uri) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final response = await http.get(uri).timeout(const Duration(seconds: 20));
+        if (response.statusCode == 200 ||
+            (response.statusCode != 429 && response.statusCode < 500) ||
+            attempt == 2) {
+          return response;
+        }
+        final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
+        final delay = retryAfter != null
+            ? Duration(seconds: retryAfter.clamp(1, 5))
+            : Duration(milliseconds: 400 * (attempt + 1));
+        await Future.delayed(delay);
+      } catch (_) {
+        if (attempt == 2) rethrow;
+        await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+      }
+    }
+    throw Exception('TMDB request failed after retries.');
+  }
+
   static Future<List<Movie>> getMovies(
     String endpoint, {
     Map<String, String> extraParams = const {},
@@ -563,8 +587,11 @@ class TmdbService {
             'page': page.toString(),
             ...extraParams,
           });
-          final response = await http.get(uri).timeout(const Duration(seconds: 20));
-          if (response.statusCode != 200) return <Movie>[];
+          final response = await _getWithRetry(uri);
+          if (response.statusCode != 200) {
+            debugPrint('TMDB $endpoint page $page returned ${response.statusCode}');
+            return <Movie>[];
+          }
           final data = jsonDecode(response.body) as Map<String, dynamic>;
           final results = data['results'] as List? ?? [];
           return results.whereType<Map>().map((item) => Movie.fromJson(
@@ -637,7 +664,7 @@ class TmdbService {
     final uri = Uri.parse('$base/tv/$tvId/season/$seasonNumber').replace(
       queryParameters: {'api_key': apiKey, 'language': 'en-US'},
     );
-    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    final response = await _getWithRetry(uri);
     if (response.statusCode != 200) {
       throw Exception("Could not load this season's episodes.");
     }
@@ -652,7 +679,7 @@ class TmdbService {
       'api_key': apiKey, 'language': 'en-US',
       'append_to_response': 'external_ids',
     });
-    final response = await http.get(uri).timeout(const Duration(seconds: 20));
+    final response = await _getWithRetry(uri);
     if (response.statusCode != 200) throw Exception('Could not load title details.');
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
@@ -1518,52 +1545,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/top_rated').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('trending/tv/week').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/popular').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/top_rated').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/tv/week', pages: 3).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/popular', pages: 3).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/top_rated', pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16', 'with_origin_country': 'JP',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ko',
           'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, pages: 2).catchError((_) => <Movie>[]),
         FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'en',
+          'with_original_language': 'en', 'with_origin_country': 'US',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ta', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'te', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ml', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'kn', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 3).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ja',
           'sort_by': 'popularity.desc',
@@ -1576,6 +1603,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_original_language': 'th',
           'sort_by': 'popularity.desc',
         }, pages: 2).catchError((_) => <Movie>[]),
+        // Hindi-language films made outside India are also frequently
+        // catalogued as Bollywood titles; include them without the country gate.
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi',
+          'sort_by': 'popularity.desc',
+        }, pages: 3).catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
@@ -1593,7 +1626,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bengaliMovies = results[9];
         bengaliTv = results[10];
         flixoraMovies = results[11];
-        bollywoodMovies = _deduplicateMovies([results[12]]);
+        bollywoodMovies = _deduplicateMovies([...results[12], ...results[22]]);
         hollywoodMovies = results[13];
         southIndianMovies = _deduplicateMovies([
           ...results[14], ...results[15], ...results[16], ...results[17],
@@ -4073,11 +4106,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final categories = _rankingTv ? tvCategories : movieCategories;
     final movies = _rankingMovies();
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF171923), child: ListView.builder(
+      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF11141C), child: ListView.builder(
         padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
         itemBuilder: (context, index) {
           final category = categories[index]; final selected = category == _rankingCategory;
-          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(color: selected ? gold.withValues(alpha: 0.12) : Colors.transparent, border: Border(left: BorderSide(color: selected ? gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? gold : const Color(0xB3FFFFFF), fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
+          return InkWell(
+            onTap: () => setState(() => _rankingCategory = category),
+            child: Container(
+              height: 58,
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: selected ? gold.withValues(alpha: 0.16) : Colors.transparent,
+                border: Border(
+                  left: BorderSide(
+                    color: selected ? gold : Colors.transparent,
+                    width: 4,
+                  ),
+                ),
+              ),
+              child: Text(
+                category,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? gold : const Color(0xFFD4DAE4),
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              ),
+            ),
+          );
         },
       ))),
       Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
@@ -5576,7 +5635,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _tvEpisodeSelector(),
         const Text(
           'Available Streams',
           style: TextStyle(
@@ -8399,6 +8457,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     return CustomScrollView(
       slivers: [
+        SliverToBoxAdapter(child: _tvEpisodeSelector()),
         SliverToBoxAdapter(
           child: AspectRatio(
             aspectRatio: 16 / 9,
