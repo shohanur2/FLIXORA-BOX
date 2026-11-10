@@ -11,6 +11,7 @@ class ProviderEmbedSource {
     this.loadInIframe = false,
     this.languageLabel,
     this.isDirectMedia = false,
+    this.httpHeaders = const <String, String>{},
   });
 
   final String id;
@@ -26,6 +27,9 @@ class ProviderEmbedSource {
 
   /// True when [url] is a direct media resource for media_kit/Media3.
   final bool isDirectMedia;
+
+  /// Optional HTTP headers required by a provider's public media endpoint.
+  final Map<String, String> httpHeaders;
 
   bool get isAvailable => url.isNotEmpty;
 }
