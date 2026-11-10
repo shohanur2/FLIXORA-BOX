@@ -125,7 +125,7 @@ void main() {
       expect(sources.every((source) => source.loadInIframe), isTrue);
     });
 
-    test('uses the selected absolute episode for AniList Sub and Dub', () {
+    test('uses exact TMDB season and episode route for later anime seasons', () {
       final sources = ProviderCatalog.forTv(
         tmdbId: 1429,
         aniListId: 16498,
@@ -134,9 +134,8 @@ void main() {
         aniListEpisodeNumber: 17,
       );
 
-      expect(sources[0].url, contains('/embed/anilist/16498/17?'));
-      expect(sources[1].url, contains('/embed/anilist/16498/17?'));
-      expect(sources[2].url, contains('/embed/tv/1429/2/4?'));
+      expect(sources, hasLength(1));
+      expect(sources.single.url, contains('/embed/tv/1429/2/4?'));
     });
 
     test('does not create TV providers without a TMDB ID', () {
