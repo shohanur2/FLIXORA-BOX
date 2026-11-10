@@ -126,7 +126,7 @@ class ProviderCatalog {
       ProviderEmbedSource(
         id: 'vidrift-movie',
         name: 'STREAM 10 · VidRift',
-        url: 'https://embed.vidrift.net/embed/movie/$id?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
+        url: 'https://embed.vidrift.net/embed/movie/$id?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1&mobileSheets=true&uiScale=1.1',
         allowedHosts: const <String>{
           'embed.vidrift.net',
           'embed.vidrift.in',
@@ -157,7 +157,7 @@ class ProviderCatalog {
       'embed.vidrift.net',
       'embed.vidrift.in',
     };
-    const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
+    const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1&mobileSheets=true&uiScale=1.1';
 
     // AniList often represents each anime season as a separate entry.
     // Use its episode route only for season one; later seasons must keep the
