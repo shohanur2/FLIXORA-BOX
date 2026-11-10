@@ -130,6 +130,35 @@ void main() {
       );
     });
 
+    test('matches the three Play4U sample routes supplied for FLIXORA', () {
+      final movieSources = ProviderCatalog.forMovie(
+        tmdbId: 34339725,
+        imdbId: 'tt34339725',
+      );
+      final firstEpisodeSources = ProviderCatalog.forTv(
+        tmdbId: 1,
+        imdbId: 'tt36458668',
+        seasonNumber: 1,
+        episodeNumber: 1,
+      );
+      final seventhEpisodeSources = ProviderCatalog.forTv(
+        tmdbId: 1,
+        imdbId: 'tt23112594',
+        seasonNumber: 1,
+        episodeNumber: 7,
+      );
+
+      expect(movieSources.first.url, 'https://play4u.org/watch/tt34339725');
+      expect(
+        firstEpisodeSources.first.url,
+        'https://play4u.org/series/tt36458668/s-01/ep-01',
+      );
+      expect(
+        seventhEpisodeSources.first.url,
+        'https://play4u.org/series/tt23112594/s-01/ep-07',
+      );
+    });
+
     test('builds the exact selected TV season and episode route', () {
       final sources = ProviderCatalog.forTv(
         tmdbId: 1399,
