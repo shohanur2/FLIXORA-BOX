@@ -36,33 +36,10 @@ class ProviderCatalog {
   static const String _dailymotionPlayerId =
       String.fromEnvironment('DAILYMOTION_PLAYER_ID');
 
-  /// Play4U resolves titles by IMDb ID, not TMDB ID. Keep this strict so an
-  /// unrelated numeric TMDB ID is never sent to the provider by mistake.
+  /// Play4U routes require an IMDb title ID, never a numeric TMDB ID.
   static String? _validatedPlay4uImdbId(String? rawId) {
     final id = (rawId ?? '').trim();
-    return RegExp(r'^tt\d+$', caseSensitive: false).hasMatch(id)
-        ? id
-        : null;
-  }
-
-  /// Reference route: https://play4u.org/watch/{imdbId}?embed=1
-  static String _play4uMovieUrl(String? imdbId) {
-    final id = _validatedPlay4uImdbId(imdbId);
-    return id == null ? '' : 'https://play4u.org/watch/$id?embed=1';
-  }
-
-  /// Reference route: /series/{imdbId}/s-XX/ep-XX?cont=1
-  static String _play4uTvUrl(String? imdbId, int season, int episode) {
-    final id = _validatedPlay4uImdbId(imdbId);
-    if (id == null) return '';
-    final safeSeason = season > 0 ? season : 1;
-    final safeEpisode = episode > 0 ? episode : 1;
-    final seasonPart = safeSeason.toString().padLeft(2, '0');
-    final episodePart = safeEpisode.toString().padLeft(2, '0');
-    return 'https://play4u.org/series/$id/s-$seasonPart/ep-$episodePart?cont=1';
-  }
-
-  // Redirect destinations approved by FLIXORA-REFERENCE's playback security
+    return RegExp(r'^tt\d+  // Redirect destinations approved by FLIXORA-REFERENCE's playback security
   // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
   static const Set<String> _approvedRedirectHosts = <String>{
     'play4u.org',
@@ -298,8 +275,6 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        // Play4U's ?embed=1 route is already its full-screen embed document.
-        // Load it directly; the provider's own video iframe remains a WebView subframe.
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
@@ -407,7 +382,6 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        // The series route is already the provider's episode embed document.
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
             : null,
@@ -563,13 +537,41 @@ class ProviderCatalog {
     });
   }
 
-  /// Reference route: https://play4u.org/watch/{imdbId}?embed=1
+  /// Only HTTPS navigation on the provider's own domain (or its subdomains)
+  /// is allowed inside the embedded player.
+  static bool allowsNavigation(
+    ProviderEmbedSource source,
+    Uri uri,
+  ) {
+    if (uri.scheme.toLowerCase() != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      return false;
+    }
+
+    final host = uri.host.toLowerCase();
+    final approvedHosts = <String>{
+      ...source.allowedHosts,
+      ..._approvedRedirectHosts,
+    };
+    return approvedHosts.any((allowed) {
+      final domain = allowed.toLowerCase();
+      return host == domain || host.endsWith('.$domain');
+    });
+  }
+}
+, caseSensitive: false).hasMatch(id)
+        ? id
+        : null;
+  }
+
+  /// Reference movie embed route: /watch/{IMDb_ID}?embed=1
   static String _play4uMovieUrl(String? imdbId) {
     final id = _validatedPlay4uImdbId(imdbId);
     return id == null ? '' : 'https://play4u.org/watch/$id?embed=1';
   }
 
-  /// Reference route: /series/{imdbId}/s-XX/ep-XX?cont=1
+  /// Reference TV embed route: /series/{IMDb_ID}/s-XX/ep-XX?cont=1
   static String _play4uTvUrl(String? imdbId, int season, int episode) {
     final id = _validatedPlay4uImdbId(imdbId);
     if (id == null) return '';
