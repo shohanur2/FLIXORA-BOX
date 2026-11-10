@@ -22,10 +22,9 @@ void main() {
         'nexstream',
         'vidrift-movie',
       ]);
-      expect(
-        sources.first.url,
-        'https://play4u.org/watch/tt0816692',
-      );
+      expect(sources.first.id, 'play4u');
+      expect(sources.first.isAvailable, isFalse);
+      expect(sources.first.unavailableReason, contains('verified in-app embed'));
       expect(
         sources[1].url,
         'https://yapgrid.com/embed/movie/157336?autoplay=1',
@@ -37,13 +36,13 @@ void main() {
       expect(sources.last.loadInIframe, isTrue);
     });
 
-    test('keeps Play4U visible but unavailable without a valid IMDb ID', () {
+    test('keeps Play4U unavailable until an official embed route is verified', () {
       final sources = ProviderCatalog.forMovie(tmdbId: 157336);
 
       expect(sources, hasLength(10));
       expect(sources.first.id, 'play4u');
       expect(sources.first.isAvailable, isFalse);
-      expect(sources.first.unavailableReason, isNotNull);
+      expect(sources.first.unavailableReason, contains('verified in-app embed'));
       expect(sources[1].isAvailable, isTrue);
     });
 
@@ -53,7 +52,7 @@ void main() {
         imdbId: 'tt0816692',
       );
 
-      for (final source in sources) {
+      for (final source in sources.where((item) => item.isAvailable)) {
         final uri = Uri.parse(source.url);
         expect(uri.scheme, 'https', reason: source.id);
         expect(
@@ -99,7 +98,7 @@ void main() {
         'vidrift-tv',
       ]);
       expect(sources.first.isAvailable, isFalse);
-      expect(sources.first.unavailableReason, contains('IMDb ID'));
+      expect(sources.first.unavailableReason, contains('verified in-app episode embed'));
       expect(sources.last.loadInIframe, isTrue);
       expect(
         sources.last.url,
@@ -113,7 +112,7 @@ void main() {
       }
     });
 
-    test('builds the Play4U TV series route from IMDb ID and exact episode', () {
+    test('does not expose the Play4U TV website as an in-app player', () {
       final sources = ProviderCatalog.forTv(
         tmdbId: 1399,
         imdbId: 'tt0903747',
@@ -123,11 +122,9 @@ void main() {
       final play4u = sources.first;
 
       expect(play4u.id, 'play4u-tv');
-      expect(play4u.isAvailable, isTrue);
-      expect(
-        play4u.url,
-        'https://play4u.org/series/tt0903747/s-02/ep-05',
-      );
+      expect(play4u.isAvailable, isFalse);
+      expect(play4u.url, isEmpty);
+      expect(play4u.unavailableReason, contains('verified in-app episode embed'));
     });
 
     test('matches the three Play4U sample routes supplied for FLIXORA', () {
@@ -148,15 +145,11 @@ void main() {
         episodeNumber: 7,
       );
 
-      expect(movieSources.first.url, 'https://play4u.org/watch/tt34339725');
-      expect(
-        firstEpisodeSources.first.url,
-        'https://play4u.org/series/tt36458668/s-01/ep-01',
-      );
-      expect(
-        seventhEpisodeSources.first.url,
-        'https://play4u.org/series/tt23112594/s-01/ep-07',
-      );
+      expect(movieSources.first.isAvailable, isFalse);
+      expect(firstEpisodeSources.first.isAvailable, isFalse);
+      expect(seventhEpisodeSources.first.isAvailable, isFalse);
+      expect(movieSources.first.unavailableReason, contains('watch page'));
+      expect(firstEpisodeSources.first.unavailableReason, contains('series page'));
     });
 
     test('builds the exact selected TV season and episode route', () {
@@ -236,7 +229,7 @@ void main() {
       expect(next?.id, 'pvrplay');
     });
 
-    test('does not wrap around or retry a failed provider automatically', () {
+    test('wraps to earlier providers after the last source fails', () {
       final sources = ProviderCatalog.forMovie(
         tmdbId: 157336,
         imdbId: 'tt0816692',
@@ -245,9 +238,9 @@ void main() {
         ProviderCatalog.nextAvailableAfter(
           sources,
           'vidrift-movie',
-          excludedIds: const <String>{},
-        ),
-        isNull,
+          excludedIds: const <String>{'vidrift-movie'},
+        )?.id,
+        'yapgrid',
       );
     });
   });
