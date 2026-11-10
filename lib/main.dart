@@ -1216,6 +1216,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).toList();
   }
 
+  String _movieTitleYearKey(Movie movie) {
+    final title = movie.title.toLowerCase().replaceAll(
+          RegExp(r'[^a-z0-9]+'),
+          '',
+        );
+    if (title.isEmpty || movie.year == 'N/A') return '';
+    return '$title:${movie.year}';
+  }
+
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
     final seenFallbackIds = <String>{};
@@ -1716,18 +1725,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
-    final results = await Future.wait<List<Movie>>([      TmdbService.search(text).catchError((_) => <Movie>[]),
+    final results = await Future.wait<List<Movie>>([
+      TmdbService.search(text).catchError((_) => <Movie>[]),
       FlixoraMovieService.searchPublishedMovies(text)
           .catchError((_) => <Movie>[]),
+      InternetArchiveService.search(text).catchError((_) => <Movie>[]),
     ]);
 
     if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
 
+    // Admin-managed entries remain first and keep source/publish priority.
+    // Internet Archive contributes only items explicitly marked Public Domain/CC0.
+    final archiveMovies = results[2];
+    final archiveByTitleYear = <String, Movie>{};
+    for (final archiveMovie in archiveMovies) {
+      final key = _movieTitleYearKey(archiveMovie);
+      if (key.isNotEmpty) archiveByTitleYear.putIfAbsent(key, () => archiveMovie);
+    }
+
+    final usedArchiveMovies = <Movie>{};
+    final catalogueWithArchivePlayback = results[0].map((movie) {
+      if (movie.mediaType != 'movie') return movie;
+      final key = _movieTitleYearKey(movie);
+      final archiveMovie = key.isEmpty ? null : archiveByTitleYear[key];
+      if (archiveMovie == null) return movie;
+      usedArchiveMovies.add(archiveMovie);
+      return Movie(
+        id: movie.id,
+        tmdbId: movie.tmdbId,
+        source: 'internet_archive',
+        title: movie.title,
+        year: movie.year,
+        overview: movie.overview,
+        poster: movie.poster,
+        backdrop: movie.backdrop,
+        rating: movie.rating,
+        releaseDate: movie.releaseDate,
+        genres: movie.genres,
+        runtime: movie.runtime,
+        videoUrl: archiveMovie.videoUrl,
+        downloadUrl: archiveMovie.downloadUrl,
+        mediaType: movie.mediaType,
+        originalLanguage: archiveMovie.originalLanguage.isNotEmpty
+            ? archiveMovie.originalLanguage
+            : movie.originalLanguage,
+        originCountry: movie.originCountry,
+        audioLanguages: movie.audioLanguages,
+      );
+    }).toList();
+
+    final unmatchedArchiveMovies =
+        archiveMovies.where((movie) => !usedArchiveMovies.contains(movie));
+
     final combined = <Movie>[
       ...results[1],
-      ...results[0],
+      ...catalogueWithArchivePlayback,
+      ...unmatchedArchiveMovies,
     ];
 
     final unique = _deduplicateMovies(combined);
