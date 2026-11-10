@@ -38,6 +38,7 @@ void main() {
 
       expect(source.isDirectMedia, isTrue);
       expect(source.isAvailable, isTrue);
+      expect(source.httpHeaders, isEmpty);
     });
   });
 }
