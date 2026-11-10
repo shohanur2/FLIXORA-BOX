@@ -276,7 +276,8 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        loadInIframe: true,
+        // Play4U's ?embed=1 route is already its full-screen embed document.
+        // Load it directly; the provider's own video iframe remains a WebView subframe.
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
@@ -384,7 +385,7 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        loadInIframe: true,
+        // The series route is already the provider's episode embed document.
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
             : null,
