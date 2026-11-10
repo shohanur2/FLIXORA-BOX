@@ -26,8 +26,6 @@ import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/ott_catalog_service.dart';
 import 'streaming/external_catalog_service.dart';
-import 'archive_service.dart';
-import 'archive_screen.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -2292,33 +2290,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  int _archiveMovieId(String identifier) {
-    var value = 0;
-    for (final unit in identifier.codeUnits) {
-      value = ((value * 31) + unit) & 0x7fffffff;
-    }
-    return value == 0 ? 1 : value;
-  }
-
-  void _openArchiveMovie(ArchiveMovie archiveMovie) {
-    final videoUrl = archiveMovie.videoUrl?.trim() ?? '';
-    if (videoUrl.isEmpty) return;
-    final movie = Movie(
-      id: _archiveMovieId(archiveMovie.identifier),
-      source: 'archive',
-      title: archiveMovie.title,
-      year: archiveMovie.year,
-      overview: archiveMovie.description,
-      poster: '',
-      backdrop: '',
-      rating: 0,
-      releaseDate: archiveMovie.year,
-      videoUrl: videoUrl,
-      mediaType: 'movie',
-    );
-    unawaited(_openMovie(movie));
-  }
-
   void _showNoInternetScreen() {
     if (!mounted) return;
     Navigator.of(context).push(
@@ -2646,7 +2617,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _movieRow(List<Movie> movies) {
+    Widget _movieRow(List<Movie> movies) {
     if (movies.isEmpty) return const SizedBox(height: 8);
 
     return SizedBox(
@@ -2666,37 +2637,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(9),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: movie.posterUrl.isEmpty
-                                ? Container(
-                                    color: panel,
-                                    child: const Icon(Icons.movie, color: gold, size: 32),
-                                  )
-                                : FlixoraCachedImage(
-                                    imageUrl: movie.posterUrl,
-                                    isOnline: _online,
-                                    fit: BoxFit.cover,
-                                    placeholder: Container(
-                                      color: panel,
-                                      child: const Center(
-                                        child: CircularProgressIndicator(color: gold, strokeWidth: 2),
-                                      ),
-                                    ),
-                                    fallback: Container(
-                                      color: panel,
-                                      child: const Icon(Icons.movie, color: gold),
-                                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(9),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(Icons.movie, color: gold, size: 32),
+                              )
+                            : FlixoraCachedImage(
+                                imageUrl: movie.posterUrl,
+                                isOnline: _online,
+                                fit: BoxFit.cover,
+                                placeholder: Container(
+                                  color: panel,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
                                   ),
-                          ),
-                        ),
-                        _titleOpeningOverlay(movie),
-                      ],
+                                ),
+                                fallback: Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                ),
+                              ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -2726,7 +2691,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
   }
-
   Widget _featuredSlider() {
     final slides = _homeTrendingMovies().take(5).toList();
 
@@ -3072,7 +3036,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _collectionContent(String title, List<Movie> movies) {
+    Widget _collectionContent(String title, List<Movie> movies) {
     if (movies.isEmpty) {
       return Center(
         child: Text(
@@ -3100,37 +3064,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(
-                                  Icons.movie,
-                                  color: gold,
-                                ),
-                              )
-                            : FlixoraCachedImage(
-                                imageUrl: movie.posterUrl,
-                                isOnline: _online,
-                                fit: BoxFit.cover,
-                                fallback: Container(
-                                  color: panel,
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                  ),
-                                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: movie.posterUrl.isEmpty
+                        ? Container(
+                            color: panel,
+                            child: const Icon(
+                              Icons.movie,
+                              color: gold,
+                            ),
+                          )
+                        : FlixoraCachedImage(
+                            imageUrl: movie.posterUrl,
+                            isOnline: _online,
+                            fit: BoxFit.cover,
+                            fallback: Container(
+                              color: panel,
+                              child: const Icon(
+                                Icons.movie,
+                                color: gold,
                               ),
-                      ),
-                    ),
-                    _titleOpeningOverlay(movie),
-                  ],
+                            ),
+                          ),
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
@@ -3157,7 +3115,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
     );
   }
-
   Widget _searchContent() {
     if (_searchLoading) {
       return const Center(
@@ -4444,8 +4401,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
-      case 4:
-        return ArchiveScreen(onMovieSelected: _openArchiveMovie);
       default:
         return _homeContent();
     }
@@ -4486,7 +4441,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
-    if (_tab == 4) return 'Free Movies';
     return 'FLIXORA';
   }
 
@@ -4630,7 +4584,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
-                _bottomNavItem(4, Icons.local_movies_outlined, Icons.local_movies, 'Free'),
               ],
             ),
           ),
@@ -5878,8 +5831,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       // An Admin-supplied Dailymotion link takes priority for that title.
       // Otherwise preserve the existing Play4U-first provider order.
       final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
+      final hasAnimeSub = _providerSources.any(
+        (source) => source.id == 'vidrift-anime-sub' && source.isAvailable,
+      );
       final preferredId = adminSource?.id ??
-          (widget.movie.mediaType == 'tv' ? 'play4u-tv' : 'play4u');
+          (widget.movie.mediaType == 'tv'
+              ? (hasAnimeSub ? 'vidrift-anime-sub' : 'vidrift-tv')
+              : 'vidrift-movie');
       final preferred = _providerSources.where(
         (source) => source.id == preferredId && source.isAvailable,
       );
