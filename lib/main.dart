@@ -5828,25 +5828,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _movieDetailsFuture;
       if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
-      // An Admin-supplied Dailymotion link takes priority for that title.
-      // Otherwise preserve the existing Play4U-first provider order.
+      // Admin-managed direct MP4/HLS was already tried above.
+      // A recognized Admin embed has priority; otherwise use the first
+      // available provider in the movie/TV/anime catalog's declared order.
       final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
-      final hasAnimeSub = _providerSources.any(
-        (source) => source.id == 'vidrift-anime-sub' && source.isAvailable,
-      );
-      final preferredId = adminSource?.id ??
-          (widget.movie.mediaType == 'tv'
-              ? (hasAnimeSub ? 'vidrift-anime-sub' : 'vidrift-tv')
-              : 'vidrift-movie');
       final preferred = _providerSources.where(
-        (source) => source.id == preferredId && source.isAvailable,
+        (source) => source.id == adminSource?.id && source.isAvailable,
       );
-    final fallback = preferred.isNotEmpty
-        ? preferred.first
-        : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
-              (source) => source?.isAvailable == true,
-              orElse: () => null,
-            );
+      final fallback = preferred.isNotEmpty
+          ? preferred.first
+          : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
+                (source) => source?.isAvailable == true,
+                orElse: () => null,
+              );
 
       if (fallback == null) return;
 
