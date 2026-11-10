@@ -2411,7 +2411,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'New Bengali':
           return _deduplicateMovies(bengaliTv);
         case 'Anime':
-          return _deduplicateMovies(anime);
+          return _deduplicateMovies([
+            ...anime,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
+                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+          ]);
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
         case 'Indian Drama':
@@ -2848,9 +2852,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'TV Series':
         return _deduplicateMovies([
           ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
+          ...flixoraMovies.where((title) => title.mediaType == 'tv'),
         ]);
       case 'Anime':
-        return anime;
+        return _deduplicateMovies([
+          ...anime,
+          ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
+              title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+        ]);
       case 'Korean Drama':
         return koreanDrama;
       case 'Bengali':
@@ -2896,10 +2905,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _withoutFlixoraDuplicates(trending)),
-          _sectionBlock('Trending TV Series', trendingTv),
+          _sectionBlock('Trending TV Series', _deduplicateMovies([
+            ...trendingTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ])),
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
-            ...bengaliTv, ...koreanDrama, ...indianDramaTv,
+            ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
@@ -2909,15 +2921,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
             return normalized == 'web series' || normalized == 'webseries';
           })).toList()),
-          _sectionBlock('Anime', anime),
+          _sectionBlock('Anime', _deduplicateMovies([
+            ...anime,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
+                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+          ])),
           _sectionBlock('Korean & Asian Drama', koreanDrama),
           _sectionBlock('Bengali Movies', bengaliMovies),
           _sectionBlock('Bengali TV Series', bengaliTv),
           _sectionBlock('Popular Movies', _withoutFlixoraDuplicates(popular)),
-          _sectionBlock('Popular TV Series', popularTv),
+          _sectionBlock('Popular TV Series', _deduplicateMovies([
+            ...popularTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ])),
           _sectionBlock('Now Playing', _withoutFlixoraDuplicates(latest)),
           _sectionBlock('Top Rated Movies', _withoutFlixoraDuplicates(topRated)),
-          _sectionBlock('Top Rated TV Series', topRatedTv),
+          _sectionBlock('Top Rated TV Series', _deduplicateMovies([
+            ...topRatedTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ])),
           const SizedBox(height: 25),
         ],
       ),
@@ -4106,13 +4128,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final series = _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv, ...anime,
             ...koreanDrama, ...bengaliTv, ...indianDramaTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ]);
           return series..sort((a, b) => b.rating.compareTo(a.rating));
         }
         case 'New Bengali':
           return _deduplicateMovies(bengaliTv);
         case 'Anime':
-          return _deduplicateMovies(anime);
+          return _deduplicateMovies([
+            ...anime,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
+                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+          ]);
         case 'Drama': {
           return _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv,
@@ -4137,6 +4164,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv, ...anime,
             ...koreanDrama, ...bengaliTv, ...indianDramaTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ]);
       }
     }
