@@ -3307,6 +3307,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ],
           ),
         ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Text(
+            'Platform logos show catalogue availability for the selected region. Playback and audio tracks depend on the video source available in FLIXORA.',
+            style: TextStyle(color: ink54, fontSize: 10, height: 1.35),
+          ),
+        ),
         SizedBox(
           height: 106,
           child: _ottProvidersLoading && _ottProviders.isEmpty
@@ -6543,7 +6550,111 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  String _originalAudioLanguageLabel() {
+    final code = widget.movie.originalLanguage
+        .trim()
+        .toLowerCase()
+        .split('-')
+        .first;
+    const names = <String, String>{
+      'en': 'English',
+      'hi': 'Hindi',
+      'bn': 'Bangla',
+      'ta': 'Tamil',
+      'te': 'Telugu',
+      'ml': 'Malayalam',
+      'kn': 'Kannada',
+      'ja': 'Japanese',
+      'ko': 'Korean',
+      'zh': 'Chinese',
+      'es': 'Spanish',
+      'fr': 'French',
+      'de': 'German',
+      'ur': 'Urdu',
+      'ar': 'Arabic',
+    };
+    return names[code] ?? (code.isEmpty ? 'Not listed' : code.toUpperCase());
+  }
+
+  void _showProviderAudioHelp() {
+    final source = _selectedProviderSource;
+    if (source == null) {
+      _showAudioTracks();
+      return;
+    }
+    _cancelHideTimer();
+    final listedLanguages = widget.movie.audioLanguages
+        .map((language) => language.trim())
+        .where((language) => language.isNotEmpty)
+        .toSet()
+        .toList();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 26),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.audiotrack_rounded, color: playerGold, size: 23),
+                SizedBox(width: 10),
+                Text(
+                  'Audio language',
+                  style: TextStyle(
+                    color: playerWhite,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'Original language: ${_originalAudioLanguageLabel()}',
+              style: const TextStyle(color: playerWhite, fontSize: 13),
+            ),
+            if (listedLanguages.isNotEmpty) ...[
+              const SizedBox(height: 7),
+              Text(
+                'Admin-listed languages: ${listedLanguages.join(', ')}',
+                style: const TextStyle(color: playerGoldLight, fontSize: 12),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              'This video is playing through ${source.name}. Tap the settings or gear icon inside the video, then open Audio / Language to choose a track if the provider offers one. FLIXORA cannot add a Hindi or English dub that is not included in the stream.',
+              style: const TextStyle(
+                color: Color(0xFFD0D5DE),
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.pop(sheetContext),
+                child: const Text('Got it'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showAudioTracks() {
+    if (_selectedProviderSource != null) {
+      _showProviderAudioHelp();
+      return;
+    }
     final audioTracks = _tracks.audio;
     final selectedIndex = audioTracks.isEmpty
         ? -1
@@ -7395,14 +7506,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               onPressed: _showQualitySelector,
             ),
           ],
-          if (_selectedProviderSource == null && _tracks.audio.isNotEmpty) ...[
+          if (_selectedProviderSource != null || _tracks.audio.isNotEmpty) ...[
             const SizedBox(width: 3),
             Material(
               color: Colors.black.withValues(alpha: 0.48),
               shape: const CircleBorder(),
               child: IconButton(
-                tooltip: 'Audio language: $audioLabel',
-                onPressed: _showAudioTracks,
+                tooltip: _selectedProviderSource != null
+                    ? 'Audio options in provider player'
+                    : 'Audio language: $audioLabel',
+                onPressed: _selectedProviderSource != null
+                    ? _showProviderAudioHelp
+                    : _showAudioTracks,
                 icon: const Icon(
                   Icons.audiotrack_rounded,
                   color: playerGoldLight,
@@ -8003,13 +8118,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _playerResources() {
     if (_selectedProviderSource != null) {
-      return const ListTile(
+      return ListTile(
         contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.language, color: playerGold),
-        title: Text('Audio tracks',
-            style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
-        subtitle: Text('Audio tracks are controlled by this stream. Use its audio, language or settings menu if alternate tracks are provided. FLIXORA can switch tracks only when the source exposes them.',
-            style: TextStyle(color: Color(0x99FFFFFF))),
+        leading: const Icon(Icons.language, color: playerGold),
+        title: const Text(
+          'Audio language',
+          style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          'Original: ${_originalAudioLanguageLabel()} · Open the video settings for provider audio tracks',
+          style: const TextStyle(color: Color(0xFFD0D5DE)),
+        ),
+        trailing: const Icon(Icons.chevron_right, color: playerGoldLight),
+        onTap: _showProviderAudioHelp,
       );
     }
     if (_tracks.audio.isEmpty) {
