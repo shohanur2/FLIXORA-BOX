@@ -105,21 +105,40 @@ class TasteDiveSuggestion {
   }
 }
 
+class TraktTitleInfo {
+  const TraktTitleInfo({
+    required this.rating,
+    required this.votes,
+    required this.rank,
+    required this.traktUrl,
+  });
+
+  final double? rating;
+  final int? votes;
+  final int? rank;
+  final String traktUrl;
+
+  bool get hasContent => rating != null || votes != null || rank != null;
+}
+
 class ExternalCatalogData {
   const ExternalCatalogData({
     this.omdb,
     this.watchmode = const <WatchmodeSource>[],
     this.similar = const <TasteDiveSuggestion>[],
+    this.trakt,
   });
 
   final OmdbMetadata? omdb;
   final List<WatchmodeSource> watchmode;
   final List<TasteDiveSuggestion> similar;
+  final TraktTitleInfo? trakt;
 
   bool get isEmpty =>
       (omdb == null || !omdb!.hasContent) &&
       watchmode.isEmpty &&
-      similar.isEmpty;
+      similar.isEmpty &&
+      (trakt == null || !trakt!.hasContent);
 }
 
 /// Optional metadata/discovery integrations. These APIs do not provide
@@ -132,11 +151,14 @@ class ExternalCatalogService {
       String.fromEnvironment('WATCHMODE_API_KEY');
   static const String tasteDiveApiKey =
       String.fromEnvironment('TASTEDIVE_API_KEY');
+  static const String traktClientId =
+      String.fromEnvironment('TRAKT_CLIENT_ID');
 
   static bool get hasAnyConfigured =>
       omdbApiKey.isNotEmpty ||
       watchmodeApiKey.isNotEmpty ||
-      tasteDiveApiKey.isNotEmpty;
+      tasteDiveApiKey.isNotEmpty ||
+      traktClientId.isNotEmpty;
 
   static Future<ExternalCatalogData> load({
     required String title,
@@ -160,17 +182,22 @@ class ExternalCatalogService {
             const <TasteDiveSuggestion>[],
           )
         : getSimilar(title: title, mediaType: mediaType);
+    final traktFuture = traktClientId.isEmpty || tmdbId <= 0
+        ? Future<TraktTitleInfo?>.value(null)
+        : getTraktTitleInfo(tmdbId: tmdbId, mediaType: mediaType);
 
     final values = await Future.wait<Object?>([
       omdbFuture,
       watchmodeFuture,
       similarFuture,
+      traktFuture,
     ]);
 
     return ExternalCatalogData(
       omdb: values[0] as OmdbMetadata?,
       watchmode: values[1] as List<WatchmodeSource>,
       similar: values[2] as List<TasteDiveSuggestion>,
+      trakt: values[3] as TraktTitleInfo?,
     );
   }
 
@@ -249,6 +276,51 @@ class ExternalCatalogService {
       return sources;
     } catch (_) {
       return const <WatchmodeSource>[];
+    }
+  }
+
+  static Future<TraktTitleInfo?> getTraktTitleInfo({
+    required int tmdbId,
+    required String mediaType,
+  }) async {
+    if (traktClientId.trim().isEmpty || tmdbId <= 0) return null;
+    final kind = mediaType == 'tv' ? 'show' : 'movie';
+    try {
+      final response = await http.get(
+        Uri.https('api.trakt.tv', '/search/tmdb/$tmdbId', {
+          'type': kind,
+          'extended': 'full',
+        }),
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'trakt-api-version': '2',
+          'trakt-api-key': traktClientId,
+          'User-Agent': 'FLIXORA/1.0.9',
+        },
+      ).timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return null;
+      final payload = jsonDecode(response.body);
+      if (payload is! List || payload.isEmpty || payload.first is! Map) {
+        return null;
+      }
+      final first = Map<String, dynamic>.from(payload.first as Map);
+      final item = first[kind];
+      if (item is! Map) return null;
+      final rating = item['rating'];
+      final votes = item['votes'];
+      final rank = item['rank'];
+      final traktId = (item['ids'] is Map)
+          ? (item['ids'] as Map)['trakt']
+          : null;
+      final info = TraktTitleInfo(
+        rating: rating is num ? rating.toDouble() : null,
+        votes: votes is num ? votes.toInt() : null,
+        rank: rank is num ? rank.toInt() : null,
+        traktUrl: traktId is num ? 'https://trakt.tv/$kind/$traktId' : '',
+      );
+      return info.hasContent ? info : null;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -367,6 +439,33 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
+              if (data.trakt != null && data.trakt!.hasContent) ...[
+                _ExternalPanel(
+                  title: 'Trakt community rating',
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 9,
+                    children: [
+                      if (data.trakt!.rating != null)
+                        _ExternalMetric(
+                          label: 'Rating',
+                          value: data.trakt!.rating!.toStringAsFixed(1) + '/10',
+                        ),
+                      if (data.trakt!.votes != null)
+                        _ExternalMetric(
+                          label: 'Votes',
+                          value: data.trakt!.votes.toString(),
+                        ),
+                      if (data.trakt!.rank != null)
+                        _ExternalMetric(
+                          label: 'Rank',
+                          value: '#${data.trakt!.rank}',
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               if (data.omdb != null && data.omdb!.hasContent) ...[
                 const SizedBox(height: 10),
                 _ExternalPanel(
