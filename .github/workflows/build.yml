@@ -160,6 +160,30 @@ jobs:
           echo "APK build failed after 3 attempts."
           exit 1
 
+      - name: Prepare GPL corresponding source bundle
+        run: |
+          set -euo pipefail
+          mkdir -p build/gpl-source
+
+          # Include the exact FLIXORA source tree used for this APK.
+          git archive --format=zip HEAD -o build/gpl-source/FLIXORA-BOX-source.zip
+
+          # Include the pinned GPL-3.0 NextLib source used by the Android player.
+          curl -fL --retry 3 \
+            https://github.com/anilbeesetti/nextlib/archive/refs/tags/1.8.0-0.9.0.zip \
+            -o build/gpl-source/NextLib-1.8.0-0.9.0-source.zip
+
+          cp LICENSE build/gpl-source/GPL-3.0-LICENSE.txt
+          (cd build && zip -qr FLIXORA-GPL-CORRESPONDING-SOURCE.zip gpl-source)
+
+      - name: Upload GPL corresponding source
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLIXORA-GPL-CORRESPONDING-SOURCE
+          path: build/FLIXORA-GPL-CORRESPONDING-SOURCE.zip
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Verify APK
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
