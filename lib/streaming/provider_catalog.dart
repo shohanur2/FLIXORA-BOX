@@ -36,6 +36,31 @@ class ProviderCatalog {
   static const String _dailymotionPlayerId =
       String.fromEnvironment('DAILYMOTION_PLAYER_ID');
 
+  /// Play4U routes require a valid IMDb title ID, never a numeric TMDB ID.
+  static String? _validatedPlay4uImdbId(String? rawId) {
+    final id = (rawId ?? '').trim();
+    return RegExp(r'^tt\d+$', caseSensitive: false).hasMatch(id)
+        ? id
+        : null;
+  }
+
+  /// Reference movie embed route: /watch/{IMDb_ID}?embed=1
+  static String _play4uMovieUrl(String? imdbId) {
+    final id = _validatedPlay4uImdbId(imdbId);
+    return id == null ? '' : 'https://play4u.org/watch/$id?embed=1';
+  }
+
+  /// Reference TV embed route: /series/{IMDb_ID}/s-XX/ep-XX?cont=1
+  static String _play4uTvUrl(String? imdbId, int season, int episode) {
+    final id = _validatedPlay4uImdbId(imdbId);
+    if (id == null) return '';
+    final safeSeason = season > 0 ? season : 1;
+    final safeEpisode = episode > 0 ? episode : 1;
+    final seasonPart = safeSeason.toString().padLeft(2, '0');
+    final episodePart = safeEpisode.toString().padLeft(2, '0');
+    return 'https://play4u.org/series/$id/s-$seasonPart/ep-$episodePart?cont=1';
+  }
+
   // Redirect destinations approved by FLIXORA-REFERENCE's playback security
   // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
   static const Set<String> _approvedRedirectHosts = <String>{
@@ -269,11 +294,12 @@ class ProviderCatalog {
       if (adminSource != null) adminSource,
       ProviderEmbedSource(
         id: 'play4u',
-        name: 'Play4U · Unavailable',
-        url: '',
+        name: 'STREAM 1 · Play4U',
+        url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        unavailableReason:
-            'Play4U currently provides a watch page, not a verified in-app embed player.',
+        unavailableReason: _validatedPlay4uImdbId(imdbId) == null
+            ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
+            : null,
       ),
       ProviderEmbedSource(
         id: 'yapgrid',
@@ -375,11 +401,12 @@ class ProviderCatalog {
     final tvProviders = <ProviderEmbedSource>[
       ProviderEmbedSource(
         id: 'play4u-tv',
-        name: 'Play4U · Unavailable',
-        url: '',
+        name: 'STREAM 1 · Play4U',
+        url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        unavailableReason:
-            'Play4U currently provides a series page, not a verified in-app episode embed.',
+        unavailableReason: _validatedPlay4uImdbId(imdbId) == null
+            ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
+            : null,
       ),
       ProviderEmbedSource(
         id: 'yapgrid-tv',
