@@ -21,6 +21,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/provider_catalog.dart';
+import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/ott_catalog_service.dart';
 
@@ -409,6 +410,10 @@ class MovieCache {
   static const String koreanKey = 'flixora_korean_drama';
   static const String bengaliMoviesKey = 'flixora_bengali_movies';
   static const String bengaliTvKey = 'flixora_bengali_tv';
+  static const String bollywoodMoviesKey = 'flixora_bollywood_movies';
+  static const String hollywoodMoviesKey = 'flixora_hollywood_movies';
+  static const String southIndianMoviesKey = 'flixora_south_indian_movies';
+  static const String indianDramaTvKey = 'flixora_indian_drama_tv';
 
   static Future<void> saveDownloads(List<DownloadTask> tasks) async {
     try {
@@ -546,7 +551,7 @@ class TmdbService {
     Map<String, String> extraParams = const {},
   }) async {
     if (apiKey.isEmpty) throw Exception('Movie service is not configured.');
-    final isTv = endpoint.startsWith('tv/') || endpoint.startsWith('discover/tv');
+    final isTv = TmdbMediaType.isTvEndpoint(endpoint);
     final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
       'api_key': apiKey, 'language': 'en-US', 'page': '1', ...extraParams,
     });
@@ -1084,6 +1089,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> koreanDrama = [];
   List<Movie> bengaliMovies = [];
   List<Movie> bengaliTv = [];
+  List<Movie> bollywoodMovies = [];
+  List<Movie> hollywoodMovies = [];
+  List<Movie> southIndianMovies = [];
+  List<Movie> indianDramaTv = [];
   List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
 
@@ -1336,6 +1345,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.bengaliMoviesKey),
       MovieCache.getList(MovieCache.bengaliTvKey),
       MovieCache.getList(MovieCache.flixoraKey),
+      MovieCache.getList(MovieCache.bollywoodMoviesKey),
+      MovieCache.getList(MovieCache.hollywoodMoviesKey),
+      MovieCache.getList(MovieCache.southIndianMoviesKey),
+      MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
     if (!mounted) return;
@@ -1353,6 +1366,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       bengaliMovies = results[9];
       bengaliTv = results[10];
       flixoraMovies = results[11];
+      bollywoodMovies = results[12];
+      hollywoodMovies = results[13];
+      southIndianMovies = results[14];
+      indianDramaTv = results[15];
       loading = false;
       homeError = null;
     });
@@ -1494,6 +1511,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
         }).catchError((_) => <Movie>[]),
         FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ur',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'en',
+          'with_origin_country': 'US|GB|CA|AU|NZ',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ta', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'te', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ml', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'kn', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/tv', extraParams: {
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
@@ -1511,6 +1561,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bengaliMovies = results[9];
         bengaliTv = results[10];
         flixoraMovies = results[11];
+        bollywoodMovies = _deduplicateMovies([...results[12], ...results[13]]);
+        hollywoodMovies = results[14];
+        southIndianMovies = _deduplicateMovies([
+          ...results[15], ...results[16], ...results[17], ...results[18],
+        ]);
+        indianDramaTv = results[19];
         loading = false;
 
         if (_allMovies().isEmpty) {
@@ -1543,6 +1599,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
         MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
         MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
+        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
+        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
+        MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
     } catch (e) {
       if (!mounted) return;
@@ -1570,6 +1630,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...koreanDrama,
       ...bengaliMovies,
       ...bengaliTv,
+      ...bollywoodMovies,
+      ...hollywoodMovies,
+      ...southIndianMovies,
+      ...indianDramaTv,
     ];
 
     return _deduplicateMovies(combined);
@@ -2249,6 +2313,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   List<Movie> _filterSectionMovies(String section, List<Movie> source, String filter) {
     final items = _deduplicateMovies(source);
+
+    if (section.contains('TV Series')) {
+      switch (filter) {
+        case 'New Bengali':
+          return _deduplicateMovies(bengaliTv);
+        case 'Anime':
+          return _deduplicateMovies(anime);
+        case 'Asian Drama':
+          return _deduplicateMovies(koreanDrama);
+        case 'Indian Drama':
+          return _deduplicateMovies(indianDramaTv);
+        case 'Top Series':
+          final series = _deduplicateMovies([
+            ...topRatedTv, ...popularTv, ...trendingTv,
+          ]);
+          return series..sort((a, b) => b.rating.compareTo(a.rating));
+      }
+    }
     if (filter == 'All' || filter == 'Cinema' || filter == 'All Series' || filter == 'Popular') {
       if (filter == 'Popular' && section == 'Anime') {
         return items.toList()..sort((a, b) => b.rating.compareTo(a.rating));
@@ -2261,18 +2343,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (filter == 'New Release' || filter == 'New') {
       return items.toList()..sort((a, b) => b.year.compareTo(a.year));
     }
-    if (filter == 'New Bengali') {
-      return items.where((m) => m.originalLanguage.toLowerCase() == 'bn' || m.originCountry.toUpperCase() == 'BD').toList();
-    }
-    if (filter == 'Bollywood') {
-      return items.where((m) => ['hi', 'ur'].contains(m.originalLanguage.toLowerCase())).toList();
-    }
-    if (filter == 'Hollywood') {
-      return items.where((m) => m.originalLanguage.toLowerCase() == 'en').toList();
-    }
-    if (filter == 'South Indian') {
-      return items.where((m) => ['ta', 'te', 'ml', 'kn'].contains(m.originalLanguage.toLowerCase())).toList();
-    }
+    if (filter == 'New Bengali') return _deduplicateMovies(bengaliMovies);
+    if (filter == 'Bollywood') return _deduplicateMovies(bollywoodMovies);
+    if (filter == 'Hollywood') return _deduplicateMovies(hollywoodMovies);
+    if (filter == 'South Indian') return _deduplicateMovies(southIndianMovies);
     if (filter == 'Anime') {
       return items.where((m) => m.genres.any((g) => g.toLowerCase().contains('animation')) || m.originalLanguage.toLowerCase() == 'ja').toList();
     }
@@ -3898,13 +3972,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   List<Movie> _rankingMovies() {
     switch (_rankingCategory) {
-      case 'TOP Movies': return _deduplicateMovies([...topRated, ...popular, ...trending].where((m) => m.mediaType == 'movie').toList());
-      case 'New Bengali': return _deduplicateMovies(bengaliMovies);
-      case 'Bollywood': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && ['hi', 'ur'].contains(m.originalLanguage.toLowerCase())).toList());
-      case 'Hollywood': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && m.originalLanguage.toLowerCase() == 'en').toList());
-      case 'South Indian': return _deduplicateMovies(_allMovies().where((m) => m.mediaType == 'movie' && ['ta', 'te', 'ml', 'kn'].contains(m.originalLanguage.toLowerCase())).toList());
-      case 'New Release': return _deduplicateMovies(_withoutFlixoraDuplicates(latest));
-      default: return _deduplicateMovies([...flixoraMovies, ...trending, ...popular, ...latest, ...topRated].where((m) => m.mediaType == 'movie').toList());
+      case 'TOP Movies':
+        final movies = _deduplicateMovies([
+          ...topRated, ...popular, ...trending,
+        ].where((movie) => movie.mediaType == 'movie').toList());
+        return movies..sort((a, b) => b.rating.compareTo(a.rating));
+      case 'New Bengali':
+        return _deduplicateMovies(bengaliMovies);
+      case 'Bollywood':
+        return _deduplicateMovies(bollywoodMovies);
+      case 'Hollywood':
+        return _deduplicateMovies(hollywoodMovies);
+      case 'South Indian':
+        return _deduplicateMovies(southIndianMovies);
+      case 'New Release':
+        return _deduplicateMovies(_withoutFlixoraDuplicates(latest));
+      default:
+        return _deduplicateMovies([
+          ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
+        ].where((movie) => movie.mediaType == 'movie').toList());
     }
   }
 
@@ -3912,11 +3998,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     const categories = ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
     final movies = _rankingMovies();
     return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFFF0EEE8), child: ListView.builder(
+      SizedBox(width: 126, child: ColoredBox(color: const Color(0xFF171923), child: ListView.builder(
         padding: const EdgeInsets.only(top: 8, bottom: 20), itemCount: categories.length,
         itemBuilder: (context, index) {
           final category = categories[index]; final selected = category == _rankingCategory;
-          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(border: Border(left: BorderSide(color: selected ? gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? gold : white, fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
+          return InkWell(onTap: () => setState(() => _rankingCategory = category), child: Container(height: 58, alignment: Alignment.centerLeft, padding: const EdgeInsets.symmetric(horizontal: 14), decoration: BoxDecoration(color: selected ? gold.withValues(alpha: 0.12) : Colors.transparent, border: Border(left: BorderSide(color: selected ? gold : Colors.transparent, width: 4))), child: Text(category, style: TextStyle(color: selected ? gold : const Color(0xB3FFFFFF), fontSize: 14, fontWeight: FontWeight.w800, fontStyle: FontStyle.italic))));
         },
       ))),
       Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
@@ -4881,6 +4967,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   int _selectedEpisodeNumber = 1;
   int? _aniListId;
   bool _loadingTvEpisodes = false;
+  int _tvSeasonRequestToken = 0;
   String? _tvEpisodeError;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
@@ -5090,6 +5177,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     bool selectProvider = false,
   }) async {
     if (widget.movie.tmdbId <= 0 || _isDisposed) return;
+    final requestToken = ++_tvSeasonRequestToken;
     if (mounted) {
       setState(() {
         _loadingTvEpisodes = true;
@@ -5118,7 +5206,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final firstEpisode = episodes.isNotEmpty
         ? _toInt(episodes.first['episode_number'])
         : 1;
-    if (!mounted || _isDisposed) return;
+    if (!mounted || _isDisposed || requestToken != _tvSeasonRequestToken) return;
     setState(() {
       _tvEpisodes = episodes;
       _selectedEpisodeNumber = firstEpisode;
@@ -5557,6 +5645,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         if (genres.isEmpty) genres.addAll(widget.movie.genres);
 
         final items = <Widget>[];
+        final originalLanguageCode =
+            (details['original_language'] ?? '').toString().trim().toLowerCase();
+        const originalLanguageNames = <String, String>{
+          'en': 'English', 'hi': 'Hindi', 'ur': 'Urdu', 'bn': 'Bangla',
+          'ta': 'Tamil', 'te': 'Telugu', 'ml': 'Malayalam', 'kn': 'Kannada',
+          'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese', 'es': 'Spanish',
+          'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'ru': 'Russian',
+          'ar': 'Arabic', 'tr': 'Turkish',
+        };
+        final originalLanguageName =
+            originalLanguageNames[originalLanguageCode] ??
+            (originalLanguageCode.isEmpty ? '' : originalLanguageCode.toUpperCase());
+        if (originalLanguageName.isNotEmpty) {
+          items.add(_playerMetadataItem(
+            Icons.translate_rounded,
+            'Original language: $originalLanguageName',
+          ));
+        }
         if (rating > 0) {
           items.add(_playerMetadataItem(
             Icons.star_rounded,
@@ -7769,7 +7875,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         leading: Icon(Icons.language, color: playerGold),
         title: Text('Audio tracks',
             style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
-        subtitle: Text('Use the selected provider player to change audio language.',
+        subtitle: Text('Audio tracks are controlled by this stream. Use its audio, language or settings menu if alternate tracks are provided. FLIXORA can switch tracks only when the source exposes them.',
             style: TextStyle(color: Color(0x99FFFFFF))),
       );
     }
