@@ -98,6 +98,19 @@ void main() {
       ), isTrue);
     });
 
+    test('builds the exact selected TV season and episode route', () {
+      final sources = ProviderCatalog.forTv(
+        tmdbId: 1399,
+        seasonNumber: 3,
+        episodeNumber: 7,
+      );
+
+      expect(
+        sources.single.url,
+        'https://embed.vidrift.net/embed/tv/1399/3/7?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
+      );
+    });
+
     test('builds separate AniList Sub and Dub routes with TMDB fallback', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1429, aniListId: 16498);
 
@@ -110,6 +123,20 @@ void main() {
       expect(sources[1].url, contains('&dub=1'));
       expect(sources[2].url, contains('/embed/tv/1429/1/1'));
       expect(sources.every((source) => source.loadInIframe), isTrue);
+    });
+
+    test('uses the selected absolute episode for AniList Sub and Dub', () {
+      final sources = ProviderCatalog.forTv(
+        tmdbId: 1429,
+        aniListId: 16498,
+        seasonNumber: 2,
+        episodeNumber: 4,
+        aniListEpisodeNumber: 17,
+      );
+
+      expect(sources[0].url, contains('/embed/anilist/16498/17?'));
+      expect(sources[1].url, contains('/embed/anilist/16498/17?'));
+      expect(sources[2].url, contains('/embed/tv/1429/2/4?'));
     });
 
     test('does not create TV providers without a TMDB ID', () {
