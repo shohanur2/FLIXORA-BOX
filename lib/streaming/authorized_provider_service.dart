@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
@@ -140,6 +141,158 @@ class AuthorizedProviderService {
     }
     final path = Uri.decodeComponent(uri.path).toLowerCase();
     return RegExp(r'\.(mp4|m4v|mkv|webm|mov|avi|m3u8|mpd)(?:$|/)').hasMatch(path);
+  }
+
+  static bool _isPublicHttpsUri(Uri uri) {
+    if (uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+      return false;
+    }
+    final host = uri.host.toLowerCase();
+    if (host == 'localhost' ||
+        host.endsWith('.local') ||
+        host.endsWith('.internal')) {
+      return false;
+    }
+    final address = InternetAddress.tryParse(host);
+    if (address == null) return true;
+    if (address.type != InternetAddressType.IPv4) return false;
+    final octets = address.rawAddress;
+    final first = octets[0];
+    final second = octets[1];
+    return first != 0 &&
+        first != 10 &&
+        first != 127 &&
+        first < 224 &&
+        !(first == 169 && second == 254) &&
+        !(first == 172 && second >= 16 && second <= 31) &&
+        !(first == 192 && second == 168);
+  }
+
+  static Uri? _normalizePixeldrainUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (!host.contains('pixeldrain.')) return null;
+    final segments = uri.pathSegments.where((part) => part.isNotEmpty).toList();
+    String? id;
+    if (segments.length >= 2 && segments[0] == 'u') {
+      id = segments[1];
+    } else if (segments.length >= 3 &&
+        segments[0] == 'api' &&
+        segments[1] == 'file') {
+      id = segments[2];
+    }
+    if (id == null ||
+        !RegExp(r'^[A-Za-z0-9_-]{2,128}$').hasMatch(id)) {
+      return null;
+    }
+    return Uri.https(host, '/api/file/$id', <String, String>{'download': ''});
+  }
+
+  static Uri? _unwrapWatchOnlineUri(Uri uri) {
+    if (!uri.host.toLowerCase().endsWith('pages.dev')) return null;
+    final encoded = uri.queryParameters['u'];
+    if (encoded == null || encoded.isEmpty) return null;
+    try {
+      final decoded = utf8.decode(base64.decode(encoded.replaceAll(' ', '+')));
+      final target = Uri.tryParse(decoded);
+      if (target != null && _isPublicHttpsUri(target)) return target;
+    } catch (_) {}
+    return null;
+  }
+
+  static bool _isApprovedResolverMedia(Uri uri) {
+    if (!_isPublicHttpsUri(uri)) return false;
+    if (_isSupportedMediaUrl(uri)) return true;
+    final host = uri.host.toLowerCase();
+    final path = uri.path.toLowerCase();
+    return (host.contains('pixeldrain.') && path.startsWith('/api/file/')) ||
+        host == 'storage.googleapis.com' ||
+        host.endsWith('.googleusercontent.com') ||
+        host.endsWith('.googlevideo.com') ||
+        host.endsWith('.workers.dev') ||
+        host.endsWith('.r2.dev') ||
+        host.endsWith('.cloudflarestorage.com');
+  }
+
+  static Future<List<Uri>> _resolveHubCloud(Uri resolverUri) async {
+    final host = resolverUri.host.toLowerCase();
+    final isHubCloud = host.contains('hubcloud.') &&
+        resolverUri.path.startsWith('/drive/');
+    final isHubDrive = host.contains('hubdrive.') &&
+        resolverUri.path.startsWith('/file/');
+    if (!_isPublicHttpsUri(resolverUri) || (!isHubCloud && !isHubDrive)) {
+      return const <Uri>[];
+    }
+
+    var hubCloudUri = resolverUri;
+    if (isHubDrive) {
+      final driveHtml = (await _get(resolverUri)).body;
+      final driveDoc = html_parser.parse(driveHtml);
+      Uri? foundHubCloud;
+      for (final anchor in driveDoc.querySelectorAll('a[href]')) {
+        final href = anchor.attributes['href'];
+        if (href == null) continue;
+        final candidate = resolverUri.resolve(href);
+        if (candidate.host.toLowerCase().contains('hubcloud.') &&
+            candidate.path.startsWith('/drive/') &&
+            _isPublicHttpsUri(candidate)) {
+          foundHubCloud = candidate;
+          break;
+        }
+      }
+      if (foundHubCloud == null) return const <Uri>[];
+      hubCloudUri = foundHubCloud;
+    }
+
+    final driveHtml = (await _get(hubCloudUri)).body;
+    final driveDoc = html_parser.parse(driveHtml);
+    Uri? nextResolver;
+    for (final anchor in driveDoc.querySelectorAll(
+      'a#download, a.btn-primary, a.btn-success, a.btn[href*="/download/"], a[href*="/download/"], a[href*="gamerxyt.com"], a[href*="hubcloud.php"]',
+    )) {
+      final href = anchor.attributes['href'];
+      if (href == null || !href.startsWith('https://')) continue;
+      final candidate = hubCloudUri.resolve(href);
+      if (_isPublicHttpsUri(candidate)) {
+        nextResolver = candidate;
+        break;
+      }
+    }
+    if (nextResolver == null) return const <Uri>[];
+
+    final resolverHtml = (await _get(nextResolver)).body;
+    final resolverDoc = html_parser.parse(resolverHtml);
+    final candidates = <Uri>[];
+
+    final pixelPattern = RegExp(
+      r'https://pixeldrain\.(?:dev|com)/(?:u|api/file)/[A-Za-z0-9_-]+',
+    );
+    for (final match in pixelPattern.allMatches(resolverHtml)) {
+      final parsed = Uri.tryParse(match.group(0) ?? '');
+      if (parsed == null) continue;
+      final normalized = _normalizePixeldrainUri(parsed);
+      if (normalized != null) candidates.add(normalized);
+    }
+
+    for (final anchor in resolverDoc.querySelectorAll('a[href]')) {
+      final href = anchor.attributes['href'];
+      if (href == null) continue;
+      var candidate = Uri.tryParse(href);
+      if (candidate == null) continue;
+      if (!candidate.hasAuthority) candidate = nextResolver.resolve(href);
+
+      final watchOnline = _unwrapWatchOnlineUri(candidate);
+      if (watchOnline != null) candidate = watchOnline;
+      final pixeldrain = _normalizePixeldrainUri(candidate);
+      if (pixeldrain != null) candidate = pixeldrain;
+
+      if (_isApprovedResolverMedia(candidate)) candidates.add(candidate);
+    }
+
+    final seen = <String>{};
+    return candidates
+        .where((uri) => seen.add(uri.toString()))
+        .take(6)
+        .toList(growable: false);
   }
 
   static ProviderEmbedSource _directSource({
@@ -459,14 +612,24 @@ class AuthorizedProviderService {
       for (final anchor in item.querySelectorAll('a[href]')) {
         final rawHref = anchor.attributes['href'];
         if (rawHref == null) continue;
-        final uri = Uri.tryParse(rawHref);
-        if (uri == null || !_isSupportedMediaUrl(uri)) continue;
+        final uri = detailUri.resolve(rawHref);
         final host = uri.host.toLowerCase();
-        if (uri.scheme != 'https' ||
-            uri.userInfo.isNotEmpty ||
-            host == base.host ||
-            host.contains('hubcloud') ||
-            host.contains('hubdrive')) {
+        if (host.contains('hubcloud.') || host.contains('hubdrive.')) {
+          final resolved = await _resolveHubCloud(uri);
+          for (var index = 0; index < resolved.length; index++) {
+            final mediaUri = resolved[index];
+            output.add(_directSource(
+              id: '4khdhub-' + mediaUri.toString().hashCode.toString(),
+              name: '4KHDHub · ' + filename + ' · Mirror ' + (index + 1).toString(),
+              uri: mediaUri,
+              language: _languageFromTitle(filename),
+            ));
+            if (output.length >= 4) return output;
+          }
+          continue;
+        }
+        if (!_isSupportedMediaUrl(uri) || !_isPublicHttpsUri(uri) ||
+            host == base.host) {
           continue;
         }
         output.add(_directSource(
