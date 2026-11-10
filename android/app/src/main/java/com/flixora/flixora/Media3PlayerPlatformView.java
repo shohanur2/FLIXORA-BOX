@@ -27,7 +27,6 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
 import androidx.media3.ui.AspectRatioFrameLayout;
 import androidx.media3.ui.PlayerView;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -36,8 +35,6 @@ import io.flutter.plugin.common.EventChannel;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.platform.PlatformView;
-import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderManager;
-import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.DecoderMode;
 import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory;
 
 @UnstableApi
@@ -46,7 +43,6 @@ final class Media3PlayerPlatformView implements PlatformView,
 
     private final PlayerView playerView;
     private final ExoPlayer player;
-    private final DecoderManager decoderManager;
     private final DefaultHttpDataSource.Factory httpDataSourceFactory;
     private final MethodChannel methodChannel;
     private final EventChannel eventChannel;
@@ -83,10 +79,9 @@ final class Media3PlayerPlatformView implements PlatformView,
         applyRequestHeaders(creationParams.get("headers"));
 
         DefaultTrackSelector trackSelector = new DefaultTrackSelector(context);
-        decoderManager = new DecoderManager(DecoderMode.AUTO, DecoderMode.AUTO);
-
-        NextRenderersFactory renderersFactory =
-                new NextRenderersFactory(context).setDecoderManager(decoderManager);
+        NextRenderersFactory renderersFactory = new NextRenderersFactory(context)
+                .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                .setEnableDecoderFallback(true);
 
         DefaultDataSource.Factory dataSourceFactory =
                 new DefaultDataSource.Factory(context, httpDataSourceFactory);
@@ -205,14 +200,6 @@ final class Media3PlayerPlatformView implements PlatformView,
                             : AspectRatioFrameLayout.RESIZE_MODE_FIT);
                     result.success(null);
                     break;
-                case "setVideoDecoder":
-                    decoderManager.selectVideoDecoder(parseDecoderMode(call.argument("mode")));
-                    result.success(null);
-                    break;
-                case "setAudioDecoder":
-                    decoderManager.selectAudioDecoder(parseDecoderMode(call.argument("mode")));
-                    result.success(null);
-                    break;
                 case "setMedia":
                     String url = stringValue(call.argument("url"));
                     if (url.isEmpty()) {
@@ -282,12 +269,6 @@ final class Media3PlayerPlatformView implements PlatformView,
         httpDataSourceFactory.setDefaultRequestProperties(headers);
     }
 
-    private DecoderMode parseDecoderMode(Object value) {
-        String mode = stringValue(value).toUpperCase();
-        if (mode.isEmpty()) mode = "AUTO";
-        return DecoderMode.valueOf(mode);
-    }
-
     private Map<String, Object> createState() {
         Map<String, Object> state = new HashMap<>();
         long duration = player.getDuration();
@@ -301,10 +282,10 @@ final class Media3PlayerPlatformView implements PlatformView,
         state.put("playbackState", player.getPlaybackState());
         state.put("videoDecoderMode", decoderManager.getVideoMode().name());
         state.put("audioDecoderMode", decoderManager.getAudioMode().name());
-        DecoderMode activeVideo = decoderManager.getActiveVideoMode();
-        DecoderMode activeAudio = decoderManager.getActiveAudioMode();
-        state.put("activeVideoDecoderMode", activeVideo == null ? "" : activeVideo.name());
-        state.put("activeAudioDecoderMode", activeAudio == null ? "" : activeAudio.name());
+        state.put("videoDecoderMode", "AUTO");
+        state.put("audioDecoderMode", "AUTO");
+        state.put("activeVideoDecoderMode", "");
+        state.put("activeAudioDecoderMode", "");
         state.put("audioTracks", describeTracks(C.TRACK_TYPE_AUDIO));
         state.put("textTracks", describeTracks(C.TRACK_TYPE_TEXT));
         return state;
@@ -381,7 +362,6 @@ final class Media3PlayerPlatformView implements PlatformView,
         methodChannel.setMethodCallHandler(null);
         eventChannel.setStreamHandler(null);
         playerView.setPlayer(null);
-        decoderManager.detach();
         player.release();
     }
 }
