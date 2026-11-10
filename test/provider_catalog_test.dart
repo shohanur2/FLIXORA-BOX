@@ -82,20 +82,52 @@ void main() {
   });
 
   group('ProviderCatalog TV and anime', () {
-    test('builds a VidRift TV route with seasons and episodes', () {
+    test('builds ten TV provider routes and keeps Play4U unavailable without IMDb ID', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1399);
 
-      expect(sources, hasLength(1));
-      expect(sources.single.id, 'vidrift-tv');
-      expect(sources.single.loadInIframe, isTrue);
+      expect(sources, hasLength(10));
+      expect(sources.map((source) => source.id).toList(), [
+        'play4u-tv',
+        'yapgrid-tv',
+        'pvrplay-tv',
+        'cinesrc-tv',
+        'framex-tv',
+        'streamrip-tv',
+        'filmu-tv',
+        'multiembed-tv',
+        'nexstream-tv',
+        'vidrift-tv',
+      ]);
+      expect(sources.first.isAvailable, isFalse);
+      expect(sources.first.unavailableReason, contains('IMDb ID'));
+      expect(sources.last.loadInIframe, isTrue);
       expect(
-        sources.single.url,
+        sources.last.url,
         'https://embed.vidrift.net/embed/tv/1399/1/1?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
       );
-      expect(ProviderCatalog.allowsNavigation(
-        sources.single,
-        Uri.parse(sources.single.url),
-      ), isTrue);
+      for (final source in sources.where((item) => item.isAvailable)) {
+        final uri = Uri.parse(source.url);
+        expect(uri.scheme, 'https', reason: source.id);
+        expect(ProviderCatalog.allowsNavigation(source, uri), isTrue,
+            reason: source.id);
+      }
+    });
+
+    test('builds the Play4U TV series route from IMDb ID and exact episode', () {
+      final sources = ProviderCatalog.forTv(
+        tmdbId: 1399,
+        imdbId: 'tt0903747',
+        seasonNumber: 2,
+        episodeNumber: 5,
+      );
+      final play4u = sources.first;
+
+      expect(play4u.id, 'play4u-tv');
+      expect(play4u.isAvailable, isTrue);
+      expect(
+        play4u.url,
+        'https://play4u.org/series/tt0903747/s-02/ep-05?cont=1',
+      );
     });
 
     test('builds the exact selected TV season and episode route', () {
@@ -114,15 +146,18 @@ void main() {
     test('builds separate AniList Sub and Dub routes with TMDB fallback', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1429, aniListId: 16498);
 
-      expect(sources.map((source) => source.id), [
+      expect(sources.map((source) => source.id).take(3), [
         'vidrift-anime-sub',
         'vidrift-anime-dub',
-        'vidrift-tv-fallback',
+        'play4u-tv',
       ]);
       expect(sources[0].url, contains('/embed/anilist/16498/1'));
       expect(sources[1].url, contains('&dub=1'));
-      expect(sources[2].url, contains('/embed/tv/1429/1/1'));
-      expect(sources.every((source) => source.loadInIframe), isTrue);
+      expect(sources.length, 12);
+      expect(
+        sources.firstWhere((source) => source.id == 'vidrift-tv').url,
+        contains('/embed/tv/1429/1/1'),
+      );
     });
 
     test('uses exact TMDB season and episode route for later anime seasons', () {
@@ -134,8 +169,11 @@ void main() {
         aniListEpisodeNumber: 17,
       );
 
-      expect(sources, hasLength(1));
-      expect(sources.single.url, contains('/embed/tv/1429/2/4?'));
+      expect(sources, hasLength(10));
+      expect(
+        sources.firstWhere((source) => source.id == 'vidrift-tv').url,
+        contains('/embed/tv/1429/2/4?'),
+      );
     });
 
     test('does not create TV providers without a TMDB ID', () {
