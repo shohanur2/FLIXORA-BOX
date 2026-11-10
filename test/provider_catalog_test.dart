@@ -266,10 +266,11 @@ void main() {
       expect(watch?.url,
           'https://videos.example.org/videos/embed/$videoId');
       expect(embed?.url, watch?.url);
+      final source = watch!;
       expect(
         ProviderCatalog.allowsNavigation(
-          watch!,
-          Uri.parse(watch.url),
+          source,
+          Uri.parse(source.url),
         ),
         isTrue,
       );
