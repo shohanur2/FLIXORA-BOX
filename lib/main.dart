@@ -1593,10 +1593,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         bengaliMovies = results[9];
         bengaliTv = results[10];
         flixoraMovies = results[11];
-        bollywoodMovies = _deduplicateMovies([...results[12], ...results[13]]);
-        hollywoodMovies = results[14];
+        bollywoodMovies = _deduplicateMovies([results[12]]);
+        hollywoodMovies = results[13];
         southIndianMovies = _deduplicateMovies([
-          ...results[15], ...results[16], ...results[17], ...results[18],
+          ...results[14], ...results[15], ...results[16], ...results[17],
         ]);
         indianDramaTv = results[18];
         koreanDrama = _deduplicateMovies([
