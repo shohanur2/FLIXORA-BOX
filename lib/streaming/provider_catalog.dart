@@ -239,7 +239,7 @@ class ProviderCatalog {
 
   /// Returns the built-in movie providers. Dailymotion is included only when
   /// the Admin source URL points to a Dailymotion video or playlist.
-  /// Play4U requires the movie's real IMDb title ID; the others use TMDB ID.
+  /// Play4U uses the site's observed /watch/{IMDb_ID} page route.
   static List<ProviderEmbedSource> forMovie({
     required int tmdbId,
     String? imdbId,
@@ -269,7 +269,7 @@ class ProviderCatalog {
         id: 'play4u',
         name: 'STREAM 1 · Play4U',
         url: hasImdbId
-            ? 'https://play4u.org/watch/$cleanImdbId?embed=1'
+            ? 'https://play4u.org/watch/$cleanImdbId'
             : '',
         allowedHosts: const <String>{'play4u.org'},
         unavailableReason:
@@ -383,8 +383,7 @@ class ProviderCatalog {
             ? 'https://play4u.org/series/$cleanImdbId/s-' +
                 season.toString().padLeft(2, '0') +
                 '/ep-' +
-                episode.toString().padLeft(2, '0') +
-                '?cont=1'
+                episode.toString().padLeft(2, '0')
             : '',
         allowedHosts: const <String>{'play4u.org'},
         unavailableReason:
