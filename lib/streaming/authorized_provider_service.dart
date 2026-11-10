@@ -536,9 +536,9 @@ class AuthorizedProviderService {
 
     final uri = Uri.tryParse(link.trim());
     if (uri == null ||
-        uri.host.toLowerCase() != 'new.circleftp.net' ||
+        uri.host.toLowerCase() != base.host.toLowerCase() ||
         uri.userInfo.isNotEmpty ||
-        uri.scheme != 'http' ||
+        uri.scheme != base.scheme ||
         !_isSupportedMediaUrl(uri)) {
       return const <ProviderEmbedSource>[];
     }
