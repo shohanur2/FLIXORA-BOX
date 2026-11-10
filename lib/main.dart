@@ -5326,6 +5326,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     final legacyUrl = widget.movie.videoUrl.trim();
+    // Dailymotion share links are provider pages, not direct media files.
+    // Route them through the dedicated Player-ID embed source instead.
+    if (ProviderCatalog.fromDailymotionUrl(legacyUrl) != null) return '';
     final legacyUri = Uri.tryParse(legacyUrl);
     if (legacyUri != null &&
         (legacyUri.scheme == 'http' || legacyUri.scheme == 'https') &&
@@ -5351,7 +5354,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _playerIsOnline = widget.isOnline;
     _providerSources = widget.movie.mediaType == 'tv'
         ? ProviderCatalog.forTv(tmdbId: widget.movie.tmdbId)
-        : ProviderCatalog.forMovie(tmdbId: widget.movie.tmdbId);
+        : ProviderCatalog.forMovie(
+            tmdbId: widget.movie.tmdbId,
+            dailymotionUrl: widget.movie.videoUrl,
+          );
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player();
     _videoController = VideoController(_player);
@@ -5429,6 +5435,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             _providerSources = ProviderCatalog.forMovie(
               tmdbId: id,
               imdbId: imdbId,
+              dailymotionUrl: widget.movie.videoUrl,
             );
           });
         }
@@ -5787,11 +5794,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _movieDetailsFuture;
       if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
-      // Match the reference project's Play4U-first policy. If this movie has no
-    // IMDb ID, select the first usable TMDB-based provider instead.
-    final preferred = _providerSources.where(
-      (source) => source.id == 'play4u' && source.isAvailable,
-    );
+      // An Admin-supplied Dailymotion link takes priority for that title.
+      // Otherwise preserve the existing Play4U-first provider order.
+      final hasDailymotionLink =
+          ProviderCatalog.fromDailymotionUrl(widget.movie.videoUrl) != null;
+      final preferredId = hasDailymotionLink ? 'dailymotion' : 'play4u';
+      final preferred = _providerSources.where(
+        (source) => source.id == preferredId && source.isAvailable,
+      );
     final fallback = preferred.isNotEmpty
         ? preferred.first
         : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
@@ -5928,6 +5938,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             );
           }).toList(),
         ),
+        if (_providerSources.any((source) =>
+            source.id == 'dailymotion' && !source.isAvailable)) ...[
+          const SizedBox(height: 7),
+          const Text(
+            'Dailymotion needs a Player ID. Add DAILYMOTION_PLAYER_ID in GitHub Actions secrets to enable playback.',
+            style: TextStyle(color: Color(0xFFFFC76A), fontSize: 11),
+          ),
+        ],
         if (_selectedProviderSource != null) ...[
           const SizedBox(height: 7),
           Text(
