@@ -48,11 +48,11 @@ void main() {
       expect(movie.canAttemptPlayback, isFalse);
     });
 
-    test('TV titles with a TMDB ID can use the TV provider fallback', () {
-      final movie = buildMovie(mediaType: 'tv');
+    test('TV shows, web series, dramas and anime can use the TV route', () {
+      final title = buildMovie(mediaType: 'tv');
 
-      expect(movie.hasPlayableVideoUrl, isFalse);
-      expect(movie.canAttemptPlayback, isTrue);
+      expect(title.hasPlayableVideoUrl, isFalse);
+      expect(title.canAttemptPlayback, isTrue);
     });
   });
 }
