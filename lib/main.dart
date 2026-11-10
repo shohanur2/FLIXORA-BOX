@@ -22,6 +22,7 @@ import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/episode_number_mapper.dart';
 import 'streaming/provider_catalog.dart';
+import 'streaming/authorized_provider_service.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/media3_player_view.dart';
@@ -5312,6 +5313,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String? _tvEpisodeError;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
+  int _providerDiscoveryToken = 0;
 
   String? _errorMessage;
 
@@ -5483,9 +5485,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               tmdbId: id,
               imdbId: imdbId,
               dailymotionUrl: widget.movie.videoUrl,
-            adminVideoUrl: widget.movie.videoUrl,
+              adminVideoUrl: widget.movie.videoUrl,
             );
           });
+          await _appendAuthorizedProviderSources(
+            isTv: false,
+            season: 1,
+            episode: 1,
+          );
         }
       }
       return details;
@@ -5504,16 +5511,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         episodeNumber;
   }
 
-  void _refreshTvProviderSources({bool selectProvider = false}) {
+  Future<void> _refreshTvProviderSources({bool selectProvider = false}) async {
     final id = widget.movie.tmdbId;
     if (widget.movie.mediaType != 'tv') return;
+    final season = _selectedSeasonNumber;
+    final episode = _selectedEpisodeNumber;
     final sources = ProviderCatalog.forTv(
       tmdbId: id,
       imdbId: _tvImdbId,
       aniListId: _aniListId,
-      seasonNumber: _selectedSeasonNumber,
-      episodeNumber: _selectedEpisodeNumber,
-      aniListEpisodeNumber: _aniListEpisodeNumber(_selectedEpisodeNumber),
+      seasonNumber: season,
+      episodeNumber: episode,
+      aniListEpisodeNumber: _aniListEpisodeNumber(episode),
       adminVideoUrl: widget.movie.videoUrl,
     );
     if (mounted && !_isDisposed) {
@@ -5524,13 +5533,62 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
       });
     }
-    if (selectProvider && sources.isNotEmpty) {
-      final firstAvailable = sources.firstWhere(
+    await _appendAuthorizedProviderSources(
+      isTv: true,
+      season: season,
+      episode: episode,
+    );
+    if (selectProvider && mounted && !_isDisposed && _providerSources.isNotEmpty) {
+      final firstAvailable = _providerSources.firstWhere(
         (source) => source.isAvailable,
-        orElse: () => sources.first,
+        orElse: () => _providerSources.first,
       );
       unawaited(_selectProviderSource(firstAvailable));
     }
+  }
+
+  Future<void> _appendAuthorizedProviderSources({
+    required bool isTv,
+    required int season,
+    required int episode,
+  }) async {
+    final requestToken = ++_providerDiscoveryToken;
+    final titleId = widget.movie.tmdbId;
+    final found = await AuthorizedProviderService.discover(
+      title: widget.movie.title,
+      year: widget.movie.year,
+      isTv: isTv,
+      season: season,
+      episode: episode,
+    );
+    if (!mounted ||
+        _isDisposed ||
+        requestToken != _providerDiscoveryToken ||
+        titleId != widget.movie.tmdbId ||
+        (isTv &&
+            (season != _selectedSeasonNumber ||
+                episode != _selectedEpisodeNumber))) {
+      return;
+    }
+
+    final existingUrls = _providerSources.map((source) => source.url).toSet();
+    final additions = found
+        .where((source) =>
+            source.isAvailable && !existingUrls.contains(source.url))
+        .toList(growable: false);
+    if (additions.isEmpty) return;
+
+    final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
+    var insertAt = 0;
+    if (adminSource != null) {
+      final adminIndex = _providerSources.indexWhere(
+        (source) => source.id == adminSource.id,
+      );
+      if (adminIndex >= 0) insertAt = adminIndex + 1;
+    }
+    setState(() {
+      _providerSources.insertAll(insertAt, additions);
+    });
   }
 
   Future<void> _loadTvSeasonEpisodes(
@@ -5574,13 +5632,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       _loadingTvEpisodes = false;
       _tvEpisodeError = errorMessage;
     });
-    _refreshTvProviderSources(selectProvider: selectProvider);
+    await _refreshTvProviderSources(selectProvider: selectProvider);
   }
 
   void _selectTvEpisode(int episodeNumber) {
     if (episodeNumber <= 0 || episodeNumber == _selectedEpisodeNumber) return;
     setState(() => _selectedEpisodeNumber = episodeNumber);
-    _refreshTvProviderSources(selectProvider: true);
+    unawaited(_refreshTvProviderSources(selectProvider: true));
   }
 
   Widget _tvEpisodeSelector() {
@@ -5830,6 +5888,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       _showControls = false;
       _initialized = false;
     });
+
+    if (source.isDirectMedia) {
+      _isOpening = true;
+      try {
+        await _player.open(Media(source.url));
+        if (!mounted || _isDisposed) return;
+        _currentVideoUrl = source.url;
+        await _restoreResumePosition();
+        if (!mounted || _isDisposed) return;
+        setState(() {
+          _initialized = true;
+          _errorMessage = null;
+        });
+        _startHideTimer();
+      } catch (error) {
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _initialized = false;
+            _errorMessage = 'Could not open ' + source.name + '. Trying another stream...';
+          });
+        }
+        _tryNextProvider(source);
+      } finally {
+        _isOpening = false;
+      }
+    }
   }
 
   Future<void> _selectDefaultProviderIfNeeded({bool force = false}) async {
@@ -6660,6 +6744,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _errorMessage = value);
+      final activeProvider = _selectedProviderSource;
+      if (value.trim().isNotEmpty &&
+          !_isOpening &&
+          activeProvider != null &&
+          activeProvider.isDirectMedia &&
+          _playerIsOnline) {
+        _tryNextProvider(activeProvider);
+        return;
+      }
       if (value.trim().isNotEmpty &&
           !_isOpening &&
           _selectedProviderSource == null &&
@@ -8329,7 +8422,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     final providerSource = _selectedProviderSource;
-    if (providerSource != null) {
+    if (providerSource != null && !providerSource.isDirectMedia) {
       return ProviderEmbedPlayer(
         key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
         source: providerSource,
@@ -8339,7 +8432,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
     }
 
-    if (widget.localFilePath == null && !_validVideoUrl) {
+    if (widget.localFilePath == null &&
+        !_validVideoUrl &&
+        !(providerSource?.isDirectMedia ?? false)) {
       return Container(
         color: Colors.black,
         padding: const EdgeInsets.all(22),
