@@ -1048,7 +1048,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _slide = 0;
   int _tab = 0;
-  String _ottCategory = 'All Series';
   String _ottRegion = 'BD';
   String _ottMediaFilter = 'All';
   List<OttProvider> _ottProviders = [];
@@ -3324,84 +3323,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
           ),
         ],
-      ],
-    );
-  }
-
-  List<Movie> _ottMovies() {
-    switch (_ottCategory) {
-      case 'Trending':
-        return _deduplicateMovies([...trendingTv, ...popularTv]);
-      case 'Anime':
-        return _deduplicateMovies(anime);
-      case 'Asian Drama':
-        return _deduplicateMovies(koreanDrama);
-      case 'Bengali':
-        return _deduplicateMovies(bengaliTv);
-      case 'Top Rated':
-        return _deduplicateMovies(topRatedTv);
-      case 'All Series':
-      default:
-        return _deduplicateMovies([
-          ...trendingTv, ...popularTv, ...topRatedTv,
-          ...anime, ...koreanDrama, ...bengaliTv,
-        ]);
-    }
-  }
-
-  Widget _ottContent() {
-    const categories = [
-      'All Series', 'Trending', 'Top Rated', 'Anime', 'Asian Drama', 'Bengali',
-    ];
-    final movies = _ottMovies();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 5),
-          child: Text(
-            'Explore series, anime & originals',
-            style: TextStyle(color: ink60, fontSize: 13),
-          ),
-        ),
-        SizedBox(
-          height: 48,
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-            scrollDirection: Axis.horizontal,
-            itemCount: categories.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final category = categories[index];
-              final selected = category == _ottCategory;
-              return ChoiceChip(
-                label: Text(category),
-                selected: selected,
-                onSelected: (_) => setState(() => _ottCategory = category),
-                selectedColor: gold,
-                backgroundColor: panel,
-                side: BorderSide(
-                  color: selected ? gold : ink24,
-                ),
-                labelStyle: TextStyle(
-                  color: selected ? white : ink70,
-                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                ),
-              );
-            },
-          ),
-        ),
-        Expanded(
-          child: movies.isEmpty
-              ? const Center(
-                  child: Text(
-                    'Series will appear here when the catalogue loads.',
-                    style: TextStyle(color: ink54),
-                    textAlign: TextAlign.center,
-                  ),
-                )
-              : _collectionContent(_ottCategory, movies),
-        ),
       ],
     );
   }
