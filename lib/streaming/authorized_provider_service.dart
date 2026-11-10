@@ -182,12 +182,15 @@ class AuthorizedProviderService {
 
     Map? match;
     for (final item in items.whereType<Map>()) {
-      if (_matchesTitle(
-        (item['title'] ?? '').toString(),
-        title,
-        candidateYear: _yearFrom(item['year']),
-        requestedYear: year,
-      )) {
+      final itemType = (item['content'] ?? '').toString().toLowerCase();
+      final itemIsMovie = itemType == 'movie' || itemType == 'movies';
+      if ((isTv == itemIsMovie) &&
+          _matchesTitle(
+            (item['title'] ?? '').toString(),
+            title,
+            candidateYear: _yearFrom(item['year']),
+            requestedYear: year,
+          )) {
         match = item;
         break;
       }
@@ -323,7 +326,10 @@ class AuthorizedProviderService {
     required int season,
     required int episode,
   }) async {
-    final base = Uri.parse(_circleFtpApiBaseUrl);
+    final rawBase = _circleFtpApiBaseUrl.endsWith('/')
+        ? _circleFtpApiBaseUrl
+        : _circleFtpApiBaseUrl + '/';
+    final base = Uri.parse(rawBase);
     final searchUri = base.resolve('posts').replace(
       queryParameters: <String, String>{
         'searchTerm': title,
@@ -337,12 +343,15 @@ class AuthorizedProviderService {
 
     Map? match;
     for (final item in (searchJson['posts'] as List).whereType<Map>()) {
-      if (_matchesTitle(
-        (item['title'] ?? item['name'] ?? '').toString(),
-        title,
-        candidateYear: _yearFrom(item['year']),
-        requestedYear: year,
-      )) {
+      final itemType = (item['type'] ?? '').toString().toLowerCase();
+      final itemIsTv = itemType == 'series';
+      if ((isTv == itemIsTv) &&
+          _matchesTitle(
+            (item['title'] ?? item['name'] ?? '').toString(),
+            title,
+            candidateYear: _yearFrom(item['year']),
+            requestedYear: year,
+          )) {
         match = item;
         break;
       }
@@ -414,12 +423,15 @@ class AuthorizedProviderService {
       final cardTitle =
           card.querySelector('.movie-card-title')?.text.trim() ?? '';
       final meta = card.querySelector('.movie-card-meta')?.text ?? '';
-      if (href == null || !_matchesTitle(
-        cardTitle,
-        title,
-        candidateYear: _yearFrom(meta),
-        requestedYear: year,
-      )) {
+      final cardIsTv = href?.contains('-series-') ?? false;
+      if (href == null ||
+          cardIsTv != isTv ||
+          !_matchesTitle(
+            cardTitle,
+            title,
+            candidateYear: _yearFrom(meta),
+            requestedYear: year,
+          )) {
         continue;
       }
       final candidate = base.resolve(href);
