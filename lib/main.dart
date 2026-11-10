@@ -5530,6 +5530,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _tvEpisodeSelector() {
     if (widget.movie.mediaType != 'tv') return const SizedBox.shrink();
+
     final seasonNumbers = _tvSeasons
         .map((season) => _toInt(season['season_number']))
         .where((number) => number > 0)
@@ -5537,19 +5538,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         .toList()
       ..sort();
     if (seasonNumbers.isEmpty) seasonNumbers.add(1);
+
     final episodeNumbers = _tvEpisodes
         .map((episode) => _toInt(episode['episode_number']))
         .where((number) => number > 0)
-        .toList();
-    if (episodeNumbers.isEmpty) episodeNumbers.add(1);
+        .toSet()
+        .toList()
+      ..sort();
+
     final safeSeason = seasonNumbers.contains(_selectedSeasonNumber)
         ? _selectedSeasonNumber
         : seasonNumbers.first;
     final safeEpisode = episodeNumbers.contains(_selectedEpisodeNumber)
         ? _selectedEpisodeNumber
-        : episodeNumbers.first;
+        : (episodeNumbers.isNotEmpty ? episodeNumbers.first : 1);
+    final episodeLabel = safeEpisode.toString().padLeft(2, '0');
+
+    final selectedEpisode = _tvEpisodes.cast<Map<String, dynamic>?>().firstWhere(
+      (item) => _toInt(item?['episode_number']) == safeEpisode,
+      orElse: () => null,
+    );
+    final selectedEpisodeName =
+        (selectedEpisode?['name'] ?? '').toString().trim();
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 13),
+      margin: const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: playerPanel,
@@ -5559,115 +5572,176 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.video_library_rounded, color: playerGoldLight, size: 17),
-              SizedBox(width: 7),
-              Text(
-                'Choose season & episode',
-                style: TextStyle(color: playerWhite, fontWeight: FontWeight.w800, fontSize: 13),
+              const Icon(
+                Icons.video_library_rounded,
+                color: playerGoldLight,
+                size: 18,
               ),
+              const SizedBox(width: 7),
+              const Expanded(
+                child: Text(
+                  'Season & Episodes',
+                  style: TextStyle(
+                    color: playerWhite,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              if (_loadingTvEpisodes)
+                const SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: playerGold,
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<int>(
-                  initialValue: safeSeason,
-                  dropdownColor: playerPanel,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Season',
-                    labelStyle: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-                    filled: true,
-                    fillColor: playerBg,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                    border: OutlineInputBorder(),
-                  ),
-                  style: const TextStyle(color: playerWhite, fontSize: 12),
-                  items: seasonNumbers.map((number) => DropdownMenuItem<int>(
+          DropdownButtonFormField<int>(
+            key: ValueKey<int>(safeSeason),
+            initialValue: safeSeason,
+            dropdownColor: playerPanel,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Season',
+              labelStyle: TextStyle(
+                color: Color(0x99FFFFFF),
+                fontSize: 11,
+              ),
+              filled: true,
+              fillColor: playerBg,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 9,
+              ),
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(color: playerWhite, fontSize: 13),
+            items: seasonNumbers
+                .map(
+                  (number) => DropdownMenuItem<int>(
                     value: number,
                     child: Text('Season $number'),
-                  )).toList(),
-                  onChanged: _loadingTvEpisodes
-                      ? null
-                      : (number) {
-                          if (number != null && number != _selectedSeasonNumber) {
-                            _loadTvSeasonEpisodes(number, selectProvider: true);
-                          }
-                        },
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: DropdownButtonFormField<int>(
-                  initialValue: safeEpisode,
-                  dropdownColor: playerPanel,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Episode',
-                    labelStyle: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-                    filled: true,
-                    fillColor: playerBg,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                    border: OutlineInputBorder(),
                   ),
-                  style: const TextStyle(color: playerWhite, fontSize: 12),
-                  items: episodeNumbers.map((number) {
-                    final episode = _tvEpisodes.cast<Map<String, dynamic>?>().firstWhere(
-                      (item) => _toInt(item?['episode_number']) == number,
-                      orElse: () => null,
-                    );
-                    final name = (episode?['name'] ?? '').toString().trim();
-                    return DropdownMenuItem<int>(
-                      value: number,
-                      child: Text(
-                        name.isEmpty ? 'Episode $number' : '$number. $name',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                )
+                .toList(),
+            onChanged: _loadingTvEpisodes
+                ? null
+                : (number) {
+                    if (number != null &&
+                        number != _selectedSeasonNumber) {
+                      _loadTvSeasonEpisodes(
+                        number,
+                        selectProvider: true,
+                      );
+                    }
+                  },
+          ),
+          const SizedBox(height: 13),
+          const Text(
+            'Episodes',
+            style: TextStyle(
+              color: playerWhite,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (episodeNumbers.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: playerGold.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: playerGold.withValues(alpha: 0.8),
+                      ),
+                    ),
+                    child: const Text(
+                      'All',
+                      style: TextStyle(
+                        color: playerGoldLight,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  ...episodeNumbers.map((number) {
+                    final selected = number == safeEpisode;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 7),
+                      child: ChoiceChip(
+                        label: Text(number.toString().padLeft(2, '0')),
+                        selected: selected,
+                        showCheckmark: false,
+                        onSelected: _loadingTvEpisodes
+                            ? null
+                            : (_) => _selectTvEpisode(number),
+                        selectedColor: playerGold.withValues(alpha: 0.22),
+                        backgroundColor: playerBg,
+                        side: BorderSide(
+                          color: selected
+                              ? playerGold
+                              : const Color(0x3DFFFFFF),
+                        ),
+                        labelStyle: TextStyle(
+                          color: selected
+                              ? playerGoldLight
+                              : playerWhite,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize:
+                            MaterialTapTargetSize.shrinkWrap,
                       ),
                     );
-                  }).toList(),
-                  onChanged: _loadingTvEpisodes ? null : (number) {
-                    if (number != null) _selectTvEpisode(number);
-                  },
-                ),
+                  }),
+                ],
               ),
-            ],
-          ),
-          if (_loadingTvEpisodes) ...[
-            const SizedBox(height: 9),
-            const LinearProgressIndicator(
-              minHeight: 2,
-              color: playerGold,
-              backgroundColor: Colors.white12,
+            )
+          else if (!_loadingTvEpisodes)
+            const Text(
+              'No episodes available for this season.',
+              style: TextStyle(
+                color: Color(0x99FFFFFF),
+                fontSize: 11,
+              ),
             ),
-          ],
           if (_tvEpisodeError != null) ...[
-            const SizedBox(height: 7),
+            const SizedBox(height: 8),
             Text(
               _tvEpisodeError!,
-              style: const TextStyle(color: Color(0xFFFFC56E), fontSize: 10),
+              style: const TextStyle(
+                color: Color(0xFFFFC56E),
+                fontSize: 10,
+              ),
             ),
           ],
-          if (_tvEpisodes.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Builder(builder: (context) {
-              final episode = _tvEpisodes.cast<Map<String, dynamic>?>().firstWhere(
-                (item) => _toInt(item?['episode_number']) == _selectedEpisodeNumber,
-                orElse: () => null,
-              );
-              final overview = (episode?['overview'] ?? '').toString().trim();
-              return Text(
-                overview.isEmpty
-                    ? 'Selected: S$_selectedSeasonNumber · E$_selectedEpisodeNumber'
-                    : overview,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10, height: 1.35),
-              );
-            }),
+          if (selectedEpisodeName.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            Text(
+              'S$safeSeason · E$episodeLabel · $selectedEpisodeName',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0x99FFFFFF),
+                fontSize: 10,
+              ),
+            ),
           ],
         ],
       ),
@@ -8282,67 +8356,142 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerResources() {
-    if (_selectedProviderSource != null) {
-      return ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.language, color: playerGold),
-        title: const Text(
-          'Audio language',
-          style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text(
-          'Original: ${_originalAudioLanguageLabel()} · Open the video settings for provider audio tracks',
-          style: const TextStyle(color: Color(0xFFD0D5DE)),
-        ),
-        trailing: const Icon(Icons.chevron_right, color: playerGoldLight),
-        onTap: _showProviderAudioHelp,
+    final isProviderStream = _selectedProviderSource != null;
+    final providerLanguages = widget.movie.audioLanguages
+        .map((language) => language.trim())
+        .where((language) => language.isNotEmpty)
+        .toSet()
+        .toList();
+    if (providerLanguages.isEmpty) {
+      final originalLabel = _originalAudioLanguageLabel();
+      providerLanguages.add(
+        originalLabel == 'Not listed' ? 'Original / Auto' : originalLabel,
       );
     }
-    if (_tracks.audio.isEmpty) {
-      return const ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(Icons.language, color: playerGold),
-        title: Text('Resources',
-            style: TextStyle(color: playerWhite, fontWeight: FontWeight.bold)),
-        subtitle: Text('No alternate audio languages are available.',
-            style: TextStyle(color: Color(0x99FFFFFF))),
-      );
-    }
-    final selectedIndex = _selectedAudioTrackIndex
-        .clamp(0, _tracks.audio.length - 1).toInt();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
+
+    final selectedIndex = _tracks.audio.isEmpty
+        ? 0
+        : _selectedAudioTrackIndex.clamp(0, _tracks.audio.length - 1).toInt();
+    final originalLanguage = _originalAudioLanguageLabel().toLowerCase();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: playerPanel,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0x3DFFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Resources', style: TextStyle(
-                    color: playerWhite, fontSize: 18, fontWeight: FontWeight.bold)),
-                SizedBox(height: 4),
-                Text('Select audio language', style: TextStyle(
-                    color: Color(0x99FFFFFF), fontSize: 12)),
-              ],
-            ),
-          ),          DropdownButton<int>(
-            value: selectedIndex,
-            dropdownColor: playerPanel,
-            style: const TextStyle(color: playerWhite),
-            underline: Container(height: 1, color: playerGold),
-            items: _tracks.audio.asMap().entries.map((entry) =>
-              DropdownMenuItem<int>(
-                value: entry.key,
-                child: Text(_audioTrackLabel(entry.value, entry.key)),
+          const Row(
+            children: [
+              Icon(
+                Icons.language_rounded,
+                color: playerGoldLight,
+                size: 18,
               ),
-            ).toList(),
-            onChanged: (index) {
-              if (index == null || index < 0 || index >= _tracks.audio.length) {
-                return;
-              }
-              _selectAudioTrack(_tracks.audio[index], closeSheet: false);
-            },
+              SizedBox(width: 7),
+              Text(
+                'Resources',
+                style: TextStyle(
+                  color: playerWhite,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
           ),
+          const SizedBox(height: 4),
+          Text(
+            isProviderStream
+                ? 'Available audio languages'
+                : 'Select audio language',
+            style: const TextStyle(
+              color: Color(0x99FFFFFF),
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (isProviderStream)
+            Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: providerLanguages.map((language) {
+                final selected =
+                    language.toLowerCase() == originalLanguage;
+                return ChoiceChip(
+                  label: Text(language),
+                  selected: selected,
+                  showCheckmark: false,
+                  onSelected: (_) => _showProviderAudioHelp(),
+                  selectedColor: playerGold.withValues(alpha: 0.22),
+                  backgroundColor: playerBg,
+                  side: BorderSide(
+                    color: selected
+                        ? playerGold
+                        : const Color(0x3DFFFFFF),
+                  ),
+                  labelStyle: TextStyle(
+                    color: selected ? playerGoldLight : playerWhite,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                );
+              }).toList(),
+            )
+          else if (_tracks.audio.isNotEmpty)
+            Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: _tracks.audio.asMap().entries.map((entry) {
+                final selected = entry.key == selectedIndex;
+                return ChoiceChip(
+                  label: Text(_audioTrackLabel(entry.value, entry.key)),
+                  selected: selected,
+                  showCheckmark: false,
+                  onSelected: (_) => _selectAudioTrack(
+                    entry.value,
+                    closeSheet: false,
+                  ),
+                  selectedColor: playerGold.withValues(alpha: 0.22),
+                  backgroundColor: playerBg,
+                  side: BorderSide(
+                    color: selected
+                        ? playerGold
+                        : const Color(0x3DFFFFFF),
+                  ),
+                  labelStyle: TextStyle(
+                    color: selected ? playerGoldLight : playerWhite,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                );
+              }).toList(),
+            )
+          else
+            const Text(
+              'No alternate audio languages are available.',
+              style: TextStyle(
+                color: Color(0x99FFFFFF),
+                fontSize: 11,
+              ),
+            ),
+          if (isProviderStream) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'For embedded streams, change the audio track in the video player settings.',
+              style: TextStyle(
+                color: Color(0x80FFFFFF),
+                fontSize: 10,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -8743,7 +8892,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     return CustomScrollView(
       slivers: [
-        SliverToBoxAdapter(child: _tvEpisodeSelector()),
         SliverToBoxAdapter(
           child: AspectRatio(
             aspectRatio: 16 / 9,
@@ -8809,7 +8957,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
                 const SizedBox(height: 18),
                 _playerResources(),
-                const SizedBox(height: 12),
+                _tvEpisodeSelector(),
+                const SizedBox(height: 16),
                 const Text(
                   'For You',
                   style: TextStyle(
