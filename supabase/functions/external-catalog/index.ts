@@ -58,7 +58,7 @@ Deno.serve(async (request: Request) => {
       url.searchParams.set("t", title);
       url.searchParams.set("type", mediaType === "tv" ? "series" : "movie");
       url.searchParams.set("plot", "short");
-      if (/^\\d{4}$/.test(year)) url.searchParams.set("y", year);
+      if (/^\d{4}$/.test(year)) url.searchParams.set("y", year);
       const result = await getJson(url);
       if (!result || result.Response !== "True") return null;
       const fields = [
