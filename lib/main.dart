@@ -5265,6 +5265,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   late final Media3PlayerController _media3Controller;
   bool _usingMedia3Fallback = false;
   String? _media3FallbackUrl;
+  int _media3StartPositionMs = 0;
   String? _media3Error;
   Map<String, dynamic> _media3State = <String, dynamic>{};
   int _lastMedia3UiPositionMs = -1000;
@@ -6189,14 +6190,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
     final source = _media3SourceUrl();
     if (source == null || source.isEmpty) return false;
+    final resumePosition = _position;
 
-    await _saveResumePosition(_position);
+    await _saveResumePosition(resumePosition);
     try {
       await _player.pause();
       await _player.stop();
     } catch (_) {}
 
     if (!mounted || _isDisposed) return false;
+    _position = resumePosition;
+    _media3StartPositionMs = resumePosition.inMilliseconds;
     setState(() {
       _usingMedia3Fallback = true;
       _media3FallbackUrl = source;
@@ -8319,7 +8323,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             child: Media3PlayerView(
               key: ValueKey<String>('media3-' + _media3FallbackUrl!),
               url: _media3FallbackUrl!,
-              startPositionMs: _position.inMilliseconds,
+              startPositionMs: _media3StartPositionMs,
               controller: _media3Controller,
             ),
           ),
