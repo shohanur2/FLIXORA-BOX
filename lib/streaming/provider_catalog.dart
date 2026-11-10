@@ -142,6 +142,101 @@ class ProviderCatalog {
     );
   }
 
+  /// Converts supported Admin video-page URLs into official embeddable players.
+  /// Direct MP4/HLS links are intentionally left to media_kit.
+  static ProviderEmbedSource? fromAdminUrl(
+    String rawUrl, {
+    String? dailymotionPlayerId,
+  }) {
+    final uri = Uri.tryParse(rawUrl.trim());
+    if (uri == null ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
+      return null;
+    }
+
+    final host = uri.host.toLowerCase();
+    final segments = uri.pathSegments.where((part) => part.isNotEmpty).toList();
+
+    final dailymotion = fromDailymotionUrl(
+      rawUrl,
+      playerId: dailymotionPlayerId,
+    );
+    if (dailymotion != null) return dailymotion;
+
+    final isYouTube = host == 'youtu.be' ||
+        host == 'youtube.com' ||
+        host.endsWith('.youtube.com') ||
+        host == 'youtube-nocookie.com' ||
+        host.endsWith('.youtube-nocookie.com');
+    if (isYouTube) {
+      String? videoId;
+      if (host == 'youtu.be') {
+        if (segments.isNotEmpty) videoId = segments.first;
+      } else if (segments.isNotEmpty && segments.first == 'watch') {
+        videoId = uri.queryParameters['v'];
+      } else if (segments.length >= 2 &&
+          const <String>{'embed', 'shorts', 'live', 'v'}.contains(segments.first)) {
+        videoId = segments[1];
+      }
+      if (videoId != null &&
+          RegExp(r'^[A-Za-z0-9_-]{6,20}$').hasMatch(videoId)) {
+        return ProviderEmbedSource(
+          id: 'youtube',
+          name: 'YouTube',
+          url: Uri.https(
+            'www.youtube-nocookie.com',
+            '/embed/$videoId',
+            const <String, String>{'playsinline': '1'},
+          ).toString(),
+          allowedHosts: const <String>{
+            'youtube.com',
+            'youtube-nocookie.com',
+            'youtu.be',
+          },
+        );
+      }
+      return null;
+    }
+
+    final isVimeo = host == 'vimeo.com' ||
+        host.endsWith('.vimeo.com');
+    if (isVimeo) {
+      final videoId = segments.reversed
+          .firstWhere(
+            (part) => RegExp(r'^\\d{5,12}$').hasMatch(part),
+            orElse: () => '',
+          );
+      if (videoId.isNotEmpty) {
+        return ProviderEmbedSource(
+          id: 'vimeo',
+          name: 'Vimeo',
+          url: 'https://player.vimeo.com/video/$videoId',
+          allowedHosts: const <String>{'vimeo.com'},
+        );
+      }
+      return null;
+    }
+
+    final isArchive = host == 'archive.org' || host.endsWith('.archive.org');
+    if (isArchive &&
+        segments.length >= 2 &&
+        const <String>{'details', 'embed'}.contains(segments.first)) {
+      final identifier = segments[1];
+      if (RegExp(r'^[A-Za-z0-9._-]{2,120}$').hasMatch(identifier)) {
+        return ProviderEmbedSource(
+          id: 'internet-archive',
+          name: 'Internet Archive',
+          url: 'https://archive.org/embed/${Uri.encodeComponent(identifier)}',
+          allowedHosts: const <String>{'archive.org'},
+        );
+      }
+    }
+
+    return null;
+  }
+
   /// Returns the built-in movie providers. Dailymotion is included only when
   /// the Admin source URL points to a Dailymotion video or playlist.
   /// Play4U requires the movie's real IMDb title ID; the others use TMDB ID.
@@ -150,15 +245,16 @@ class ProviderCatalog {
     String? imdbId,
     String? dailymotionUrl,
     String? dailymotionPlayerId,
+    String? adminVideoUrl,
   }) {
-    final dailymotionSource = fromDailymotionUrl(
-      dailymotionUrl ?? '',
-      playerId: dailymotionPlayerId,
+    final adminSource = fromAdminUrl(
+      adminVideoUrl ?? dailymotionUrl ?? '',
+      dailymotionPlayerId: dailymotionPlayerId,
     );
     if (tmdbId <= 0) {
-      return dailymotionSource == null
+      return adminSource == null
           ? const <ProviderEmbedSource>[]
-          : <ProviderEmbedSource>[dailymotionSource];
+          : <ProviderEmbedSource>[adminSource];
     }
 
     final id = tmdbId.toString();
@@ -168,7 +264,7 @@ class ProviderCatalog {
     final nexStreamKey = _dynamicNexStreamDemoKey();
 
     return <ProviderEmbedSource>[
-      if (dailymotionSource != null) dailymotionSource,
+      if (adminSource != null) adminSource,
       ProviderEmbedSource(
         id: 'play4u',
         name: 'STREAM 1 · Play4U',
@@ -249,8 +345,18 @@ class ProviderCatalog {
     int seasonNumber = 1,
     int episodeNumber = 1,
     int? aniListEpisodeNumber,
+    String? adminVideoUrl,
+    String? dailymotionPlayerId,
   }) {
-    if (tmdbId <= 0) return const <ProviderEmbedSource>[];
+    final adminSource = fromAdminUrl(
+      adminVideoUrl ?? '',
+      dailymotionPlayerId: dailymotionPlayerId,
+    );
+    if (tmdbId <= 0) {
+      return adminSource == null
+          ? const <ProviderEmbedSource>[]
+          : <ProviderEmbedSource>[adminSource];
+    }
 
     final season = seasonNumber > 0 ? seasonNumber : 1;
     final episode = episodeNumber > 0 ? episodeNumber : 1;
@@ -268,6 +374,7 @@ class ProviderCatalog {
     // exact TMDB season/episode path instead of guessing an AniList offset.
     if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
+        if (adminSource != null) adminSource,
         ProviderEmbedSource(
           id: 'vidrift-anime-sub',
           name: 'VidRift Anime · Sub',
@@ -293,6 +400,7 @@ class ProviderCatalog {
     }
 
     return <ProviderEmbedSource>[
+      if (adminSource != null) adminSource,
       ProviderEmbedSource(
         id: 'vidrift-tv',
         name: 'VidRift TV · Seasons & Episodes',
