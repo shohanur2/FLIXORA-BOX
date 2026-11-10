@@ -138,7 +138,7 @@ void main() {
       );
 
       expect(
-        sources.single.url,
+        sources.firstWhere((source) => source.id == 'vidrift-tv').url,
         'https://embed.vidrift.net/embed/tv/1399/3/7?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
       );
     });
