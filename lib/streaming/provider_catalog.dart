@@ -243,6 +243,7 @@ class ProviderCatalog {
         final embedUrl = Uri(
           scheme: 'https',
           host: host,
+          port: uri.hasPort ? uri.port : null,
           pathSegments: <String>['videos', 'embed', videoId],
           queryParameters: uri.queryParameters.isEmpty
               ? null
