@@ -1133,6 +1133,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _connectionKnown = false;
   bool _refreshing = false;
   bool _checkingConnection = false;
+  bool _isOpeningTitle = false;
+  String? _openingTitleKey;
 
   String? homeError;
 
@@ -2179,6 +2181,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() => _profileSection = section);
   }
 
+  String _titleOpeningKey(Movie movie) {
+    if (movie.tmdbId > 0) return '${movie.mediaType}:${movie.tmdbId}';
+    return '${movie.mediaType}:${movie.source}:${movie.id}';
+  }
+
+  bool _beginTitleOpening(Movie movie) {
+    if (!mounted || _isOpeningTitle) return false;
+    _isOpeningTitle = true;
+    _openingTitleKey = _titleOpeningKey(movie);
+    setState(() {});
+    return true;
+  }
+
+  void _endTitleOpening() {
+    _isOpeningTitle = false;
+    _openingTitleKey = null;
+    if (mounted) setState(() {});
+  }
+
+  bool _isTitleOpening(Movie movie) =>
+      _isOpeningTitle && _openingTitleKey == _titleOpeningKey(movie);
+
+  Widget _titleOpeningOverlay(Movie movie) {
+    if (!_isTitleOpening(movie)) return const SizedBox.shrink();
+    return const ColoredBox(
+      color: Color(0x99000000),
+      child: Center(
+        child: SizedBox(
+          width: 25,
+          height: 25,
+          child: CircularProgressIndicator(color: gold, strokeWidth: 2.4),
+        ),
+      ),
+    );
+  }
+
   Movie? _cachedFlixoraMatch(Movie movie) {
     if (movie.tmdbId <= 0) return null;
     for (final candidate in [...flixoraMovies, ...searchResults]) {
@@ -2251,123 +2289,100 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openMovie(Movie movie) async {
-    final resolvedMovie = await _resolveMovieForOpening(movie);
-    if (!mounted) return;
+    if (!_beginTitleOpening(movie)) return;
+    try {
+      final resolvedMovie = await _resolveMovieForOpening(movie);
+      if (!mounted) return;
 
-    if (resolvedMovie == null) {
-      _showMessage('This title is currently unavailable.');
-      return;
-    }
+      if (resolvedMovie == null) {
+        _showMessage('This title is currently unavailable.');
+        return;
+      }
 
-    final selectedMovie = resolvedMovie;
-    final isFavourite = _favourites.contains(selectedMovie.id) ||
-        _favourites.contains(movie.id);
-    final isSaved = _saved.contains(selectedMovie.id) ||
-        _saved.contains(movie.id);
+      final selectedMovie = resolvedMovie;
+      final isFavourite = _favourites.contains(selectedMovie.id) ||
+          _favourites.contains(movie.id);
+      final isSaved = _saved.contains(selectedMovie.id) ||
+          _saved.contains(movie.id);
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => MovieDetailsScreen(
-          movie: selectedMovie,
-          isOnline: _online,
-          isFavourite: isFavourite,
-          isSaved: isSaved,
-          onShare: () => Share.share(
-            '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MovieDetailsScreen(
+            movie: selectedMovie,
+            isOnline: _online,
+            isFavourite: isFavourite,
+            isSaved: isSaved,
+            onShare: () => Share.share(
+              '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
+            ),
+            onFavourite: () => _toggleFavourite(selectedMovie),
+            onSave: () => _toggleSaved(selectedMovie),
+            onDownload: () => addDownload(selectedMovie),
+            onWatch: () => _playResolvedMovie(selectedMovie, movie),
           ),
-          onFavourite: () => _toggleFavourite(selectedMovie),
-          onSave: () => _toggleSaved(selectedMovie),
-          onDownload: () => addDownload(selectedMovie),
-          onWatch: () async {
-            _recordWatch(selectedMovie);
-            DownloadTask? downloaded;
-            for (final task in _downloads) {
-              final matchesMovie = task.movieId == selectedMovie.id ||
-                  task.movieId == movie.id ||
-                  (selectedMovie.tmdbId > 0 &&
-                      task.movieId == selectedMovie.tmdbId);
-              if (matchesMovie &&
-                  task.status == 'Completed' &&
-                  task.filePath != null &&
-                  File(task.filePath!).existsSync()) {
-                downloaded = task;
-                break;
-              }
-            }
-            if (downloaded != null) {
-              if (!mounted) return;
-              Navigator.push(context, MaterialPageRoute(
-                builder: (_) => MoviePlayerScreen(
-                  movie: selectedMovie,
-                  localFilePath: downloaded!.filePath,
-                  recommendedMovies: _allMovies(),
-                  onMovieSelected: _openMovie,
-                  onSave: () => _toggleSaved(selectedMovie),
-                  onDownload: () => addDownload(selectedMovie),
-                  onViewDownloads: () {
-                    if (!mounted) return;
-                    _openDownloadsTab();
-                  },
-                  isOnline: _online,
-                ),
-              ));
-              return;
-            }
-            if (!_online || !await InternetService.isOnline()) {
-              if (mounted) {
-                setState(() {
-                  _online = false;
-                  _connectionKnown = true;
-                });
-                _showMessage('Check your internet connection');
-              }
-              return;
-            }
-            if (!mounted) return;
-            Navigator.push(context, MaterialPageRoute(
-              builder: (_) => MoviePlayerScreen(
-                movie: selectedMovie,
-                recommendedMovies: _allMovies(),
-                onMovieSelected: _openMovie,
-                onSave: () => _toggleSaved(selectedMovie),
-                onDownload: () => addDownload(selectedMovie),
-                onViewDownloads: () {
-                  if (!mounted) return;
-                  _openDownloadsTab();
-                },
-                isOnline: _online,
-              ),
-            ));
-          },
         ),
-      ),
-    );
+      );
+    } finally {
+      _endTitleOpening();
+    }
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
-    if (!mounted) return;
-    // Close the current player before opening another one, avoiding stacked
-    // players or overlapping audio when a recommendation is selected.
-    Navigator.of(context).pop();
-    await _playMovie(movie);
+    await _playMovie(movie, closeCurrentPlayer: true);
   }
 
-  Future<void> _playMovie(Movie movie) async {
-    final selectedMovie = await _resolveMovieForOpening(movie);
+  Future<void> _playMovie(
+    Movie movie, {
+    bool closeCurrentPlayer = false,
+  }) async {
+    if (!_beginTitleOpening(movie)) return;
+    try {
+      if (closeCurrentPlayer) {
+        if (!mounted) return;
+        Navigator.of(context).pop();
+      }
+
+      final selectedMovie = await _resolveMovieForOpening(movie);
+      if (!mounted) return;
+
+      if (selectedMovie == null) {
+        _showMessage('This title is currently unavailable.');
+        return;
+      }
+
+      await _openResolvedPlayer(selectedMovie, movie);
+    } finally {
+      _endTitleOpening();
+    }
+  }
+
+  Future<void> _playResolvedMovie(
+    Movie selectedMovie,
+    Movie requestedMovie,
+  ) async {
+    if (!_beginTitleOpening(selectedMovie)) return;
+    try {
+      await _openResolvedPlayer(selectedMovie, requestedMovie);
+    } finally {
+      _endTitleOpening();
+    }
+  }
+
+  /// Opens a player for a title that has already been resolved to the
+  /// canonical Admin/TMDB record. The caller owns the tap lock.
+  Future<void> _openResolvedPlayer(
+    Movie selectedMovie,
+    Movie requestedMovie,
+  ) async {
     if (!mounted) return;
 
-    if (selectedMovie == null) {
-      _showMessage('This title is currently unavailable.');
-      return;
-    }
-
-    // Prefer a completed local download so it can play without internet.
     DownloadTask? downloaded;
     for (final task in _downloads) {
       final matchesMovie = task.movieId == selectedMovie.id ||
-          task.movieId == movie.id ||
-          (selectedMovie.tmdbId > 0 && task.movieId == selectedMovie.tmdbId);
+          task.movieId == requestedMovie.id ||
+          (selectedMovie.tmdbId > 0 &&
+              task.movieId == selectedMovie.tmdbId);
       if (matchesMovie &&
           task.status == 'Completed' &&
           task.filePath != null &&
@@ -2400,21 +2415,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final hasInternet = await InternetService.isOnline();
+    if (!mounted) return;
     if (!hasInternet) {
-      if (mounted) {
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-        });
-        _showMessage('Connect to the internet to stream this movie.');
-      }
+      setState(() {
+        _online = false;
+        _connectionKnown = true;
+      });
+      _showMessage('Connect to the internet to stream this title.');
       return;
     }
 
-    if (!mounted) return;
-    if (!_online) {
-      setState(() => _online = true);
-    }
+    if (!_online) setState(() => _online = true);
     _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
@@ -2595,7 +2606,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         itemBuilder: (context, index) {
           final movie = movies[index];
           return GestureDetector(
-            onTap: () => _playMovie(movie),
+            onTap: _isOpeningTitle ? null : () => _playMovie(movie),
             child: Container(
               width: 110,
               margin: const EdgeInsets.symmetric(horizontal: 4),
@@ -2603,30 +2614,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(Icons.movie, color: gold, size: 32),
-                              )
-                            : CachedNetworkImage(
-                                imageUrl: movie.posterUrl,
-                                fit: BoxFit.cover,
-                                placeholder: (_, __) => Container(
-                                  color: panel,
-                                  child: const Center(
-                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(9),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: movie.posterUrl.isEmpty
+                                ? Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold, size: 32),
+                                  )
+                                : CachedNetworkImage(
+                                    imageUrl: movie.posterUrl,
+                                    fit: BoxFit.cover,
+                                    fadeInDuration: const Duration(milliseconds: 120),
+                                    placeholder: (_, __) => Container(
+                                      color: panel,
+                                      child: const Center(
+                                        child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+                                      ),
+                                    ),
+                                    errorWidget: (_, __, ___) => Container(
+                                      color: panel,
+                                      child: const Icon(Icons.movie, color: gold),
+                                    ),
                                   ),
-                                ),
-                                errorWidget: (_, __, ___) => Container(
-                                  color: panel,
-                                  child: const Icon(Icons.movie, color: gold),
-                                ),
-                              ),
-                      ),
+                          ),
+                        ),
+                        _titleOpeningOverlay(movie),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -2694,7 +2712,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             itemBuilder: (context, index) {
               final movie = slides[index];
               return GestureDetector(
-                onTap: () => _playMovie(movie),
+                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -2716,6 +2734,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
+                    _titleOpeningOverlay(movie),
                   ],
                 ),
               );
@@ -2793,7 +2812,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ? 'Anime'
                     : 'Movie');
             return GestureDetector(
-              onTap: () => _playMovie(movie),
+              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
               child: Container(
                 width: 238,
                 margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -3024,35 +3043,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final movie = movies[index];
 
         return GestureDetector(
-          onTap: () => _playMovie(movie),
+          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: movie.posterUrl.isEmpty
-                        ? Container(
-                            color: panel,
-                            child: const Icon(
-                              Icons.movie,
-                              color: gold,
-                            ),
-                          )
-                        : CachedNetworkImage(
-                            imageUrl: movie.posterUrl,
-                            fit: BoxFit.cover,
-                            errorWidget: (_, __, ___) => Container(
-                              color: panel,
-                              child: const Icon(
-                                Icons.movie,
-                                color: gold,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(9),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(
+                                  Icons.movie,
+                                  color: gold,
+                                ),
+                              )
+                            : CachedNetworkImage(
+                                imageUrl: movie.posterUrl,
+                                fit: BoxFit.cover,
+                                fadeInDuration: const Duration(milliseconds: 120),
+                                errorWidget: (_, __, ___) => Container(
+                                  color: panel,
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: gold,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                  ),
+                      ),
+                    ),
+                    _titleOpeningOverlay(movie),
+                  ],
                 ),
               ),
               const SizedBox(height: 6),
