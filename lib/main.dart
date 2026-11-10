@@ -5884,7 +5884,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _providerSelector() {
-    if (widget.localFilePath != null || widget.movie.tmdbId <= 0) {
+    if (widget.localFilePath != null ||
+        (widget.movie.tmdbId <= 0 &&
+            !_providerSources.any((source) => source.id == 'dailymotion'))) {
       return const SizedBox.shrink();
     }
     if (_providerSources.isEmpty) return const SizedBox.shrink();
