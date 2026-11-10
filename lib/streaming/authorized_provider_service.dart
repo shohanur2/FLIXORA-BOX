@@ -184,7 +184,7 @@ class AuthorizedProviderService {
     for (final item in items.whereType<Map>()) {
       final itemType = (item['content'] ?? '').toString().toLowerCase();
       final itemIsMovie = itemType == 'movie' || itemType == 'movies';
-      if ((isTv == itemIsMovie) &&
+      if ((isTv != itemIsMovie) &&
           _matchesTitle(
             (item['title'] ?? '').toString(),
             title,
