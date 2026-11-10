@@ -5806,6 +5806,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (!source.isAvailable || !_playerIsOnline || _isDisposed) return;
     _cancelHideTimer();
 
+    if (_usingMedia3Fallback) {
+      setState(() {
+        _usingMedia3Fallback = false;
+        _media3FallbackUrl = null;
+      });
+      await _media3Controller.detach();
+    }
+
     // Release the native decoder before mounting an embedded provider. The
     // last position is already persisted by the position listener.
     try {
@@ -5868,6 +5876,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
       _failedProviderIds.clear();
       setState(() {
+        _usingMedia3Fallback = false;
+        _media3FallbackUrl = null;
         _selectedProviderSource = fallback;
         _showControls = false;
         _initialized = false;
@@ -5920,6 +5930,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<void> _closeProviderSource() async {
     if (!mounted || _isDisposed) return;
     setState(() {
+      _usingMedia3Fallback = false;
+      _media3FallbackUrl = null;
       _selectedProviderSource = null;
       _errorMessage = null;
       _showControls = true;
@@ -6662,12 +6674,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       setState(() => _errorMessage = value);
       if (value.trim().isNotEmpty &&
           !_isOpening &&
-          widget.localFilePath == null &&
           _selectedProviderSource == null &&
+          !_usingMedia3Fallback &&
           _playerIsOnline) {
-        // A broken Admin direct stream should not strand the viewer. Keep it
-        // first priority, then fall back to the reference provider sequence.
-        unawaited(_selectDefaultProviderIfNeeded(force: true));
+        if (Platform.isAndroid) {
+          unawaited(_activateMedia3Fallback().then((started) {
+            if (!started && widget.localFilePath == null && mounted && !_isDisposed) {
+              return _selectDefaultProviderIfNeeded(force: true);
+            }
+          }));
+        } else if (widget.localFilePath == null) {
+          unawaited(_selectDefaultProviderIfNeeded(force: true));
+        }
       }
     });
 
@@ -6738,12 +6756,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     } catch (e) {
       if (!mounted || _isDisposed) return;
 
-      setState(() {
-        _errorMessage =
-            'Unable to play this video. Please check the video link and try again.';
-      });
-      if (widget.localFilePath == null && _playerIsOnline) {
+      final fallbackStarted = await _activateMedia3Fallback();
+      if (!fallbackStarted && widget.localFilePath == null && _playerIsOnline) {
+        setState(() {
+          _errorMessage =
+              'Unable to play this video. Trying another available stream...';
+        });
         unawaited(_selectDefaultProviderIfNeeded(force: true));
+      } else if (!fallbackStarted && mounted && !_isDisposed) {
+        setState(() {
+          _errorMessage =
+              'Unable to play this downloaded file. Please try downloading it again.';
+        });
       }
     } finally {
       _isOpening = false;
@@ -6819,6 +6843,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _togglePlay() async {
     if (_isDisposed) return;
+    if (_usingMedia3Fallback) {
+      if (_isPlaying) {
+        await _media3Controller.pause();
+      } else {
+        await _media3Controller.play();
+      }
+      return;
+    }
 
     if (_isPlaying) {
       await _player.pause();
@@ -6932,7 +6964,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final previewPosition = _gesturePreviewPosition;
 
     if (mode == 'seek' && previewPosition != null) {
-      await _player.seek(previewPosition);
+      if (_usingMedia3Fallback) {
+        await _media3Controller.seekTo(previewPosition.inMilliseconds);
+      } else {
+        await _player.seek(previewPosition);
+      }
       if (mounted && !_isDisposed) {
         setState(() {
           _position = previewPosition;
@@ -6966,7 +7002,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ? _duration
             : next;
 
-    await _player.seek(clamped);
+    if (_usingMedia3Fallback) {
+      await _media3Controller.seekTo(clamped.inMilliseconds);
+    } else {
+      await _player.seek(clamped);
+    }
 
     if (mounted && !_isDisposed) {
       setState(() => _position = clamped);
@@ -6978,7 +7018,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<void> _seekTo(double value) async {
     final target = Duration(milliseconds: value.round());
 
-    await _player.seek(target);
+    if (_usingMedia3Fallback) {
+      await _media3Controller.seekTo(target.inMilliseconds);
+    } else {
+      await _player.seek(target);
+    }
 
     if (mounted && !_isDisposed) {
       setState(() => _position = target);
@@ -7001,6 +7045,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _changeSpeed(double speed) async {
+    if (_usingMedia3Fallback) {
+      await _media3Controller.setPlaybackSpeed(speed);
+      if (mounted && !_isDisposed) setState(() => _speed = speed);
+      return;
+    }
     await _player.setRate(speed);
 
     if (!mounted || _isDisposed) return;
@@ -7011,6 +7060,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _changeVolume(double value) async {
     final volume = value.clamp(0.0, 100.0);
+    if (_usingMedia3Fallback) {
+      await _media3Controller.setVolume(volume / 100.0);
+      if (mounted && !_isDisposed) setState(() => _volume = volume);
+      return;
+    }
 
     await _player.setVolume(volume);
 
@@ -8257,6 +8311,35 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerBody() {
+    if (_usingMedia3Fallback && _media3FallbackUrl != null) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: Media3PlayerView(
+              key: ValueKey<String>('media3-' + _media3FallbackUrl!),
+              url: _media3FallbackUrl!,
+              startPositionMs: _position.inMilliseconds,
+              controller: _media3Controller,
+            ),
+          ),
+          _media3FallbackActions(),
+          if (_media3Error != null)
+            Positioned(
+              left: 10,
+              right: 10,
+              bottom: 8,
+              child: Text(
+                _media3Error!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.orangeAccent, fontSize: 10),
+              ),
+            ),
+        ],
+      );
+    }
+
     final providerSource = _selectedProviderSource;
     if (providerSource != null) {
       return ProviderEmbedPlayer(
@@ -8511,6 +8594,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       SystemUiMode.edgeToEdge,
     );
 
+    unawaited(_media3Controller.dispose());
     unawaited(_player.dispose());
 
     super.dispose();
