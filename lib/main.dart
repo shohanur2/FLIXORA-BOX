@@ -5587,6 +5587,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
       if (adminIndex >= 0) insertAt = adminIndex + 1;
     }
+    // Keep the explicit Anime Sub/Dub choices ahead of generic catalogue
+    // sources while still placing Admin-managed sources first.
+    final animeDubIndex = _providerSources.indexWhere(
+      (source) => source.id == 'vidrift-anime-dub',
+    );
+    if (animeDubIndex >= insertAt) insertAt = animeDubIndex + 1;
     setState(() {
       _providerSources.insertAll(insertAt, additions);
     });
