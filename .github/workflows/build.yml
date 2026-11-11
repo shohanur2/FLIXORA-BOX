@@ -42,6 +42,18 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Build FLIXORA Rust playback core
+        run: |
+          cargo install cargo-ndk --locked
+          export ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -n "$ANDROID_NDK_HOME"
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o android/app/src/main/jniLibs build --manifest-path rust/flixora_core/Cargo.toml --release
+
       - name: Check environment
         run: |
           flutter --version

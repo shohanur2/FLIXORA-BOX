@@ -1,4 +1,5 @@
 /// Shared helpers for FLIXORA's real video-quality selection.
+import 'native/rust_playback_core.dart';
 ///
 /// A quality label is a requested/declared encode. It does not prove the
 /// video's actual resolution or bitrate; those require media metadata.
@@ -17,11 +18,7 @@ class VideoQualityService {
 
   /// Extracts a numeric vertical resolution from labels such as 1080p or 4K.
   static int rank(String label) {
-    final normalized = label.trim().toLowerCase();
-    if (normalized == '4k' || normalized == 'uhd') return 2160;
-    if (normalized == '2k' || normalized == 'qhd') return 1440;
-    final match = RegExp(r'(\d{3,4})\s*p?').firstMatch(normalized);
-    return int.tryParse(match?.group(1) ?? '') ?? 0;
+    return RustPlaybackCore.qualityRank(label);
   }
 
   static List<T> sort<T>(
