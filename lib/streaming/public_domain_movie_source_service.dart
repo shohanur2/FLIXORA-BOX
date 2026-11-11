@@ -44,7 +44,7 @@ class PublicDomainMovieSourceService {
           .get(searchUri, headers: const <String, String>{
             'User-Agent': 'FLIXORA/1.0 (public-domain catalogue)',
           })
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 5));
       if (searchResponse.statusCode != 200) return const [];
 
       final searchJson = jsonDecode(searchResponse.body);
@@ -87,7 +87,7 @@ class PublicDomainMovieSourceService {
           .get(metadataUri, headers: const <String, String>{
             'User-Agent': 'FLIXORA/1.0 (public-domain catalogue)',
           })
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 5));
       if (metadataResponse.statusCode != 200) return null;
 
       final itemJson = jsonDecode(metadataResponse.body);
