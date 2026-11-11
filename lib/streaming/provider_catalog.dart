@@ -277,7 +277,7 @@ class ProviderCatalog {
 
   /// Returns the built-in movie providers. Dailymotion is included only when
   /// the Admin source URL points to a Dailymotion video or playlist.
-  /// Play4U stays disabled until an official in-app embed endpoint is verified.
+  /// Play4U uses the IMDb-based embed routes verified in FLIXORA-REFERENCE.
   static List<ProviderEmbedSource> forMovie({
     required int tmdbId,
     String? imdbId,
@@ -550,9 +550,9 @@ class ProviderCatalog {
     return null;
   }
 
-  /// Allows secure subframes only when they belong to the selected provider or
-  /// an explicitly approved player/redirect host. This avoids trusting every
-  /// HTTPS iframe a provider page may try to open.
+  /// Play4U may host its player in a separate HTTPS frame; other providers
+  /// remain restricted to their own and explicitly approved player hosts.
+  /// Local/private targets and insecure schemes are always rejected.
   static bool allowsSubframeNavigation(
     ProviderEmbedSource source,
     Uri uri,
@@ -597,8 +597,7 @@ class ProviderCatalog {
     ).hasMatch(host);
   }
 
-  /// Only HTTPS navigation on the provider's own domain (or its subdomains)
-  /// is allowed inside the embedded player.
+  /// Restricts main-frame navigation to the provider and approved redirects.
   static bool allowsNavigation(
     ProviderEmbedSource source,
     Uri uri,
