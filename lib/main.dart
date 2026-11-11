@@ -60,9 +60,9 @@ Future<void> main() async {
 
 // FLIXORA cinematic surfaces: Netflix-inspired black, red and premium gold.
 const Color bg = Color(0xFF080808);
-const Color panel = Color(0xFF181818);
-const Color gold = Color(0xFFE50914); // Primary Netflix red accent.
-const Color goldLight = Color(0xFFFF4652);
+const Color panel = Color(0xFF191919);
+const Color gold = Color(0xFFD6AD45);
+const Color goldLight = Color(0xFFFFE5A3);
 const Color premiumGold = Color(0xFFD6AD45);
 const Color white = Color(0xFFFFFFFF);
 const Color ink = Color(0xFFFFFFFF);
@@ -1149,7 +1149,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _refreshing = false;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
-  String? _openingTitleKey;
 
   String? homeError;
 
@@ -2279,40 +2278,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() => _profileSection = section);
   }
 
-  String _titleOpeningKey(Movie movie) {
-    if (movie.tmdbId > 0) return '${movie.mediaType}:${movie.tmdbId}';
-    return '${movie.mediaType}:${movie.source}:${movie.id}';
-  }
-
-  bool _beginTitleOpening(Movie movie) {
+  bool _beginTitleOpening() {
     if (!mounted || _isOpeningTitle) return false;
+    // Lightweight duplicate-open guard; avoid rebuilding the whole Home page.
     _isOpeningTitle = true;
-    _openingTitleKey = _titleOpeningKey(movie);
-    setState(() {});
     return true;
   }
 
   void _endTitleOpening() {
     _isOpeningTitle = false;
-    _openingTitleKey = null;
-    if (mounted) setState(() {});
-  }
-
-  bool _isTitleOpening(Movie movie) =>
-      _isOpeningTitle && _openingTitleKey == _titleOpeningKey(movie);
-
-  Widget _titleOpeningOverlay(Movie movie) {
-    if (!_isTitleOpening(movie)) return const SizedBox.shrink();
-    return const ColoredBox(
-      color: Color(0x99000000),
-      child: Center(
-        child: SizedBox(
-          width: 25,
-          height: 25,
-          child: CircularProgressIndicator(color: gold, strokeWidth: 2.4),
-        ),
-      ),
-    );
   }
 
   Movie? _cachedFlixoraMatch(Movie movie) {
@@ -2423,7 +2397,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openMovie(Movie movie) async {
-    if (!_beginTitleOpening(movie)) return;
+    if (!_beginTitleOpening()) return;
     try {
       final hasInternet = await InternetService.isOnline();
       if (!mounted) return;
@@ -2744,9 +2718,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _movieRow(List<Movie> movies) {
     if (movies.isEmpty) return const SizedBox(height: 8);
-
     return SizedBox(
-      height: 205,
+      height: 198,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -2754,45 +2727,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         itemBuilder: (context, index) {
           final movie = movies[index];
           return GestureDetector(
-            onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+            onTap: () => _playMovie(movie),
             child: Container(
-              width: 110,
+              width: 104,
               margin: const EdgeInsets.symmetric(horizontal: 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(9),
-                          child: SizedBox(
-                            width: double.infinity,
-                            child: movie.posterUrl.isEmpty
-                                ? Container(
-                                    color: panel,
-                                    child: const Icon(Icons.movie, color: gold, size: 32),
-                                  )
-                                : FlixoraCachedImage(
-                                    imageUrl: movie.posterUrl,
-                                    isOnline: _online,
-                                    fit: BoxFit.cover,
-                                    placeholder: Container(
-                                      color: panel,
-                                      child: const Center(
-                                        child: CircularProgressIndicator(color: gold, strokeWidth: 2),
-                                      ),
-                                    ),
-                                    fallback: Container(
-                                      color: panel,
-                                      child: const Icon(Icons.movie, color: gold),
-                                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(9),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(Icons.movie, color: gold, size: 32),
+                              )
+                            : FlixoraCachedImage(
+                                imageUrl: movie.posterUrl,
+                                isOnline: _online,
+                                fit: BoxFit.cover,
+                                placeholder: Container(
+                                  color: panel,
+                                  child: const Center(
+                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
                                   ),
-                          ),
-                        ),
-                        _titleOpeningOverlay(movie),
-                      ],
+                                ),
+                                fallback: Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                ),
+                              ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -2860,7 +2827,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             itemBuilder: (context, index) {
               final movie = slides[index];
               return GestureDetector(
-                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                onTap: () => _playMovie(movie),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -2883,7 +2850,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     ),
-                    _titleOpeningOverlay(movie),
+
                   ],
                 ),
               );
@@ -2961,7 +2928,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ? 'Anime'
                     : 'Movie');
             return GestureDetector(
-              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              onTap: () => _playMovie(movie),
               child: Container(
                 width: 238,
                 margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -3171,13 +3138,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _collectionContent(String title, List<Movie> movies) {
     if (movies.isEmpty) {
       return Center(
-        child: Text(
-          'No $title available.',
-          style: const TextStyle(color: ink54),
-        ),
+        child: Text('No $title available.', style: const TextStyle(color: ink54)),
       );
     }
-
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -3189,44 +3152,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       itemCount: movies.length,
       itemBuilder: (context, index) {
         final movie = movies[index];
-
         return GestureDetector(
-          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+          onTap: () => _playMovie(movie),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(
-                                  Icons.movie,
-                                  color: gold,
-                                ),
-                              )
-                            : FlixoraCachedImage(
-                                imageUrl: movie.posterUrl,
-                                isOnline: _online,
-                                fit: BoxFit.cover,
-                                fallback: Container(
-                                  color: panel,
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                  ),
-                                ),
-                              ),
-                      ),
-                    ),
-                    _titleOpeningOverlay(movie),
-                  ],
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: movie.posterUrl.isEmpty
+                        ? Container(
+                            color: panel,
+                            child: const Icon(Icons.movie, color: gold),
+                          )
+                        : FlixoraCachedImage(
+                            imageUrl: movie.posterUrl,
+                            isOnline: _online,
+                            fit: BoxFit.cover,
+                            fallback: Container(
+                              color: panel,
+                              child: const Icon(Icons.movie, color: gold),
+                            ),
+                          ),
+                  ),
                 ),
               ),
               const SizedBox(height: 6),
@@ -3234,19 +3184,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 movie.title,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 11,
-                ),
+                style: const TextStyle(color: white, fontWeight: FontWeight.w600, fontSize: 11),
               ),
-              Text(
-                movie.year,
-                style: const TextStyle(
-                  color: ink54,
-                  fontSize: 10,
-                ),
-              ),
+              Text(movie.year, style: const TextStyle(color: ink54, fontSize: 10)),
             ],
           ),
         );
@@ -4618,9 +4558,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Container(
                       height: 46,
                       decoration: BoxDecoration(
-                        color: Colors.transparent,
+                        color: const Color(0xAA292929),
                         borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: white.withValues(alpha: 0.24)),
+                        border: Border.all(color: Colors.white12),
                       ),
                       child: TextField(
                         controller: _searchController,
