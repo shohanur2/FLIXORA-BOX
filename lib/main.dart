@@ -6215,78 +6215,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _providerSelector() {
-    if (widget.localFilePath != null ||
-        (widget.movie.tmdbId <= 0 && _providerSources.isEmpty)) {
-      return const SizedBox.shrink();
-    }
-    if (_providerSources.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Available Streams',
-          style: TextStyle(
-            color: playerWhite,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          _playerIsOnline
-              ? 'Choose a movie, series or anime stream to play inside FLIXORA'
-              : 'Connect to the internet to use online streams',
-          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-        ),
-        const SizedBox(height: 9),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _providerSources.map((source) {
-            final selected = _selectedProviderSource?.id == source.id;
-            final label = source.name.replaceFirst(RegExp(r'^STREAM \d+ · '), '');
-            return ChoiceChip(
-              label: Text(label),
-              selected: selected,
-              onSelected: source.isAvailable && _playerIsOnline
-                  ? (_) => _selectProviderSource(source)
-                  : null,
-              selectedColor: playerGold.withValues(alpha: 0.24),
-              backgroundColor: playerPanel,
-              disabledColor: playerPanel.withValues(alpha: 0.55),
-              side: BorderSide(
-                color: selected ? playerGold : const Color(0x3DFFFFFF),
-              ),
-              labelStyle: TextStyle(
-                color: source.isAvailable ? playerWhite : const Color(0x66FFFFFF),
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-              avatar: Icon(
-                source.isAvailable ? Icons.play_circle_outline : Icons.info_outline,
-                size: 16,
-                color: source.isAvailable ? playerGoldLight : const Color(0x66FFFFFF),
-              ),
-            );
-          }).toList(),
-        ),
-        if (_providerSources.any((source) =>
-            source.id == 'dailymotion' && !source.isAvailable)) ...[
-          const SizedBox(height: 7),
-          const Text(
-            'Dailymotion needs a Player ID. Add DAILYMOTION_PLAYER_ID in GitHub Actions secrets to enable playback.',
-            style: TextStyle(color: Color(0xFFFFC76A), fontSize: 11),
-          ),
-        ],
-        if (_selectedProviderSource != null) ...[
-          const SizedBox(height: 7),
-          Text(
-            'Selected stream: ${_selectedProviderSource!.name}',
-            style: const TextStyle(color: playerGoldLight, fontSize: 11),
-          ),
-        ],
-      ],
-    );
+    // Provider adapters stay internal. FLIXORA automatically selects the
+    // preferred source and falls back when playback fails, so visitors see
+    // one FLIXORA player instead of a list of third-party providers.
+    return const SizedBox.shrink();
   }
 
   String _formatPlayerReleaseDate(String value) {

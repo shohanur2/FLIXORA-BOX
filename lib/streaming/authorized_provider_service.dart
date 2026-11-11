@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'provider_catalog.dart';
 import 'public_domain_movie_source_service.dart';
+import 'peertube_source_service.dart';
 
 /// Discovers authorized direct media sources from configured external providers.
 /// Admin-managed FLIXORA sources remain higher priority.
@@ -56,6 +57,13 @@ class AuthorizedProviderService {
             episode: episode,
           )),
       _safe(() => _discoverFourKhdHub(
+            query,
+            year: year,
+            isTv: isTv,
+            season: season,
+            episode: episode,
+          )),
+      _safe(() => PeerTubeSourceService.discover(
             query,
             year: year,
             isTv: isTv,

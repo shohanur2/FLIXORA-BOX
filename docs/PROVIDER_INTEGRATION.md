@@ -12,9 +12,10 @@ The visitor player can query these sources in parallel:
 
 - **Dramachi** — public JSON catalogue/title/episode interfaces and the CDN URL returned by its normal API response.
 - **CircleFTP (BDIX)** — post search/details API; a direct media URL is accepted only from the configured CircleFTP host.
+- **PeerTube / Sepia Search** — federated search is used only for exact title/year matches (and exact season/episode tokens for TV) that are explicitly marked Public Domain or CC0 and publicly visible. The official PeerTube embed player is opened inside FLIXORA; PeerTube is creator-hosted, so it is not a complete commercial movie catalogue.
 - **4KHDHub** — public search/detail pages plus the supported HubCloud/HubDrive public resolver flow. Resolver output is restricted to HTTPS media URLs and known direct-file CDN endpoints; local/private IPs, login/logout pages, archives, and unknown redirect pages are rejected.
 
-Provider results are title/year matched, deduplicated, and added after a recognized Admin embed source. TV results must match the selected season and episode. Direct media links play through FLIXORA's native `media_kit` player; playback errors move to the next provider. Existing embedded players continue to use the WebView player.
+Provider results are title/year matched, deduplicated, and added after a recognized Admin embed source. PeerTube is stricter: only public Public Domain/CC0 items are accepted, and TV results must contain the exact selected SxxExx token. TV results must match the selected season and episode. Direct media links play through FLIXORA's native `media_kit` player; playback errors move to the next provider. Existing embedded players continue to use the WebView player.
 
 ## Build-time endpoint configuration
 
