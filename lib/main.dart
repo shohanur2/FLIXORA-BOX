@@ -1411,8 +1411,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _normalizedMovieTitle(String value) => value
       .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      // Preserve Bengali and other non-Latin scripts while normalizing
+      // common title punctuation and whitespace.
+      .replaceAll(RegExp(r'[\\s\\-_.,:;!?()\\[\\]{}]+'), ' ')
       .trim();
+
+  List<Movie> _movieBoxSectionItems(MovieBoxHomeSection section) {
+    final adminMatches = flixoraMovies.where((admin) {
+      if (admin.mediaType == 'tv' != section.items.any((item) => item.mediaType == 'tv')) {
+        // A section can contain mixed media; the per-item check below is authoritative.
+      }
+      return section.items.any((item) {
+        if (admin.mediaType != item.mediaType) return false;
+        if (admin.tmdbId > 0 && item.tmdbId > 0) {
+          return admin.tmdbId == item.tmdbId;
+        }
+        return admin.year != 'N/A' &&
+            admin.year == item.year &&
+            _normalizedMovieTitle(admin.title) ==
+                _normalizedMovieTitle(item.title);
+      });
+    }).toList(growable: false);
+    return _deduplicateMovies([...adminMatches, ...section.items]);
+  }
 
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
@@ -4495,7 +4516,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..._movieBoxSections
               .where((section) => !section.isBanner &&
                   !section.title.toLowerCase().contains('trending'))
-              .map((section) => _sectionBlock(section.title, section.items)),
+              .map((section) => _sectionBlock(
+                    section.title,
+                    _movieBoxSectionItems(section),
+                  )),
           _homeCategoryCards(),
           _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
