@@ -2,9 +2,14 @@
 class FeaturedCarouselLayout {
   FeaturedCarouselLayout._();
 
-  static const double cardWidth = 238.0;
-  static const double cardMargin = 5.0;
-  static const double horizontalPadding = 12.0;
+  static const double cardWidth = 228.0;
+  static const double cardMargin = 4.0;
+  static const double horizontalPadding = 6.0;
+  static const double cardHeight = 54.0;
+  static const double cardTopInset = 14.0;
+  static const double textLeftInset = 46.0;
+  static const double posterWidth = 36.0;
+  static const double posterHeight = 48.0;
   static const double cardExtent = cardWidth + cardMargin * 2;
   static const double leadingInset = horizontalPadding + cardMargin;
 
