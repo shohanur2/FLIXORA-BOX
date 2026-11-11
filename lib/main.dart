@@ -333,6 +333,8 @@ class FlixoraCachedImage extends StatelessWidget {
   final bool isOnline;
   final Widget? placeholder;
   final Widget? fallback;
+  final int? memCacheWidth;
+  final int? memCacheHeight;
 
   const FlixoraCachedImage({
     super.key,
@@ -341,6 +343,8 @@ class FlixoraCachedImage extends StatelessWidget {
     required this.isOnline,
     this.placeholder,
     this.fallback,
+    this.memCacheWidth,
+    this.memCacheHeight,
   });
 
   @override
@@ -351,6 +355,8 @@ class FlixoraCachedImage extends StatelessWidget {
       return CachedNetworkImage(
         imageUrl: imageUrl,
         fit: fit,
+        memCacheWidth: memCacheWidth,
+        memCacheHeight: memCacheHeight,
         placeholder: (_, __) => placeholder ?? Container(color: panel),
         errorWidget: (_, __, ___) => empty,
       );
@@ -361,7 +367,7 @@ class FlixoraCachedImage extends StatelessWidget {
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
         if (file != null && file.existsSync()) {
-          return Image.file(file, fit: fit);
+          return Image.file(file, fit: fit, cacheWidth: memCacheWidth, cacheHeight: memCacheHeight);
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return placeholder ?? Container(color: panel);
@@ -2443,7 +2449,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const NoInternetScreen(),
+        builder: (_) => NoInternetScreen(),
       ),
     );
   }
@@ -3408,6 +3414,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _tab = 0;
+      _showRanking = false;
+      _searchOpen = true;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+
+    // Focus immediately; connection monitoring runs independently.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
   void _closeSearch() {
     _searchTimer?.cancel();
     FocusScope.of(context).unfocus();
@@ -3432,7 +3457,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _onSearchChanged(title);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocusNode.requestFocus();
-    }
+    });
+  }
 
   Widget _searchResultRow(Movie movie, {int? rank}) {
     final metadata = <String>[
