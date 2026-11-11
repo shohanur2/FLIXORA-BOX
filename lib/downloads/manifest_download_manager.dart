@@ -689,6 +689,9 @@ class ManifestDownloadManager {
       duration = int.tryParse(segmentList.getAttribute('duration') ?? '');
       startNumber = int.tryParse(segmentList.getAttribute('startNumber') ?? '') ?? 1;
       final initialization = _findChild(segmentList, 'Initialization');
+      if (initialization?.getAttribute('range') != null) {
+        throw StateError('DASH byte-range initialization segments are not supported.');
+      }
       final initPath = initialization?.getAttribute('sourceURL');
       if (initPath != null && initPath.isNotEmpty) {
         initializationUri = baseUri.resolve(initPath);
@@ -697,6 +700,9 @@ class ManifestDownloadManager {
           .where((element) => element.name.local == 'SegmentURL')
           .toList();
       for (final url in urls) {
+        if (url.getAttribute('mediaRange') != null) {
+          throw StateError('DASH byte-range media segments are not supported.');
+        }
         final media = url.getAttribute('media');
         if (media == null || media.isEmpty) {
           throw StateError('A DASH SegmentURL is missing its media path.');
@@ -1020,6 +1026,12 @@ class ManifestDownloadManager {
     final status = response.statusCode ?? 0;
     if (status != 200 && status != 206) {
       throw StateError('The video host returned HTTP $status for a media segment.');
+    }
+    final contentType =
+        response.headers.value('content-type')?.toLowerCase() ?? '';
+    if (contentType.contains('text/html') ||
+        contentType.contains('application/json')) {
+      throw StateError('The video host returned a web page instead of a media segment.');
     }
     final sink = partial.openWrite();
     try {
