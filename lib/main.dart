@@ -58,12 +58,12 @@ Future<void> main() async {
   runApp(const FlixoraApp());
 }
 
-// FLIXORA cinematic surfaces: Netflix-inspired black, red and premium gold.
+// FLIXORA cinematic surfaces: deep black, white typography and warm gold.
 const Color bg = Color(0xFF080808);
 const Color panel = Color(0xFF181818);
-const Color gold = Color(0xFFE50914); // Primary Netflix red accent.
-const Color goldLight = Color(0xFFFF4652);
-const Color premiumGold = Color(0xFFD6AD45);
+const Color gold = Color(0xFFD6AD45);
+const Color goldLight = Color(0xFFF2CF75);
+const Color premiumGold = Color(0xFFE8C15A);
 const Color white = Color(0xFFFFFFFF);
 const Color ink = Color(0xFFFFFFFF);
 const Color ink70 = Color(0xB3FFFFFF);
@@ -76,8 +76,8 @@ const Color ink12 = Color(0x1FFFFFFF);
 const Color ink10 = Color(0x1AFFFFFF);
 const Color playerBg = Color(0xFF080808);
 const Color playerPanel = Color(0xFF191919);
-const Color playerGold = Color(0xFFE50914);
-const Color playerGoldLight = Color(0xFFFF6670);
+const Color playerGold = Color(0xFFD6AD45);
+const Color playerGoldLight = Color(0xFFF2CF75);
 const Color playerWhite = Colors.white;
 
 const String imageBase = 'https://image.tmdb.org/t/p/';
@@ -1121,8 +1121,8 @@ class FlixoraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flixora',
       theme: ThemeData(
-        fontFamily: GoogleFonts.robotoSlab().fontFamily,
-        textTheme: GoogleFonts.robotoSlabTextTheme(
+        fontFamily: GoogleFonts.roboto().fontFamily,
+        textTheme: GoogleFonts.robotoTextTheme(
           ThemeData.dark().textTheme,
         ),
         brightness: Brightness.dark,
@@ -1169,6 +1169,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final PageController _sliderController = PageController();
   final ScrollController _featuredCardsController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   Timer? _timer;
   Timer? _networkTimer;
@@ -1188,8 +1189,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _ottTitlesLoading = false;
   String? _ottProvidersError;
   String? _ottTitlesError;
-  String _librarySection = 'Downloads';
+  String _librarySection = 'My List';
   bool _showRanking = false;
+  bool _searchOpen = false;
+  String _searchCategory = 'All';
   bool _rankingTv = false;
   String _rankingCategory = 'Cinema';
 
@@ -1349,7 +1352,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     _timer = Timer.periodic(
-      const Duration(seconds: 7),
+      const Duration(seconds: 5),
       (_) {
         if (!mounted || _tab != 0) return;
 
@@ -1643,6 +1646,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -2227,13 +2231,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     Navigator.of(context).popUntil((route) => route.isFirst);
     if (!mounted) return;
+    FocusScope.of(context).unfocus();
     setState(() {
-      _tab = 2;
-      _librarySection = 'Downloads';
-      _profileSection = null;
+      _tab = 3;
+      _searchOpen = false;
+      _showRanking = false;
       _search = '';
       _searchController.clear();
       _searchLoading = false;
+      _profileSection = null;
     });
   }
 
@@ -2522,7 +2528,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _openRanking([String category = 'Cinema', bool tv = false]) {
+    FocusScope.of(context).unfocus();
     setState(() {
+      _searchOpen = false;
       _showRanking = true;
       _rankingTv = tv;
       _rankingCategory = category;
