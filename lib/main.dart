@@ -7492,7 +7492,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                     title: Text(
                       'Loading FLIXORA subtitles...',
-                      style: TextStyle(color: playerWhite70),
+                      style: TextStyle(color: ink70),
                     ),
                   ),
                 ..._adminSubtitles.map((track) => ListTile(
