@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: flixora-apk-${{ github.event.pull_request.number || github.ref }}
+  group: flixora-apk-recovery-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -273,9 +273,10 @@ jobs:
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --print-certs "$APK"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: FLIXORA-APK
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0
