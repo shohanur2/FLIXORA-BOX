@@ -1612,7 +1612,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _connectionKnown = true;
             if (_allMovies().isEmpty) homeError = 'offline';
           });
-          if (_searchOpen) _showNoInternetScreen();
+          // Keep the cached Search screen available while offline.
+          // Opening a title, not opening Search, is what requires internet.
           return;
         }
 
@@ -1661,10 +1662,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (!online && _allMovies().isEmpty) homeError = 'offline';
       });
 
-      if (!online && _searchOpen) {
-        _showNoInternetScreen();
-      }
-
+      // Do not replace Search with the offline screen just because the
+      // connection dropped. Cached catalogue entries remain searchable.
       if (online && wasOffline) {
         _dismissNoInternetScreen();
         await Future.wait<void>([loadHome(), _loadOttProviders()]);
@@ -1903,7 +1902,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _online = online;
         _connectionKnown = true;
       });
-      if (!online) _showNoInternetScreen();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _searchFocusNode.requestFocus();
+      });
       return;
     }
     FocusScope.of(context).unfocus();
@@ -1926,11 +1927,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _online = online;
       _connectionKnown = true;
     });
-    if (!online) {
-      _showNoInternetScreen();
-      return;
-    }
-
+    // Search itself remains available offline using the locally cached
+    // catalogue. Only opening a movie or series requires a connection.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocusNode.requestFocus();
     });
@@ -2021,15 +2019,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final onlineNow = await InternetService.isOnline();
     if (!mounted) return;
     if (!onlineNow) {
+      final cachedQueryResults = await MovieCache.getSearch(text);
+      if (!mounted) return;
+
+      final terms = text.toLowerCase().split(RegExp(r'\\s+'))
+          .where((term) => term.isNotEmpty)
+          .toList();
+      final cachedCatalogueMatches = _allMovies().where((movie) {
+        final searchable = [
+          movie.title,
+          movie.overview,
+          movie.year,
+          ...movie.genres,
+        ].join(' ').toLowerCase();
+        return terms.every(searchable.contains);
+      }).toList();
+      final offlineResults = _deduplicateMovies([
+        ...cachedQueryResults,
+        ...cachedCatalogueMatches,
+      ]);
+
       setState(() {
         _online = false;
         _connectionKnown = true;
         _search = text;
-        searchResults = [];
+        searchResults = offlineResults;
         _searchLoading = false;
-        _searchError = null;
+        _searchError = offlineResults.isEmpty
+            ? 'No saved matches available offline.'
+            : null;
       });
-      _showNoInternetScreen();
       return;
     }
 
@@ -2619,12 +2638,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _playMovie(movie, closeCurrentPlayer: true);
   }
 
+  Future<bool> _ensureInternetForPlayback() async {
+    InternetService.invalidate();
+    final online = await InternetService.isOnline();
+    if (!mounted) return false;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+
+    if (!online) {
+      _showNoInternetScreen();
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _playMovie(
     Movie movie, {
     bool closeCurrentPlayer = false,
   }) async {
     if (!_beginTitleOpening(movie)) return;
     try {
+      // Check before closing any current screen so an offline tap always
+      // opens the dedicated Connect to the internet screen.
+      if (!await _ensureInternetForPlayback()) return;
+
       if (closeCurrentPlayer) {
         if (!mounted) return;
         Navigator.of(context).pop();
@@ -2650,6 +2690,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     if (!_beginTitleOpening(selectedMovie)) return;
     try {
+      if (!await _ensureInternetForPlayback()) return;
       await _openResolvedPlayer(selectedMovie, requestedMovie);
     } finally {
       _endTitleOpening();
@@ -3832,7 +3873,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _searchForTitle(String title) async {
     if (!_searchOpen) await _openSearch();
-    if (!mounted || !_online) return;
+    if (!mounted) return;
     _searchController.text = title;
     _searchController.selection = TextSelection.collapsed(
       offset: title.length,
@@ -5694,7 +5735,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
-          : (_tab == 0 && !_online && _allMovies().isEmpty)
+          : (_tab == 0 && !_searchOpen && !_online && _allMovies().isEmpty)
               ? NoInternetScreen(
                   onRetry: _retryInternetConnection,
                   showAppBar: false,
