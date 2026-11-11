@@ -3455,8 +3455,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _homeTopCategories() {
     const categories = [
-      'Trending', 'Movies', 'TV Series', 'Anime',
-      'Korean Drama', 'Bengali', 'Flixora Originals',
+      'Trending', 'Movies', 'TV Series', 'Anime', 'Drama',
+      'Bengali', 'Bengali Movies', 'Korean Drama', 'Flixora Originals',
     ];
     final available = categories.where(
       (category) => _moviesForHomeCategory(category).isNotEmpty,
