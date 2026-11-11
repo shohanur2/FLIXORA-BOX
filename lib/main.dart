@@ -6090,6 +6090,13 @@ class DownloadsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final completedTasks =
+        tasks.where((task) => task.status == 'Completed').toList();
+    final storageUsed = completedTasks.fold<int>(
+      0,
+      (total, task) => total + task.bytesReceived,
+    );
+
     if (tasks.isEmpty) {
       return Center(
         child: Padding(
@@ -6126,15 +6133,31 @@ class DownloadsScreen extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-          child: Text(
-            'Downloads',
-            style: TextStyle(
-              color: white,
-              fontSize: 19,
-              fontWeight: FontWeight.w800,
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Downloads',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                completedTasks.length.toString() +
+                    ' saved • ' +
+                    DownloadManager.formatBytes(storageUsed),
+                style: const TextStyle(
+                  color: ink70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
         ),
         Expanded(
