@@ -141,9 +141,9 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
               return NavigationDecision.prevent;
             }
 
-            // Play4U owns a nested player on separate HTTPS hosts;
-            // ProviderCatalog applies its Play4U-specific secure-frame rule.
-            // Other providers remain on their explicit HTTPS host allowlists.
+            // Play4U and VidRift may load their actual player on separate
+            // HTTPS hosts. ProviderCatalog applies source-specific secure-frame
+            // rules while keeping main-frame redirects on explicit allowlists.
             if (!request.isMainFrame) {
               return ProviderCatalog.allowsSubframeNavigation(
                 widget.source,
@@ -221,9 +221,8 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
 
       _startLoadTimeout();
       if (widget.source.loadInIframe) {
-        // FLIXORA-REFERENCE renders Play4U and VidRift as full-size
-        // iframes. Keep the provider's own player controls and episode
-        // navigation inside FLIXORA's WebView.
+        // VidRift is rendered as a full-size iframe. Keep its own player
+        // controls and episode navigation inside FLIXORA's WebView.
         final html = '''
 <!doctype html>
 <html>
