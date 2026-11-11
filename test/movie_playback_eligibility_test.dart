@@ -24,11 +24,11 @@ void main() {
   }
 
   group('Media title playback eligibility', () {
-    test('TMDB movie without a direct URL can use provider fallback', () {
+    test('TMDB metadata alone is not a playable source', () {
       final movie = buildMovie();
 
       expect(movie.hasPlayableVideoUrl, isFalse);
-      expect(movie.canAttemptPlayback, isTrue);
+      expect(movie.canAttemptPlayback, isFalse);
     });
 
     test('direct video remains playable without a TMDB ID', () {
@@ -48,11 +48,11 @@ void main() {
       expect(movie.canAttemptPlayback, isFalse);
     });
 
-    test('TV shows, web series, dramas and anime can use the TV route', () {
+    test('TV metadata alone is not playable before MovieBox matching', () {
       final title = buildMovie(mediaType: 'tv');
 
       expect(title.hasPlayableVideoUrl, isFalse);
-      expect(title.canAttemptPlayback, isTrue);
+      expect(title.canAttemptPlayback, isFalse);
     });
 
     test('Supabase TV content retains its media type', () {
@@ -64,7 +64,7 @@ void main() {
       });
 
       expect(title.mediaType, 'tv');
-      expect(title.canAttemptPlayback, isTrue);
+      expect(title.canAttemptPlayback, isFalse);
     });
 
     test('legacy Supabase rows remain movies by default', () {
@@ -76,5 +76,33 @@ void main() {
 
       expect(title.mediaType, 'movie');
     });
+ 
+    test('MovieBox match preserves the published Admin record identity', () {
+      final admin = Movie.fromSupabase({
+        'id': 42,
+        'tmdb_id': 157336,
+        'title': 'Interstellar',
+        'media_type': 'movie',
+        'release_date': '2014-11-07',
+        'is_published': true,
+      });
+      final movieBox = Movie.fromMovieBox({
+        'id': 'mb-42',
+        'title': 'Interstellar',
+        'isSeries': false,
+        'detailPath': 'movie/interstellar',
+        'cover': 'https://cdn.example.test/poster.jpg',
+        'year': '2014',
+        'subjectType': 1,
+      });
+
+      final resolved = movieBox.withFallbackMetadata(admin);
+
+      expect(resolved.isMovieBox, isTrue);
+      expect(resolved.sourceId, 42);
+      expect(resolved.tmdbId, 157336);
+      expect(resolved.title, 'Interstellar');
+    });
+
   });
 }
