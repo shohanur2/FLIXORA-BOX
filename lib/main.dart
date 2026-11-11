@@ -369,6 +369,181 @@ class FlixoraCachedImage extends StatelessWidget {
   }
 }
 
+class MiniPlayerSession {
+  MiniPlayerSession._();
+
+  static Player? player;
+  static VideoController? controller;
+  static Movie? movie;
+  static String? localFilePath;
+  static OverlayEntry? _overlayEntry;
+
+  static bool owns(Player candidate) => identical(player, candidate);
+
+  static bool matches(Movie candidate, String? path) =>
+      player != null &&
+      movie?.id == candidate.id &&
+      localFilePath == path;
+
+  static void removeOverlay() {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  static void show({
+    required BuildContext context,
+    required Player activePlayer,
+    required VideoController activeController,
+    required Movie activeMovie,
+    required String? activeLocalFilePath,
+    required VoidCallback onExpand,
+  }) {
+    player = activePlayer;
+    controller = activeController;
+    movie = activeMovie;
+    localFilePath = activeLocalFilePath;
+    removeOverlay();
+    _overlayEntry = OverlayEntry(
+      builder: (_) => MiniPlayerOverlay(
+        player: activePlayer,
+        controller: activeController,
+        movie: activeMovie,
+        onExpand: onExpand,
+        onClose: close,
+      ),
+    );
+    Overlay.of(context, rootOverlay: true).insert(_overlayEntry!);
+  }
+
+  static Future<void> close() async {
+    removeOverlay();
+    final oldPlayer = player;
+    player = null;
+    controller = null;
+    movie = null;
+    localFilePath = null;
+    if (oldPlayer != null) {
+      try {
+        await oldPlayer.dispose();
+      } catch (_) {}
+    }
+  }
+}
+
+class MiniPlayerOverlay extends StatelessWidget {
+  const MiniPlayerOverlay({
+    super.key,
+    required this.player,
+    required this.controller,
+    required this.movie,
+    required this.onExpand,
+    required this.onClose,
+  });
+
+  final Player player;
+  final VideoController controller;
+  final Movie movie;
+  final VoidCallback onExpand;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 82,
+      child: Material(
+        color: const Color(0xFF202020),
+        elevation: 16,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: 78,
+          child: Row(
+            children: [
+              GestureDetector(
+                onTap: onExpand,
+                child: SizedBox(
+                  width: 116,
+                  height: 78,
+                  child: Video(
+                    controller: controller,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onExpand,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'FLIXORA MINI PLAYER',
+                        style: TextStyle(
+                          color: Color(0xFFFF6670),
+                          fontSize: 8,
+                          letterSpacing: 1,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              StreamBuilder<bool>(
+                stream: player.stream.playing,
+                initialData: player.state.playing,
+                builder: (context, snapshot) {
+                  final playing = snapshot.data ?? false;
+                  return IconButton(
+                    tooltip: playing ? 'Pause' : 'Play',
+                    onPressed: () {
+                      if (playing) {
+                        player.pause();
+                      } else {
+                        player.play();
+                      }
+                    },
+                    icon: Icon(
+                      playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 25,
+                    ),
+                  );
+                },
+              ),
+              IconButton(
+                tooltip: 'Close mini player',
+                onPressed: onClose,
+                icon: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white70,
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class InternetService {
   static Future<bool> isOnline() async {
     try {
