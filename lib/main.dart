@@ -6410,6 +6410,16 @@ class DownloadsScreen extends StatelessWidget {
                       ? Colors.redAccent
                       : goldLight;
               final percent = (task.progress * 100).round().clamp(0, 100);
+              final manifestTypeLabel = task.downloadType == 'hls'
+                  ? 'HLS'
+                  : task.downloadType == 'dash'
+                      ? 'DASH'
+                      : 'File';
+              final downloadSizeLabel = task.totalBytes > 0
+                  ? DownloadManager.formatBytes(task.totalBytes)
+                  : task.totalSegments > 0
+                      ? '$manifestTypeLabel · ${task.totalSegments} segments'
+                      : 'Size unavailable';
               final statusLabel = completed
                   ? 'Downloaded • Ready offline'
                   : paused
@@ -6480,7 +6490,7 @@ class DownloadsScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '${VideoQualityService.displayName(task.quality)}  •  ${task.totalBytes > 0 ? DownloadManager.formatBytes(task.totalBytes) : 'Size unavailable'}',
+                            '${VideoQualityService.displayName(task.quality)}  •  $downloadSizeLabel',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -6507,7 +6517,7 @@ class DownloadsScreen extends StatelessWidget {
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(5),
                                   child: LinearProgressIndicator(
-                                    value: task.totalBytes > 0
+                                    value: task.totalSegments > 0 || task.totalBytes > 0
                                         ? task.progress
                                         : (completed ? 1 : null),
                                     minHeight: 6,
@@ -6520,9 +6530,11 @@ class DownloadsScreen extends StatelessWidget {
                               Text(
                                 completed
                                     ? '100%'
-                                    : task.totalBytes > 0
-                                        ? '$percent%'
-                                        : DownloadManager.formatBytes(task.bytesReceived),
+                                    : task.totalSegments > 0
+                                        ? '$percent% · ${task.completedSegments}/${task.totalSegments}'
+                                        : task.totalBytes > 0
+                                            ? '$percent%'
+                                            : DownloadManager.formatBytes(task.bytesReceived),
                                 style: TextStyle(
                                   color: statusColor,
                                   fontSize: 12,
