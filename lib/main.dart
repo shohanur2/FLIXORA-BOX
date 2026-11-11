@@ -376,6 +376,8 @@ class MiniPlayerSession {
   static VideoController? controller;
   static Movie? movie;
   static String? localFilePath;
+  static String currentUrl = '';
+  static String? selectedQuality;
   static OverlayEntry? _overlayEntry;
 
   static bool owns(Player candidate) => identical(player, candidate);
@@ -396,12 +398,16 @@ class MiniPlayerSession {
     required VideoController activeController,
     required Movie activeMovie,
     required String? activeLocalFilePath,
+    required String activeCurrentUrl,
+    required String? activeSelectedQuality,
     required VoidCallback onExpand,
   }) {
     player = activePlayer;
     controller = activeController;
     movie = activeMovie;
     localFilePath = activeLocalFilePath;
+    currentUrl = activeCurrentUrl;
+    selectedQuality = activeSelectedQuality;
     removeOverlay();
     _overlayEntry = OverlayEntry(
       builder: (_) => MiniPlayerOverlay(
@@ -422,6 +428,8 @@ class MiniPlayerSession {
     controller = null;
     movie = null;
     localFilePath = null;
+    currentUrl = '';
+    selectedQuality = null;
     if (oldPlayer != null) {
       try {
         await oldPlayer.dispose();
@@ -5831,6 +5839,38 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     subtitle: [SubtitleTrack.auto()],
   );
 
+  void _minimizePlayer() {
+    if (_selectedProviderSource != null || !mounted) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    MiniPlayerSession.show(
+      context: context,
+      activePlayer: _player,
+      activeController: _videoController,
+      activeMovie: widget.movie,
+      activeLocalFilePath: widget.localFilePath,
+      activeCurrentUrl: _currentVideoUrl,
+      activeSelectedQuality: _selectedQuality,
+      onExpand: () {
+        MiniPlayerSession.removeOverlay();
+        navigator.push(
+          MaterialPageRoute<void>(
+            builder: (_) => MoviePlayerScreen(
+              movie: widget.movie,
+              localFilePath: widget.localFilePath,
+              recommendedMovies: widget.recommendedMovies,
+              onMovieSelected: widget.onMovieSelected,
+              onSave: widget.onSave,
+              onDownload: widget.onDownload,
+              onViewDownloads: widget.onViewDownloads,
+              isOnline: widget.isOnline,
+            ),
+          ),
+        );
+      },
+    );
+    navigator.pop();
+  }
+
   static const MethodChannel _pictureInPictureChannel =
       MethodChannel('com.flixora.flixora/pip');
 
@@ -5932,13 +5972,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             adminVideoUrl: widget.movie.videoUrl,
           );
     _movieDetailsFuture = _loadPlayerMovieDetails();
-    _player = Player();
-    _videoController = VideoController(_player);
+    final reuseMiniPlayer = MiniPlayerSession.matches(
+      widget.movie,
+      widget.localFilePath,
+    );
+    if (reuseMiniPlayer) {
+      MiniPlayerSession.removeOverlay();
+      _player = MiniPlayerSession.player!;
+      _videoController = MiniPlayerSession.controller!;
+      _currentVideoUrl = MiniPlayerSession.currentUrl;
+      _selectedQuality = MiniPlayerSession.selectedQuality;
+      _position = _player.state.position;
+      _duration = _player.state.duration;
+      _isPlaying = _player.state.playing;
+      _tracks = _player.state.tracks;
+      _initialized = true;
+    } else {
+      if (MiniPlayerSession.player != null) {
+        unawaited(MiniPlayerSession.close());
+      }
+      _player = Player();
+      _videoController = VideoController(_player);
+    }
 
     _attachPlayerListeners();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
-    _prepareAndInitializePlayer();
+    if (reuseMiniPlayer) {
+      unawaited(_loadVideoQualities());
+    } else {
+      _prepareAndInitializePlayer();
+    }
   }
 
   Future<Map<String, dynamic>> _loadPlayerMovieDetails() async {
@@ -8285,6 +8349,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               onPressed: () {
                 if (_isFullscreen) {
                   _toggleFullscreen();
+                } else if (MiniPlayerSession.owns(_player) &&
+                    _selectedProviderSource == null) {
+                  _minimizePlayer();
                 } else {
                   Navigator.pop(context);
                 }
@@ -8336,6 +8403,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               tooltip: 'Video quality',
               enabled: _availableQualities.isNotEmpty,
               onPressed: _showQualitySelector,
+            ),
+          ],
+          if (_selectedProviderSource == null) ...[
+            const SizedBox(width: 3),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Mini player',
+                onPressed: _minimizePlayer,
+                icon: const Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  color: playerGoldLight,
+                  size: 22,
+                ),
+              ),
             ),
           ],
           if (_selectedProviderSource == null) ...[
@@ -8752,7 +8835,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       SystemUiMode.edgeToEdge,
     );
 
-    unawaited(_player.dispose());
+    if (!MiniPlayerSession.owns(_player)) {
+      unawaited(_player.dispose());
+    } else if (_selectedProviderSource != null) {
+      unawaited(MiniPlayerSession.close());
+    }
 
     super.dispose();
   }
@@ -9593,10 +9680,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_isFullscreen,
+      canPop: !_isFullscreen &&
+          (!MiniPlayerSession.owns(_player) || _selectedProviderSource != null),
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && _isFullscreen) {
           _toggleFullscreen();
+        } else if (!didPop &&
+            MiniPlayerSession.owns(_player) &&
+            _selectedProviderSource == null) {
+          _minimizePlayer();
         }
       },
       child: Scaffold(
