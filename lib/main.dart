@@ -1380,6 +1380,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
   List<MovieBoxHomeSection> _movieBoxSections = [];
+  final Map<String, Movie> _movieBoxMatchCache = {};
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -1415,6 +1416,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // common title punctuation and whitespace.
       .replaceAll(RegExp(r'[\s\-_.,:;!?()\[\]{}]+'), ' ')
       .trim();
+
+  String _movieBoxMatchKey(Movie movie) =>
+      '${movie.mediaType}:${_normalizedMovieTitle(movie.title)}:${movie.year}';
 
   List<Movie> _movieBoxSectionItems(MovieBoxHomeSection section) {
     final adminMatches = flixoraMovies.where((admin) {
@@ -1879,6 +1883,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .toList(growable: false);
       if (!mounted) return;
       setState(() => _movieBoxSections = sections);
+      for (final item in sections.expand((section) => section.items)) {
+        _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
+      }
       await MovieCache.saveMovieBoxSections(sections);
     } catch (error) {
       debugPrint('MovieBox/WeFeed home feed unavailable: $error');
@@ -2770,7 +2777,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Movie? _cachedMovieBoxMatch(Movie movie) {
     if (movie.isMovieBox) return movie;
-    for (final candidate in _movieBoxSections.expand((section) => section.items)) {
+    final key = _movieBoxMatchKey(movie);
+    final cached = _movieBoxMatchCache[key];
+    if (cached != null) return cached.withFallbackMetadata(movie);
+
+    final candidates = <Movie>[
+      ..._movieBoxSections.expand((section) => section.items),
+      ...searchResults.where((item) => item.isMovieBox),
+    ];
+    for (final candidate in candidates) {
       if (candidate.mediaType != movie.mediaType) continue;
       final sameTitle = _normalizedMovieTitle(candidate.title) ==
           _normalizedMovieTitle(movie.title);
@@ -2778,7 +2793,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           candidate.year == 'N/A' ||
           movie.year == 'N/A';
       if (sameTitle && sameYear) {
-        return candidate.withFallbackMetadata(movie);
+        final resolved = candidate.withFallbackMetadata(movie);
+        _movieBoxMatchCache[key] = resolved;
+        return resolved;
       }
     }
     return null;
@@ -2804,7 +2821,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             candidate.year == 'N/A' ||
             movie.year == 'N/A';
         if (sameTitle && sameYear) {
-          return candidate.withFallbackMetadata(movie);
+          final resolved = candidate.withFallbackMetadata(movie);
+          _movieBoxMatchCache[_movieBoxMatchKey(movie)] = resolved;
+          return resolved;
         }
       }
     } catch (error) {
