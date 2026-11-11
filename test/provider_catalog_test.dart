@@ -199,9 +199,9 @@ void main() {
       final sources = ProviderCatalog.forTv(tmdbId: 1429, aniListId: 16498);
 
       expect(sources.map((source) => source.id).take(3), [
+        'play4u-tv',
         'vidrift-anime-sub',
         'vidrift-anime-dub',
-        'play4u-tv',
       ]);
       expect(sources[0].url, contains('/embed/anilist/16498/1'));
       expect(sources[1].url, contains('&dub=1'));
@@ -295,7 +295,7 @@ void main() {
       expect(ProviderCatalog.allowsNavigation(pvr, uri), isTrue);
     });
 
-    test('allows approved HTTPS player subframes and blocks unknown hosts', () {
+    test('allows Play4U secure nested player hosts without allowing local targets', () {
       expect(
         ProviderCatalog.allowsSubframeNavigation(
           source,
@@ -306,14 +306,28 @@ void main() {
       expect(
         ProviderCatalog.allowsSubframeNavigation(
           source,
-          Uri.parse('https://www.youtube.com/embed/dQw4w9WgXcQ'),
+          Uri.parse('https://unknown-player.example/embed'),
         ),
         isTrue,
       );
       expect(
         ProviderCatalog.allowsSubframeNavigation(
           source,
-          Uri.parse('https://unknown-player.example/embed'),
+          Uri.parse('https://192.168.1.10/player/frame'),
+        ),
+        isFalse,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://127.0.0.1/player/frame'),
+        ),
+        isFalse,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://localhost/player/frame'),
         ),
         isFalse,
       );
@@ -323,6 +337,45 @@ void main() {
           Uri.parse('http://play4u.org/player/frame'),
         ),
         isFalse,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          source,
+          Uri.parse('https://user:pass@unknown-player.example/embed'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('keeps non-Play4U provider subframes on the strict host allowlist', () {
+      final yapgrid = ProviderCatalog.forMovie(tmdbId: 157336)[1];
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          yapgrid,
+          Uri.parse('https://yapgrid.com/player/frame'),
+        ),
+        isTrue,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          yapgrid,
+          Uri.parse('https://unknown-player.example/embed'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('allows secure nested hosts for Play4U TV episodes', () {
+      final play4uTv = ProviderCatalog.forTv(
+        tmdbId: 1399,
+        imdbId: 'tt0903747',
+      ).first;
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          play4uTv,
+          Uri.parse('https://video-cdn.example/player'),
+        ),
+        isTrue,
       );
     });
 
