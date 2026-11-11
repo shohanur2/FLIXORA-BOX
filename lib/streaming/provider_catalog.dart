@@ -305,10 +305,9 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        // The reference app embeds Play4U's own ?embed=1 page. In Flutter,
-        // open that embed-mode page as the WebView's top-level document so
-        // it is not nested inside an about:blank iframe wrapper.
-        loadInIframe: false,
+        // Match FLIXORA-REFERENCE: render Play4U's official embed-mode
+        // page in a full-size iframe with playback/fullscreen permissions.
+        loadInIframe: true,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
@@ -416,9 +415,9 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        // Use the same native WebView top-level loading strategy for the
-        // reference /series/{IMDb_ID}/s-XX/ep-XX?cont=1 embed route.
-        loadInIframe: false,
+        // Match the reference Player's full-size iframe for the exact
+        // selected /series/{IMDb_ID}/s-XX/ep-XX?cont=1 route.
+        loadInIframe: true,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
             : null,
@@ -480,12 +479,13 @@ class ProviderCatalog {
       ),
     ];
 
-    // AniList often represents each anime season as a separate entry.
-    // Keep its Sub/Dub sources first for season one, then offer every TV
-    // provider as a fallback for this exact TMDB season and episode.
+    // Keep Play4U as STREAM 1 for movies and series, matching the
+    // reference registry. Anime Sub/Dub remain immediately selectable
+    // alternatives after Play4U.
     if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
         if (adminSource != null) adminSource,
+        tvProviders.first,
         ProviderEmbedSource(
           id: 'vidrift-anime-sub',
           name: 'VidRift Anime · Sub',
@@ -502,7 +502,7 @@ class ProviderCatalog {
           loadInIframe: true,
           languageLabel: 'Dub',
         ),
-        ...tvProviders,
+        ...tvProviders.skip(1),
       ];
     }
 
@@ -564,6 +564,15 @@ class ProviderCatalog {
     }
 
     final host = uri.host.toLowerCase();
+
+    // The reference player embeds Play4U as a page, and that page owns its
+    // nested video-player frames. Those frames can use separate HTTPS hosts.
+    // Allow secure public hosts for Play4U only; keep local/private targets
+    // and insecure schemes blocked, and retain strict allowlists elsewhere.
+    if (source.id == 'play4u' || source.id == 'play4u-tv') {
+      return _isSafePublicHttpsSubframeHost(host);
+    }
+
     final approvedHosts = <String>{
       ...source.allowedHosts,
       ..._approvedRedirectHosts,
@@ -572,6 +581,20 @@ class ProviderCatalog {
       final domain = allowed.toLowerCase();
       return host == domain || host.endsWith('.$domain');
     });
+  }
+
+  static bool _isSafePublicHttpsSubframeHost(String host) {
+    if (host.isEmpty ||
+        host == 'localhost' ||
+        host.endsWith('.localhost') ||
+        host.endsWith('.local') ||
+        host.contains(':') ||
+        host == '0.0.0.0') {
+      return false;
+    }
+    return !RegExp(
+      r'^(?:10\\.|127\\.|169\\.254\\.|192\\.168\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.)',
+    ).hasMatch(host);
   }
 
   /// Only HTTPS navigation on the provider's own domain (or its subdomains)
