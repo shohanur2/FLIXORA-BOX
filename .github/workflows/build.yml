@@ -9,6 +9,7 @@ on:
       - feature/play4u-tv-series-provider
       - feature/flixora-home-search-redesign
       - feature/flixora-performance-smoothness
+      - feat/player-first-after-performance
   pull_request:
     branches:
       - main
