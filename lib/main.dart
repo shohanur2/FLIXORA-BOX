@@ -3229,52 +3229,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               return false;
             },
             child: PageView.builder(
-            controller: _sliderController,
-            physics: const BouncingScrollPhysics(),
-            itemCount: slides.length,
-            onPageChanged: (index) {
-              if (_slide != index) _slide = index;
-              _scrollFeaturedCardTo(index);
-            },
-            itemBuilder: (context, index) {
-              final movie = slides[index];
-              return GestureDetector(
-                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    movie.backdropUrl.isEmpty
-                        ? Container(color: panel)
-                        : FlixoraCachedImage(
-                            imageUrl: movie.backdropUrl,
-                            isOnline: _online,
-                            fit: BoxFit.cover,
-                            memCacheWidth: heroCacheWidth,
-                            memCacheHeight: heroCacheHeight,
-                            placeholder: Container(color: panel),
-                            fallback: Container(color: panel),
+              controller: _sliderController,
+              physics: const BouncingScrollPhysics(),
+              allowImplicitScrolling: true,
+              itemCount: slides.length,
+              onPageChanged: (index) {
+                if (_slide != index) _slide = index;
+                _scrollFeaturedCardTo(index);
+              },
+              itemBuilder: (context, index) {
+                final movie = slides[index];
+                return GestureDetector(
+                  onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      movie.backdropUrl.isEmpty
+                          ? Container(color: panel)
+                          : FlixoraCachedImage(
+                              imageUrl: movie.backdropUrl,
+                              isOnline: _online,
+                              fit: BoxFit.cover,
+                              memCacheWidth: heroCacheWidth,
+                              memCacheHeight: heroCacheHeight,
+                              placeholder: Container(color: panel),
+                              fallback: Container(color: panel),
+                            ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x55000000),
+                              Color(0x08000000),
+                              Colors.transparent,
+                              Color(0xFF080808),
+                            ],
+                            stops: [0, 0.28, 0.58, 1],
                           ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Color(0x55000000),
-                            Color(0x08000000),
-                            Colors.transparent,
-                            Color(0xFF080808),
-                          ],
-                          stops: [0, 0.28, 0.58, 1],
                         ),
                       ),
-                    ),
-                    _titleOpeningOverlay(movie),
-                  ],
-                ),
-              );
-            },
-          ),
+                      _titleOpeningOverlay(movie),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
           Positioned(
             left: 0,
@@ -4285,6 +4286,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         )
                       : ListView.builder(
+                          key: const PageStorageKey<String>('flixora-search-results'),
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.only(top: 4, bottom: 18),
                           itemCount: filtered.length,
@@ -7031,16 +7033,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           final year = firstAirDate.length >= 4
               ? firstAirDate.substring(0, 4)
               : widget.movie.year;
-          unawaited(AniListService.findMatchingAnimeId(
+          _aniListId = await AniListService.findMatchingAnimeId(
             title: (details['name'] ?? widget.movie.title).toString(),
             year: year,
-          ).then((aniListId) async {
-            if (!mounted || _isDisposed) return;
-            _aniListId = aniListId;
-            await _refreshTvProviderSources();
-          }).catchError((Object error) {
-            debugPrint('AniList episode mapping failed: $error');
-          }));
+          );
         }
         unawaited(_loadTvSeasonEpisodes(firstSeason));
       } else {
@@ -8137,13 +8133,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _prepareAndInitializePlayer() async {
-    // Load Admin quality URLs before opening the player. This allows playback
-    // even when the legacy movies.video_url field is empty.
-    await _loadVideoQualities();
-    if (!mounted || _isDisposed) return;
-
-    // Admin-managed MP4/HLS always gets the first chance to play.
-    await _initializePlayer();
+    // If an Admin direct URL is already present, start it immediately while
+    // quality alternatives load in parallel. When the URL is only in the
+    // quality table, wait for that lookup before choosing a fallback provider.
+    final hasLegacyDirectUrl = _resolveInitialNetworkUrl().isNotEmpty;
+    if (hasLegacyDirectUrl) {
+      unawaited(_loadVideoQualities());
+      await _initializePlayer();
+    } else {
+      await _loadVideoQualities();
+      if (!mounted || _isDisposed) return;
+      await _initializePlayer();
+    }
     if (!mounted || _isDisposed || _validVideoUrl ||
         widget.localFilePath != null) {
       return;
