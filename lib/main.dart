@@ -3440,91 +3440,472 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(12),
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        childAspectRatio: 0.53,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 14,
+        childAspectRatio: 0.60,
+        crossAxisSpacing: 9,
+        mainAxisSpacing: 12,
       ),
       itemCount: movies.length,
       itemBuilder: (context, index) {
         final movie = movies[index];
-
-        return GestureDetector(
-          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: movie.posterUrl.isEmpty
-                        ? Container(
-                            color: panel,
-                            child: const Icon(
-                              Icons.movie,
-                              color: gold,
-                            ),
-                          )
-                        : FlixoraCachedImage(
-                            imageUrl: movie.posterUrl,
-                            isOnline: _online,
-                            fit: BoxFit.cover,
-                            fallback: Container(
-                              color: panel,
-                              child: const Icon(
-                                Icons.movie,
-                                color: gold,
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF17181C),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF292B31), width: 0.8),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(7),
+                      ),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          movie.posterUrl.isEmpty
+                              ? Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                )
+                              : FlixoraCachedImage(
+                                  imageUrl: movie.posterUrl,
+                                  isOnline: _online,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 300,
+                                  memCacheHeight: 450,
+                                  fallback: Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold),
+                                  ),
+                                ),
+                          if (_hasHindiAudio(movie))
+                            Positioned(
+                              top: 5,
+                              right: 5,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xDD111216),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'Hindi',
+                                  style: TextStyle(
+                                    color: white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                  Container(
+                    height: 38,
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF202126),
+                      borderRadius: BorderRadius.vertical(
+                        bottom: Radius.circular(7),
+                      ),
+                    ),
+                    child: Text(
+                      _displayTitle(movie),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                movie.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 11,
-                ),
-              ),
-              Text(
-                movie.year,
-                style: const TextStyle(
-                  color: ink54,
-                  fontSize: 10,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
     );
   }
-  Widget _searchContent() {
-    if (_searchLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: gold),
-      );
-    }
 
-    if (searchResults.isEmpty) {
-      return Center(
-        child: Text(
-          _searchError ?? 'Search movies, TV shows, web series, dramas and anime.',
-          style: const TextStyle(color: ink54),
+  Widget _searchFilterBar(List<Movie> source) {
+    final filters = _availableSearchFilters(source);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 22),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final active = filter == selected;
+          return InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => setState(() => _searchCategory = filter),
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.only(top: 2, bottom: 5),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: active ? gold : Colors.transparent,
+                    width: 2.5,
+                  ),
+                ),
+              ),
+              child: Text(
+                filter,
+                style: TextStyle(
+                  color: active ? white : ink60,
+                  fontSize: 14,
+                  fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _searchForTitle(String title) {
+    _searchController.text = title;
+    _searchController.selection = TextSelection.collapsed(
+      offset: title.length,
+    );
+    _onSearchChanged(title);
+    if (!_searchOpen) _openSearch();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  Widget _searchResultRow(Movie movie, {int? rank}) {
+    final metadata = <String>[
+      if (movie.rating > 0) movie.rating.toStringAsFixed(1),
+      if (movie.year.isNotEmpty && movie.year != 'N/A') movie.year,
+      if (movie.originCountry.isNotEmpty) movie.originCountry,
+      if (movie.genres.isNotEmpty) movie.genres.first,
+    ].join(' | ');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Material(
+        color: const Color(0xFF15161A),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+          child: SizedBox(
+            height: 94,
+            child: Row(
+              children: [
+                const SizedBox(width: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    width: 62,
+                    height: 82,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(Icons.movie, color: gold),
+                              )
+                            : FlixoraCachedImage(
+                                imageUrl: movie.posterUrl,
+                                isOnline: _online,
+                                fit: BoxFit.cover,
+                                memCacheWidth: 186,
+                                memCacheHeight: 246,
+                                fallback: Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                ),
+                              ),
+                        if (rank != null)
+                          Positioned(
+                            left: 0,
+                            top: 0,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 3,
+                              ),
+                              decoration: const BoxDecoration(
+                                color: gold,
+                                borderRadius: BorderRadius.only(
+                                  bottomRight: Radius.circular(6),
+                                ),
+                              ),
+                              child: Text(
+                                '$rank',
+                                style: const TextStyle(
+                                  color: Color(0xFF171717),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_hasHindiAudio(movie))
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              color: const Color(0xCC111216),
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: const Text(
+                                'Hindi',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _displayTitle(movie),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Row(
+                          children: [
+                            Icon(
+                              movie.mediaType == 'tv'
+                                  ? Icons.live_tv_rounded
+                                  : Icons.movie_creation_outlined,
+                              color: ink60,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            if (movie.rating > 0) ...[
+                              const Icon(
+                                Icons.star_rounded,
+                                color: premiumGold,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 2),
+                            ],
+                            Expanded(
+                              child: Text(
+                                metadata,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: ink60,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Play ${movie.title}',
+                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
+                  icon: const CircleAvatar(
+                    radius: 15,
+                    backgroundColor: gold,
+                    child: Icon(
+                      Icons.play_arrow_rounded,
+                      color: Color(0xFF151515),
+                      size: 21,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+            ),
+          ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    return _collectionContent('Search Results', searchResults);
+  Widget _searchLandingContent() {
+    final discovery = _searchDiscoveryMovies();
+    final suggestions = _searchSuggestions();
+    final filters = _availableSearchFilters(discovery);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    final visible = _filterSearchMovies(discovery, selected)
+        .take(16)
+        .toList();
+
+    return ListView(
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: const EdgeInsets.only(bottom: 20),
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 16, 10),
+          child: Text(
+            '🔥 Everyone is searching',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: suggestions.map((movie) {
+              return ActionChip(
+                backgroundColor: const Color(0xFF25262B),
+                side: BorderSide.none,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Text(
+                    _displayTitle(movie),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                onPressed: () => _searchForTitle(movie.title),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _searchFilterBar(discovery),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text(
+            'Trending now',
+            style: TextStyle(
+              color: white,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        if (visible.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No titles available yet.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: ink60),
+            ),
+          )
+        else
+          ...List.generate(
+            visible.length,
+            (index) => _searchResultRow(visible[index], rank: index + 1),
+          ),
+      ],
+    );
+  }
+
+  Widget _searchContent() {
+    final filters = _availableSearchFilters(searchResults);
+    return Column(
+      children: [
+        _searchFilterBar(searchResults),
+        Expanded(
+          child: _searchLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: gold),
+                )
+              : searchResults.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          _searchError ?? 'No results found.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: ink60),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      physics: const BouncingScrollPhysics(),
+                      padding: const EdgeInsets.only(top: 4, bottom: 18),
+                      itemCount: _filterSearchMovies(
+                        searchResults,
+                        filters.contains(_searchCategory)
+                            ? _searchCategory
+                            : 'All',
+                      ).length,
+                      itemBuilder: (context, index) {
+                        final filtered = _filterSearchMovies(
+                          searchResults,
+                          filters.contains(_searchCategory)
+                              ? _searchCategory
+                              : 'All',
+                        );
+                        return _searchResultRow(filtered[index]);
+                      },
+                    ),
+        ),
+      ],
+    );
   }
 
   Widget _downloadsContent() {
