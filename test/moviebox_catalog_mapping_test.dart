@@ -65,5 +65,28 @@ void main() {
       expect(restored.items.single.movieBoxId, 'mb-9001');
       expect(restored.isBanner, isTrue);
     });
+
+    test('persists direct-download headers and episode identity', () {
+      final task = DownloadTask(
+        movieId: -9001,
+        title: 'The Example Series',
+        poster: 'https://cdn.example.test/poster.jpg',
+        videoUrl: 'https://cdn.example.test/episode.mp4',
+        quality: 'Original · 1080p · MP4',
+        headers: const {
+          'Referer': 'https://movie-box.co/',
+          'User-Agent': 'FLIXORA-Test',
+        },
+        seasonNumber: 2,
+        episodeNumber: 5,
+      );
+
+      final restored = DownloadTask.fromJson(task.toJson());
+      expect(restored.headers['Referer'], 'https://movie-box.co/');
+      expect(restored.headers['User-Agent'], 'FLIXORA-Test');
+      expect(restored.seasonNumber, 2);
+      expect(restored.episodeNumber, 5);
+      expect(restored.displayTitle, 'The Example Series • S02 E05');
+    });
   });
 }
