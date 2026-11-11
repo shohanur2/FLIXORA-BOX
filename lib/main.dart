@@ -2905,6 +2905,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     : '');
             final genreLabel =
                 movie.genres.isNotEmpty ? movie.genres.first : typeLabel;
+            final metadataLabel = <String>[
+              if (yearLabel.isNotEmpty) yearLabel,
+              if (genreLabel.isNotEmpty) genreLabel,
+            ].join(' | ');
 
             return GestureDetector(
               onTap: _isOpeningTitle ? null : () => _playMovie(movie),
@@ -2962,7 +2966,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         const SizedBox(width: 4),
                                         Expanded(
                                           child: Text(
-                                            '$yearLabel  |  $genreLabel',
+                                            metadataLabel,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
@@ -2996,41 +3000,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         top: 0,
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(6),
-                          child: movie.posterUrl.isEmpty
-                              ? Container(
-                                  width: FeaturedCarouselLayout.posterWidth,
-                                  height: FeaturedCarouselLayout.posterHeight,
-                                  color: const Color(0xFF292929),
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                    size: 18,
-                                  ),
-                                )
-                              : FlixoraCachedImage(
-                                  imageUrl: movie.posterUrl,
-                                  isOnline: _online,
-                                  fit: BoxFit.cover,
-                                  memCacheWidth:
-                                      FeaturedCarouselLayout.posterWidth * 3,
-                                  memCacheHeight:
-                                      FeaturedCarouselLayout.posterHeight * 3,
-                                  placeholder: Container(
-                                    width: FeaturedCarouselLayout.posterWidth,
-                                    height: FeaturedCarouselLayout.posterHeight,
-                                    color: const Color(0xFF292929),
-                                  ),
-                                  fallback: Container(
-                                    width: FeaturedCarouselLayout.posterWidth,
-                                    height: FeaturedCarouselLayout.posterHeight,
+                          child: SizedBox(
+                            width: FeaturedCarouselLayout.posterWidth,
+                            height: FeaturedCarouselLayout.posterHeight,
+                            child: movie.posterUrl.isEmpty
+                                ? Container(
                                     color: const Color(0xFF292929),
                                     child: const Icon(
                                       Icons.movie,
                                       color: gold,
                                       size: 18,
                                     ),
+                                  )
+                                : FlixoraCachedImage(
+                                    imageUrl: movie.posterUrl,
+                                    isOnline: _online,
+                                    fit: BoxFit.cover,
+                                    memCacheWidth:
+                                        FeaturedCarouselLayout.posterWidth * 3,
+                                    memCacheHeight:
+                                        FeaturedCarouselLayout.posterHeight * 3,
+                                    placeholder: Container(
+                                      color: const Color(0xFF292929),
+                                    ),
+                                    fallback: Container(
+                                      color: const Color(0xFF292929),
+                                      child: const Icon(
+                                        Icons.movie,
+                                        color: gold,
+                                        size: 18,
+                                      ),
+                                    ),
                                   ),
-                                ),
+                          ),
                         ),
                       ),
                     ],
