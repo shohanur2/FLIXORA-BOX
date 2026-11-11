@@ -2310,23 +2310,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     var resolvedSeason = seasonNumber ?? 0;
     var resolvedEpisode = episodeNumber ?? 0;
     if (movie.isMovieBox && movie.movieBoxIsSeries) {
-      final seasons = await MovieBoxService.seasons(movie.movieBoxId);
-      if (seasons.isEmpty) {
-        _showMessage('No seasons are available to download for this series.');
+      try {
+        final seasons = await MovieBoxService.seasons(movie.movieBoxId);
+        if (seasons.isEmpty) {
+          _showMessage('No seasons are available to download for this series.');
+          return;
+        }
+        final season = seasons.firstWhere(
+          (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
+          orElse: () => seasons.first,
+        );
+        resolvedSeason = _toInt(season['se']);
+        final episodes = (season['episodes'] as List? ?? const [])
+            .map(_toInt)
+            .where((number) => number > 0)
+            .toList(growable: false);
+        if (resolvedEpisode <= 0 ||
+            (episodes.isNotEmpty && !episodes.contains(resolvedEpisode))) {
+          resolvedEpisode = episodes.isNotEmpty ? episodes.first : 1;
+        }
+      } catch (error) {
+        debugPrint('MovieBox season lookup for download failed: $error');
+        _showMessage('Could not load this series episode list. Please retry.');
         return;
-      }
-      final season = seasons.firstWhere(
-        (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
-        orElse: () => seasons.first,
-      );
-      resolvedSeason = _toInt(season['se']);
-      final episodes = (season['episodes'] as List? ?? const [])
-          .map(_toInt)
-          .where((number) => number > 0)
-          .toList(growable: false);
-      if (resolvedEpisode <= 0 ||
-          (episodes.isNotEmpty && !episodes.contains(resolvedEpisode))) {
-        resolvedEpisode = episodes.isNotEmpty ? episodes.first : 1;
       }
     }
 
@@ -2350,13 +2356,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final rawOptions = movie.isMovieBox
-        ? await _movieBoxDirectDownloadOptions(
-            movie,
-            season: resolvedSeason,
-            episode: resolvedEpisode,
-          )
-        : await FlixoraMovieService.getDownloadQualities(movie);
+    List<Map<String, String>> rawOptions;
+    try {
+      rawOptions = movie.isMovieBox
+          ? await _movieBoxDirectDownloadOptions(
+              movie,
+              season: resolvedSeason,
+              episode: resolvedEpisode,
+            )
+          : await FlixoraMovieService.getDownloadQualities(movie);
+    } catch (error) {
+      debugPrint('Download source lookup failed: $error');
+      rawOptions = <Map<String, String>>[];
+    }
     if (!mounted) return;
     if (rawOptions.isEmpty) {
       _showMessage(
