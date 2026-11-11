@@ -14,6 +14,101 @@ void main() {
     });
   });
 
+  group('PublicDomainMovieSourceService', () {
+    test('accepts explicit Public Domain Mark and CC0 declarations', () {
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'licenseurl': 'https://creativecommons.org/publicdomain/mark/1.0/',
+        }),
+        isTrue,
+      );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'licenseurl': 'https://creativecommons.org/publicdomain/zero/1.0/',
+        }),
+        isTrue,
+      );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'rights': 'This film is in the public domain.',
+        }),
+        isTrue,
+      );
+    });
+
+    test('rejects missing or restrictive copyright declarations', () {
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'licenseurl': 'https://creativecommons.org/licenses/by-nc/4.0/',
+          'rights': 'All rights reserved.',
+        }),
+        isFalse,
+      );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0(const {}),
+        isFalse,
+      );
+    });
+
+    test('only accepts safe Archive identifiers', () {
+      expect(
+        PublicDomainMovieSourceService.isSafeIdentifier('feature_film-1930'),
+        isTrue,
+      );
+      expect(
+        PublicDomainMovieSourceService.isSafeIdentifier('../private'),
+        isFalse,
+      );
+      expect(
+        PublicDomainMovieSourceService.isSafeIdentifier('x'),
+        isFalse,
+      );
+    });
+
+    test('requires a public video file and rejects private files', () {
+      expect(
+        PublicDomainMovieSourceService.hasSupportedVideoFile([
+          {'name': 'film.mp4'},
+        ]),
+        isTrue,
+      );
+      expect(
+        PublicDomainMovieSourceService.hasSupportedVideoFile([
+          {'name': 'film.mp4', 'private': 'true'},
+        ]),
+        isFalse,
+      );
+      expect(
+        PublicDomainMovieSourceService.hasSupportedVideoFile([
+          {'name': 'film.zip'},
+          {'name': 'poster.jpg'},
+        ]),
+        isFalse,
+      );
+      expect(
+        PublicDomainMovieSourceService.hasSupportedVideoFile(null),
+        isFalse,
+      );
+    });
+
+    test('does not search TV episodes or blank titles', () async {
+      expect(
+        await PublicDomainMovieSourceService.discover(
+          '   ',
+          isTv: false,
+        ),
+        isEmpty,
+      );
+      expect(
+        await PublicDomainMovieSourceService.discover(
+          'Example Series',
+          isTv: true,
+        ),
+        isEmpty,
+      );
+    });
+  });
+
   group('ProviderEmbedSource direct media', () {
     test('embed sources default to WebView mode', () {
       const source = ProviderEmbedSource(
