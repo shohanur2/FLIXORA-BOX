@@ -392,6 +392,21 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
                           label: 'Box office',
                           value: data.omdb!.boxOffice,
                         ),
+                      if (data.omdb!.awards.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Awards',
+                          value: data.omdb!.awards,
+                        ),
+                      if (data.omdb!.country.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Country',
+                          value: data.omdb!.country,
+                        ),
+                      if (data.omdb!.language.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Language',
+                          value: data.omdb!.language,
+                        ),
                     ],
                   ),
                 ),
