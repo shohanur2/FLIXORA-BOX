@@ -281,6 +281,7 @@ class PeerTubeSourceService {
   static String _normalize(String value) {
     return value
         .toLowerCase()
+        .replaceAll(RegExp(r'\b(19|20)\d{2}\b'), ' ')
         .replaceAll(RegExp(r'[\s._\-:;|,()\[\]{}!?]+'), ' ')
         .trim()
         .replaceAll(RegExp(r'\s+'), ' ');
