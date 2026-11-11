@@ -2476,9 +2476,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _openingTitleNotifier.value = null;
   }
 
-  bool _isTitleOpening(Movie movie) =>
-      _openingTitleNotifier.value == _titleOpeningKey(movie);
-
   Widget _titleOpeningOverlay(Movie movie) {
     return ValueListenableBuilder<String?>(
       valueListenable: _openingTitleNotifier,
