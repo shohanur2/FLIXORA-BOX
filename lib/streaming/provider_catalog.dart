@@ -305,7 +305,10 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        loadInIframe: true,
+        // The reference app embeds Play4U's own ?embed=1 page. In Flutter,
+        // open that embed-mode page as the WebView's top-level document so
+        // it is not nested inside an about:blank iframe wrapper.
+        loadInIframe: false,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
@@ -413,7 +416,9 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        loadInIframe: true,
+        // Use the same native WebView top-level loading strategy for the
+        // reference /series/{IMDb_ID}/s-XX/ep-XX?cont=1 embed route.
+        loadInIframe: false,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
             : null,
