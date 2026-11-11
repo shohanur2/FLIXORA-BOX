@@ -13,6 +13,14 @@ class DownloadTask {
     String? taskId,
     this.tmdbId = 0,
     this.mediaType = 'movie',
+    this.downloadType = 'direct',
+    this.audioUrl,
+    this.audioName,
+    this.manifestBandwidth = 0,
+    this.manifestResolution,
+    this.downloadDirectory,
+    this.totalSegments = 0,
+    this.completedSegments = 0,
     this.seasonNumber,
     this.episodeNumber,
     this.episodeTitle = '',
@@ -34,6 +42,14 @@ class DownloadTask {
   final String videoUrl;
   final String quality;
   final String mediaType;
+  final String downloadType;
+  final String? audioUrl;
+  final String? audioName;
+  final int manifestBandwidth;
+  final String? manifestResolution;
+  String? downloadDirectory;
+  int totalSegments;
+  int completedSegments;
   final int? seasonNumber;
   final int? episodeNumber;
   final String episodeTitle;
@@ -64,6 +80,14 @@ class DownloadTask {
         'videoUrl': videoUrl,
         'quality': quality,
         'mediaType': mediaType,
+        'downloadType': downloadType,
+        'audioUrl': audioUrl,
+        'audioName': audioName,
+        'manifestBandwidth': manifestBandwidth,
+        'manifestResolution': manifestResolution,
+        'downloadDirectory': downloadDirectory,
+        'totalSegments': totalSegments,
+        'completedSegments': completedSegments,
         'seasonNumber': seasonNumber,
         'episodeNumber': episodeNumber,
         'episodeTitle': episodeTitle,
@@ -89,6 +113,14 @@ class DownloadTask {
       videoUrl: (json['videoUrl'] ?? '').toString(),
       quality: quality,
       mediaType: (json['mediaType'] ?? 'movie').toString(),
+      downloadType: (json['downloadType'] ?? 'direct').toString(),
+      audioUrl: json['audioUrl']?.toString(),
+      audioName: json['audioName']?.toString(),
+      manifestBandwidth: _toInt(json['manifestBandwidth']),
+      manifestResolution: json['manifestResolution']?.toString(),
+      downloadDirectory: json['downloadDirectory']?.toString(),
+      totalSegments: _toInt(json['totalSegments']),
+      completedSegments: _toInt(json['completedSegments']),
       seasonNumber: json['seasonNumber'] == null
           ? null
           : _toInt(json['seasonNumber']),
