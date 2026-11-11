@@ -6,9 +6,12 @@ on:
   push:
     branches:
       - main
+      - feature/play4u-tv-series-provider
+      - feature/flixora-home-search-redesign
   pull_request:
     branches:
       - main
+      - feature/play4u-tv-series-provider
 
 permissions:
   contents: read

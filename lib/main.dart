@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
@@ -13,7 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
@@ -58,12 +57,12 @@ Future<void> main() async {
   runApp(const FlixoraApp());
 }
 
-// FLIXORA cinematic surfaces: Netflix-inspired black, red and premium gold.
+// FLIXORA cinematic surfaces: deep black, white typography and warm gold.
 const Color bg = Color(0xFF080808);
 const Color panel = Color(0xFF181818);
-const Color gold = Color(0xFFE50914); // Primary Netflix red accent.
-const Color goldLight = Color(0xFFFF4652);
-const Color premiumGold = Color(0xFFD6AD45);
+const Color gold = Color(0xFFD6AD45);
+const Color goldLight = Color(0xFFF2CF75);
+const Color premiumGold = Color(0xFFE8C15A);
 const Color white = Color(0xFFFFFFFF);
 const Color ink = Color(0xFFFFFFFF);
 const Color ink70 = Color(0xB3FFFFFF);
@@ -76,9 +75,20 @@ const Color ink12 = Color(0x1FFFFFFF);
 const Color ink10 = Color(0x1AFFFFFF);
 const Color playerBg = Color(0xFF080808);
 const Color playerPanel = Color(0xFF191919);
-const Color playerGold = Color(0xFFE50914);
-const Color playerGoldLight = Color(0xFFFF6670);
+const Color playerGold = Color(0xFFD6AD45);
+const Color playerGoldLight = Color(0xFFF2CF75);
 const Color playerWhite = Colors.white;
+
+// Keep loaded posters/backdrops available for offline browsing for longer
+// than the package's small default cache.
+final cache_manager.CacheManager flixoraImageCacheManager =
+    cache_manager.CacheManager(
+  cache_manager.Config(
+    'libCachedImageData',
+    stalePeriod: const Duration(days: 90),
+    maxNrOfCacheObjects: 600,
+  ),
+);
 
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
@@ -325,8 +335,9 @@ class Movie {
 }
 
 /// Displays network images online, but reads disk cache only while offline.
-/// A cache miss offline never starts a network request.
-class FlixoraCachedImage extends StatelessWidget {
+/// The offline cache lookup is retained between parent rebuilds, and a cache
+/// miss offline never starts a network request.
+class FlixoraCachedImage extends StatefulWidget {
   final String imageUrl;
   final BoxFit fit;
   final bool isOnline;
@@ -347,35 +358,70 @@ class FlixoraCachedImage extends StatelessWidget {
   });
 
   @override
+  State<FlixoraCachedImage> createState() => _FlixoraCachedImageState();
+}
+
+class _FlixoraCachedImageState extends State<FlixoraCachedImage> {
+  Future<cache_manager.FileInfo?>? _offlineFileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepareOfflineLookup();
+  }
+
+  void _prepareOfflineLookup() {
+    _offlineFileFuture = widget.imageUrl.isNotEmpty && !widget.isOnline
+        ? flixoraImageCacheManager.getFileFromCache(widget.imageUrl)
+        : null;
+  }
+
+  @override
+  void didUpdateWidget(covariant FlixoraCachedImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.isOnline != widget.isOnline) {
+      _prepareOfflineLookup();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final empty = fallback ?? Container(color: panel);
-    if (imageUrl.isEmpty) return empty;
-    if (isOnline) {
-      return CachedNetworkImage(
-        imageUrl: imageUrl,
-        fit: fit,
-        memCacheWidth: memCacheWidth,
-        memCacheHeight: memCacheHeight,
-        useOldImageOnUrlChange: true,
-        placeholder: (_, __) => placeholder ?? Container(color: panel),
-        errorWidget: (_, __, ___) => empty,
+    final empty = widget.fallback ?? const ColoredBox(color: panel);
+    if (widget.imageUrl.isEmpty) return empty;
+
+    if (widget.isOnline) {
+      return RepaintBoundary(
+        child: CachedNetworkImage(
+          imageUrl: widget.imageUrl,
+          cacheManager: flixoraImageCacheManager,
+          fit: widget.fit,
+          memCacheWidth: widget.memCacheWidth,
+          memCacheHeight: widget.memCacheHeight,
+          useOldImageOnUrlChange: true,
+          placeholder: (_, __) =>
+              widget.placeholder ?? const ColoredBox(color: panel),
+          errorWidget: (_, __, ___) => empty,
+        ),
       );
     }
 
-    return FutureBuilder<FileInfo?>(
-      future: DefaultCacheManager().getFileFromCache(imageUrl),
+    return FutureBuilder<cache_manager.FileInfo?>(
+      future: _offlineFileFuture,
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
         if (file != null && file.existsSync()) {
-          return Image.file(
-            file,
-            fit: fit,
-            cacheWidth: memCacheWidth,
-            cacheHeight: memCacheHeight,
+          return RepaintBoundary(
+            child: Image.file(
+              file,
+              fit: widget.fit,
+              cacheWidth: widget.memCacheWidth,
+              cacheHeight: widget.memCacheHeight,
+            ),
           );
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return placeholder ?? Container(color: panel);
+          return widget.placeholder ?? const ColoredBox(color: panel);
         }
         return empty;
       },
@@ -387,6 +433,12 @@ class InternetService {
   static DateTime? _lastCheckAt;
   static bool? _lastCheckResult;
   static Future<bool>? _inFlight;
+
+  /// Forces the next connectivity check to verify the live internet path.
+  static void invalidate() {
+    _lastCheckAt = null;
+    _lastCheckResult = null;
+  }
 
   static Future<bool> isOnline() async {
     try {
@@ -425,19 +477,17 @@ class InternetService {
   }
 
   static Future<bool> _probeInternet() async {
-    final endpoints = <Uri>[
-      Uri.parse('https://www.google.com/generate_204'),
-      Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
-      Uri.parse('https://image.tmdb.org/t/p/w92/'),
-      Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
+    const endpoints = <String>[
+      'https://www.google.com/generate_204',
+      'https://connectivitycheck.gstatic.com/generate_204',
     ];
 
     final reachable = await Future.wait<bool>(
       endpoints.map((endpoint) async {
         try {
           final response = await http
-              .get(endpoint)
-              .timeout(const Duration(seconds: 3));
+              .get(Uri.parse(endpoint))
+              .timeout(const Duration(milliseconds: 1800));
           return response.statusCode < 500;
         } catch (_) {
           return false;
@@ -1121,10 +1171,8 @@ class FlixoraApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Flixora',
       theme: ThemeData(
-        fontFamily: GoogleFonts.robotoSlab().fontFamily,
-        textTheme: GoogleFonts.robotoSlabTextTheme(
-          ThemeData.dark().textTheme,
-        ),
+        fontFamily: 'Roboto',
+        textTheme: ThemeData.dark().textTheme.apply(fontFamily: 'Roboto'),
         brightness: Brightness.dark,
         scaffoldBackgroundColor: bg,
         colorScheme: ColorScheme.fromSeed(
@@ -1169,6 +1217,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final PageController _sliderController = PageController();
   final ScrollController _featuredCardsController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
 
   Timer? _timer;
   Timer? _networkTimer;
@@ -1188,8 +1237,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _ottTitlesLoading = false;
   String? _ottProvidersError;
   String? _ottTitlesError;
-  String _librarySection = 'Downloads';
+  String _librarySection = 'My List';
   bool _showRanking = false;
+  bool _searchOpen = false;
+  String _searchCategory = 'All';
   bool _rankingTv = false;
   String _rankingCategory = 'Cinema';
 
@@ -1202,8 +1253,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _connectionKnown = false;
   bool _refreshing = false;
   bool _checkingConnection = false;
-  bool _isOpeningTitle = false;
-  String? _openingTitleKey;
+  bool _noInternetScreenOpen = false;
+  final ValueNotifier<String?> _openingTitleNotifier = ValueNotifier(null);
+  List<Movie>? _allMoviesMemo;
+  List<Movie>? _homeTrendingMemo;
+  final Map<String, Movie> _resolvedAdminMovies = {};
+  final Set<String> _resolvedAdminChecked = {};
+  final Set<String> _blockedAdminMovies = {};
 
   String? homeError;
 
@@ -1271,6 +1327,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// trending endpoint temporarily returns an empty response. Admin records
   /// stay first so they retain precedence over matching TMDB catalogue items.
   List<Movie> _homeTrendingMovies() {
+    final cached = _homeTrendingMemo;
+    if (cached != null) return cached;
+
     final primary = _withoutFlixoraDuplicates(trending)
         .where((title) => title.mediaType == 'movie')
         .toList();
@@ -1288,8 +1347,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .where((title) => title.mediaType == 'movie'));
     }
 
-    return _deduplicateMovies(candidates);
+    return _homeTrendingMemo = _deduplicateMovies(candidates);
   }
+
+  void _invalidateCatalogueMemo() {
+    _allMoviesMemo = null;
+    _homeTrendingMemo = null;
+  }
+
+  bool get _isOpeningTitle => _openingTitleNotifier.value != null;
 
   bool _isAnimeTitle(Movie title) {
     final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
@@ -1297,6 +1363,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         (genres.contains('animation') &&
             (title.originalLanguage.toLowerCase() == 'ja' ||
                 title.originCountry.toUpperCase() == 'JP'));
+  }
+
+  bool _hasHindiAudio(Movie movie) {
+    return movie.audioLanguages.any((language) {
+      final value = language.trim().toLowerCase();
+      return value == 'hi' || value.contains('hindi');
+    }) || movie.originalLanguage.toLowerCase() == 'hi';
+  }
+
+  String _displayTitle(Movie movie) {
+    if (_hasHindiAudio(movie) &&
+        !movie.title.toLowerCase().contains('[hindi]')) {
+      return '${movie.title} [Hindi]';
+    }
+    return movie.title;
   }
 
   /// TMDB does not define "Web Series" as a TV genre. Prefer titles explicitly
@@ -1349,9 +1430,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     _timer = Timer.periodic(
-      const Duration(seconds: 7),
+      const Duration(seconds: 5),
       (_) {
-        if (!mounted || _tab != 0) return;
+        if (!mounted ||
+            _tab != 0 ||
+            _isOpeningTitle ||
+            !(ModalRoute.of(context)?.isCurrent ?? true)) {
+          return;
+        }
 
         final slideCount = _homeTrendingMovies().length;
         final visibleCount = slideCount < 5 ? slideCount : 5;
@@ -1539,6 +1625,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
+    _invalidateCatalogueMemo();
+    _resolvedAdminMovies.clear();
+    _resolvedAdminChecked.clear();
+    _blockedAdminMovies.clear();
     setState(() {
       trending = results[0];
       popular = results[1];
@@ -1575,9 +1665,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _connectionKnown = true;
             if (_allMovies().isEmpty) homeError = 'offline';
           });
+          // Keep the cached Search screen available while offline.
+          // Opening a title, not opening Search, is what requires internet.
           return;
         }
 
+        InternetService.invalidate();
         final online = await InternetService.isOnline();
 
         if (!mounted) return;
@@ -1590,6 +1683,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
 
         if (online && wasOffline) {
+          _dismissNoInternetScreen();
           await loadHome();
 
           if (_search.trim().isNotEmpty) {
@@ -1621,7 +1715,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (!online && _allMovies().isEmpty) homeError = 'offline';
       });
 
+      // Do not replace Search with the offline screen just because the
+      // connection dropped. Cached catalogue entries remain searchable.
       if (online && wasOffline) {
+        _dismissNoInternetScreen();
         await Future.wait<void>([loadHome(), _loadOttProviders()]);
         if (_search.trim().isNotEmpty) {
           searchMovies(_search);
@@ -1643,6 +1740,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
+    _searchFocusNode.dispose();
+    _openingTitleNotifier.dispose();
     super.dispose();
   }
 
@@ -1677,13 +1776,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/top_rated').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('trending/tv/week', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/popular', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/top_rated', pages: 3).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/tv/week').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/popular').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/top_rated').catchError((_) => <Movie>[]),
         FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
+      _invalidateCatalogueMemo();
+      _resolvedAdminMovies.clear();
+      _resolvedAdminChecked.clear();
+      _blockedAdminMovies.clear();
       setState(() {
         trending = coreResults[0].isNotEmpty ? coreResults[0] : trending;
         popular = coreResults[1].isNotEmpty ? coreResults[1] : popular;
@@ -1723,58 +1826,59 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16', 'with_origin_country': 'JP',
           'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ko', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'en', 'with_origin_country': 'US',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ta', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'te', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ml', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'kn', 'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN', 'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ja', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'zh', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'th', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi', 'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        }, pages: 1).catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
+      _invalidateCatalogueMemo();
       setState(() {
         if (secondaryResults[0].isNotEmpty) anime = secondaryResults[0];
         if (secondaryResults[2].isNotEmpty) bengaliMovies = secondaryResults[2];
@@ -1826,6 +1930,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _allMovies() {
+    final cached = _allMoviesMemo;
+    if (cached != null) return cached;
+
     final combined = <Movie>[
       ...flixoraMovies,
       ...trending,
@@ -1845,7 +1952,96 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...indianDramaTv,
     ];
 
-    return _deduplicateMovies(combined);
+    return _allMoviesMemo = _deduplicateMovies(combined);
+  }
+
+  Future<void> _openSearch() async {
+    if (_searchOpen) {
+      _searchFocusNode.requestFocus();
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _tab = 0;
+      _showRanking = false;
+      _searchOpen = true;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+
+    // Focus immediately; connection monitoring runs independently.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchTimer?.cancel();
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searchOpen = false;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+  }
+
+  List<Movie> _searchDiscoveryMovies() {
+    final titles = List<Movie>.of(_allMovies());
+    titles.sort((a, b) {
+      final rating = b.rating.compareTo(a.rating);
+      return rating != 0 ? rating : b.year.compareTo(a.year);
+    });
+    return titles;
+  }
+
+  List<Movie> _searchSuggestions() {
+    final titles = _deduplicateMovies([
+      ...trending,
+      ...popular,
+      ...trendingTv,
+      ...popularTv,
+      ...flixoraMovies,
+    ]);
+    if (titles.isEmpty) return _searchDiscoveryMovies().take(4).toList();
+    return titles.take(4).toList();
+  }
+
+  List<Movie> _filterSearchMovies(List<Movie> source, String category) {
+    switch (category) {
+      case 'Movies':
+        return source.where((movie) => movie.mediaType == 'movie').toList();
+      case 'Series':
+        return source.where((movie) =>
+            movie.mediaType == 'tv' && !_isAnimeTitle(movie)).toList();
+      case 'Anime':
+        return source.where(_isAnimeTitle).toList();
+      case 'Drama':
+        return source.where((movie) => movie.genres.any(
+          (genre) => genre.toLowerCase().contains('drama'),
+        )).toList();
+      case 'Bengali':
+        return source.where((movie) =>
+            movie.originalLanguage.toLowerCase() == 'bn' ||
+            movie.originCountry.toUpperCase().contains('BD')).toList();
+      default:
+        return source;
+    }
+  }
+
+  List<String> _availableSearchFilters(List<Movie> source) {
+    const filters = ['All', 'Movies', 'Series', 'Anime', 'Drama', 'Bengali'];
+    return filters.where((filter) =>
+        filter == 'All' || _filterSearchMovies(source, filter).isNotEmpty
+    ).toList();
   }
 
   Future<void> searchMovies(String query) async {
@@ -1865,20 +2061,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    final onlineNow = _online && await InternetService.isOnline();
-    if (!mounted) return;
-    if (!onlineNow) {
+    if (!_online) {
+      final cachedQueryResults = await MovieCache.getSearch(text);
+      if (!mounted) return;
+
+      final terms = text.toLowerCase().split(RegExp(r'\s+'))
+          .where((term) => term.isNotEmpty)
+          .toList();
+      final cachedCatalogueMatches = _allMovies().where((movie) {
+        final searchable = [
+          movie.title,
+          movie.overview,
+          movie.year,
+          ...movie.genres,
+        ].join(' ').toLowerCase();
+        return terms.every((term) => searchable.contains(term));
+      }).toList();
+      final offlineResults = _deduplicateMovies([
+        ...cachedQueryResults,
+        ...cachedCatalogueMatches,
+      ]);
+
       setState(() {
         _online = false;
         _connectionKnown = true;
-      });
-      final cached = await MovieCache.getSearch(text);
-      if (!mounted) return;
-      setState(() {
         _search = text;
-        searchResults = cached;
+        searchResults = offlineResults;
         _searchLoading = false;
-        _searchError = cached.isEmpty ? 'Check your internet connection' : null;
+        _searchError = offlineResults.isEmpty
+            ? 'No saved matches available offline.'
+            : null;
       });
       return;
     }
@@ -1916,10 +2128,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onSearchChanged(String value) {
     _searchTimer?.cancel();
+    final query = value.trim();
 
-    if (value.trim().isEmpty) {
+    if (query.isEmpty) {
       setState(() {
         _search = '';
+        _searchCategory = 'All';
         searchResults = [];
         _searchError = null;
         _searchLoading = false;
@@ -1927,9 +2141,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    setState(() {
+      _search = query;
+      _searchCategory = 'All';
+      _searchLoading = true;
+      _searchError = null;
+    });
+
     _searchTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => searchMovies(value),
+      const Duration(milliseconds: 350),
+      () => searchMovies(query),
     );
   }
 
@@ -1958,6 +2179,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> addDownload(Movie movie) async {
+    InternetService.invalidate();
     final hasInternet = await InternetService.isOnline();
     if (!hasInternet) {
       if (mounted) {
@@ -2220,20 +2442,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _watchHistory.removeRange(30, _watchHistory.length);
     }
     unawaited(MovieCache.saveList(MovieCache.historyKey, _watchHistory));
-    if (mounted) setState(() {});
   }
 
   void _openDownloadsTab() {
     if (!mounted) return;
     Navigator.of(context).popUntil((route) => route.isFirst);
     if (!mounted) return;
+    FocusScope.of(context).unfocus();
     setState(() {
-      _tab = 2;
-      _librarySection = 'Downloads';
-      _profileSection = null;
+      _tab = 3;
+      _searchOpen = false;
+      _showRanking = false;
       _search = '';
       _searchController.clear();
       _searchLoading = false;
+      _profileSection = null;
     });
   }
 
@@ -2248,38 +2471,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _beginTitleOpening(Movie movie) {
     if (!mounted || _isOpeningTitle) return false;
-    _isOpeningTitle = true;
-    _openingTitleKey = _titleOpeningKey(movie);
-    setState(() {});
+    _openingTitleNotifier.value = _titleOpeningKey(movie);
     return true;
   }
 
   void _endTitleOpening() {
-    _isOpeningTitle = false;
-    _openingTitleKey = null;
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _openingTitleNotifier.value = null;
   }
 
-  bool _isTitleOpening(Movie movie) =>
-      _isOpeningTitle && _openingTitleKey == _titleOpeningKey(movie);
-
   Widget _titleOpeningOverlay(Movie movie) {
-    if (!_isTitleOpening(movie)) return const SizedBox.shrink();
-    return const ColoredBox(
-      color: Color(0x99000000),
-      child: Center(
-        child: SizedBox(
-          width: 25,
-          height: 25,
-          child: CircularProgressIndicator(color: gold, strokeWidth: 2.4),
-        ),
-      ),
+    return ValueListenableBuilder<String?>(
+      valueListenable: _openingTitleNotifier,
+      builder: (context, openingKey, _) {
+        if (openingKey != _titleOpeningKey(movie)) {
+          return const SizedBox.shrink();
+        }
+        return const ColoredBox(
+          color: Color(0x99000000),
+          child: Center(
+            child: SizedBox(
+              width: 25,
+              height: 25,
+              child: CircularProgressIndicator(color: gold, strokeWidth: 2.4),
+            ),
+          ),
+        );
+      },
     );
   }
 
   Movie? _cachedFlixoraMatch(Movie movie) {
     if (movie.tmdbId <= 0) return null;
-    for (final candidate in [...flixoraMovies, ...searchResults]) {
+    for (final candidate in flixoraMovies) {
+      if (candidate.tmdbId == movie.tmdbId &&
+          candidate.mediaType == movie.mediaType) {
+        return candidate;
+      }
+    }
+    for (final candidate in searchResults) {
       if (candidate.isFlixora &&
           candidate.tmdbId == movie.tmdbId &&
           candidate.mediaType == movie.mediaType) {
@@ -2293,11 +2523,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
     final client = supabaseClient;
+    final key = _titleOpeningKey(requested);
+
+    final cachedAdmin = _cachedFlixoraMatch(requested);
+    if (cachedAdmin != null) {
+      _resolvedAdminMovies[key] = cachedAdmin;
+      _resolvedAdminChecked.add(key);
+      return cachedAdmin.withFallbackMetadata(requested);
+    }
+
+    if (_blockedAdminMovies.contains(key)) return null;
+    if (_resolvedAdminChecked.contains(key)) {
+      return _resolvedAdminMovies[key] ?? requested;
+    }
 
     if (!_online || client == null) {
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+      return requested.isFlixora ? null : requested;
     }
 
     try {
@@ -2321,56 +2562,98 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (response is List && response.isNotEmpty) {
         final row = Map<String, dynamic>.from(response.first as Map);
-        // An Admin record takes priority even when it is unpublished.
-        if (row['is_published'] != true) return null;
+        if (row['is_published'] != true) {
+          _blockedAdminMovies.add(key);
+          _resolvedAdminChecked.add(key);
+          return null;
+        }
 
         final playable = await FlixoraMovieService.mapPlayableRows(
           client,
           [row],
           includeWithoutVideo: true,
         );
-        if (playable.isEmpty) return null;
+        if (playable.isEmpty) {
+          _blockedAdminMovies.add(key);
+          _resolvedAdminChecked.add(key);
+          return null;
+        }
 
-        // Keep the Admin source/status, but fill missing catalogue metadata
-        // from TMDB so incomplete Admin fields do not blank the details page.
-        return playable.first.withFallbackMetadata(requested);
+        final resolved = playable.first.withFallbackMetadata(requested);
+        _resolvedAdminMovies[key] = resolved;
+        _resolvedAdminChecked.add(key);
+        return resolved;
       }
 
-      if (requested.isFlixora) return null;
-      return _cachedFlixoraMatch(requested) ?? requested;
+      if (requested.isFlixora) {
+        _blockedAdminMovies.add(key);
+        _resolvedAdminChecked.add(key);
+        return null;
+      }
+      _resolvedAdminChecked.add(key);
+      return requested;
     } catch (e) {
       debugPrint('Could not resolve Admin movie record: $e');
-      // Keep the already-loaded published Admin entry usable if the network
-      // lookup fails; otherwise fall back to the requested TMDB catalogue item.
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+      return _cachedFlixoraMatch(requested) ?? requested;
     }
   }
 
   void _showNoInternetScreen() {
-    if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const NoInternetScreen(),
-      ),
-    );
+    if (!mounted || _noInternetScreenOpen) return;
+    _noInternetScreenOpen = true;
+
+    var cachedBackdrop = '';
+    for (final movie in _allMovies()) {
+      if (movie.backdropUrl.isNotEmpty) {
+        cachedBackdrop = movie.backdropUrl;
+        break;
+      }
+    }
+
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => NoInternetScreen(
+              backdropUrl: cachedBackdrop,
+              onRetry: _retryInternetConnection,
+            ),
+          ),
+        )
+        .whenComplete(() {
+          _noInternetScreenOpen = false;
+        });
+  }
+
+  void _dismissNoInternetScreen() {
+    if (!mounted || !_noInternetScreenOpen) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+  }
+
+  Future<bool> _retryInternetConnection() async {
+    InternetService.invalidate();
+    final online = await InternetService.isOnline();
+    if (!mounted) return false;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+    if (!online) return false;
+
+    _dismissNoInternetScreen();
+    await Future.wait<void>([loadHome(), _loadOttProviders()]);
+    final query = _search.trim();
+    if (query.isNotEmpty) {
+      await searchMovies(query);
+    }
+    return true;
   }
 
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
-      final hasInternet = await InternetService.isOnline();
-      if (!mounted) return;
-      if (!hasInternet) {
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-        });
-        _showNoInternetScreen();
-        return;
-      }
-      if (!_online) setState(() => _online = true);
+      if (!await _ensureInternetForPlayback()) return;
 
       final resolvedMovie = await _resolveMovieForOpening(movie);
       if (!mounted) return;
@@ -2413,12 +2696,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _playMovie(movie, closeCurrentPlayer: true);
   }
 
+  Future<bool> _ensureInternetForPlayback() async {
+    if (_online) return true;
+
+    final transports = await Connectivity().checkConnectivity();
+    if (transports.contains(ConnectivityResult.none)) {
+      _showNoInternetScreen();
+      return false;
+    }
+
+    InternetService.invalidate();
+    final online = await InternetService.isOnline();
+    if (!mounted) return false;
+
+    if (_online != online || !_connectionKnown) {
+      setState(() {
+        _online = online;
+        _connectionKnown = true;
+      });
+    }
+
+    if (!online) {
+      _showNoInternetScreen();
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _playMovie(
     Movie movie, {
     bool closeCurrentPlayer = false,
   }) async {
     if (!_beginTitleOpening(movie)) return;
     try {
+      // Check before closing any current screen so an offline tap always
+      // opens the dedicated Connect to the internet screen.
+      if (!await _ensureInternetForPlayback()) return;
+
       if (closeCurrentPlayer) {
         if (!mounted) return;
         Navigator.of(context).pop();
@@ -2444,6 +2758,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   ) async {
     if (!_beginTitleOpening(selectedMovie)) return;
     try {
+      if (!await _ensureInternetForPlayback()) return;
       await _openResolvedPlayer(selectedMovie, requestedMovie);
     } finally {
       _endTitleOpening();
@@ -2475,7 +2790,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (downloaded != null) {
       _recordWatch(selectedMovie);
-      Navigator.push(context, MaterialPageRoute(
+      Navigator.push<void>(context, MaterialPageRoute<void>(
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
@@ -2486,29 +2801,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
-      ));
+      )).then((_) {
+        if (mounted) setState(() {});
+      });
       return;
     }
 
+    // The caller already checked connectivity. Avoid a second network probe
+    // and the extra Home rebuild before pushing the player route.
     if (!selectedMovie.canAttemptPlayback) {
       _showMessage('This title has no supported FLIXORA playback source.');
       return;
     }
-
-    final hasInternet = await InternetService.isOnline();
-    if (!mounted) return;
-    if (!hasInternet) {
-      setState(() {
-        _online = false;
-        _connectionKnown = true;
-      });
-      _showNoInternetScreen();
-      return;
-    }
-
-    if (!_online) setState(() => _online = true);
     _recordWatch(selectedMovie);
-    Navigator.push(context, MaterialPageRoute(
+    Navigator.push<void>(context, MaterialPageRoute<void>(
       builder: (_) => MoviePlayerScreen(
         movie: selectedMovie,
         recommendedMovies: _allMovies(),
@@ -2518,11 +2824,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
-    ));
+    )).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _openRanking([String category = 'Cinema', bool tv = false]) {
+    FocusScope.of(context).unfocus();
     setState(() {
+      _searchOpen = false;
       _showRanking = true;
       _rankingTv = tv;
       _rankingCategory = category;
@@ -2624,9 +2934,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _sectionBlock(String title, List<Movie> movies) {
-    final filters = _sectionFilterOptions(title);
-    final selected = _sectionFilters[title] ?? (filters.isNotEmpty ? filters.first : '');
-    final visibleMovies = filters.isEmpty ? movies : _filterSectionMovies(title, movies, selected);
+    final allFilters = _sectionFilterOptions(title);
+    final filters = allFilters.where((filter) =>
+        _filterSectionMovies(title, movies, filter).isNotEmpty).toList();
+    final selected = filters.contains(_sectionFilters[title])
+        ? _sectionFilters[title]!
+        : (filters.isNotEmpty ? filters.first : '');
+    final visibleMovies = filters.isEmpty
+        ? _deduplicateMovies(movies)
+        : _filterSectionMovies(title, movies, selected);
+
+    // A category with no matching catalogue items is omitted instead of
+    // leaving an empty strip on the Home page.
+    if (visibleMovies.isEmpty) return const SizedBox.shrink();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2634,7 +2955,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.fromLTRB(16, 21, 12, 7),
           child: Row(
             children: [
-              Expanded(child: Text(title, style: const TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.bold))),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
               TextButton(
                 onPressed: () {
                   final isTvSection = title.contains('TV') ||
@@ -2645,27 +2975,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     isTvSection,
                   );
                 },
-                style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(36, 28), tapTargetSize: MaterialTapTargetSize.shrinkWrap, visualDensity: VisualDensity.compact),
-                child: const Text('All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                style: TextButton.styleFrom(
+                  foregroundColor: gold,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(36, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text(
+                  'All',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
               ),
             ],
           ),
         ),
         if (filters.isNotEmpty)
           SizedBox(
-            height: 30,
+            height: 34,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: filters.length,
               separatorBuilder: (_, __) => const SizedBox(width: 18),
               itemBuilder: (context, index) {
                 final value = filters[index];
                 final active = selected == value;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
+                return InkWell(
+                  borderRadius: BorderRadius.circular(8),
                   onTap: () => setState(() => _sectionFilters[title] = value),
-                  child: Center(child: Text(value, style: TextStyle(color: active ? gold : ink60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                  child: Center(
+                    child: Text(
+                      value,
+                      style: TextStyle(
+                        color: active ? gold : ink60,
+                        fontSize: 12,
+                        fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
                 );
               },
             ),
@@ -2675,73 +3024,113 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-    Widget _movieRow(List<Movie> movies) {
-    if (movies.isEmpty) return const SizedBox(height: 8);
+  Widget _movieRow(List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
       height: 205,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 12),
+        itemExtent: 118,
         itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
-          return GestureDetector(
-            onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-            child: Container(
-              width: 110,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(Icons.movie, color: gold, size: 32),
-                              )
-                            : FlixoraCachedImage(
-                                imageUrl: movie.posterUrl,
-                                isOnline: _online,
-                                fit: BoxFit.cover,
-                                placeholder: Container(
-                                  color: panel,
-                                  child: const Center(
-                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+          final hasHindi = _hasHindiAudio(movie);
+          return Container(
+            key: ValueKey('${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
+            width: 110,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17181C),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF292B31), width: 0.8),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(7),
+                        ),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            movie.posterUrl.isEmpty
+                                ? Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold, size: 32),
+                                  )
+                                : FlixoraCachedImage(
+                                    imageUrl: movie.posterUrl,
+                                    isOnline: _online,
+                                    fit: BoxFit.cover,
+                                    memCacheWidth: 330,
+                                    memCacheHeight: 450,
+                                    placeholder: Container(color: panel),
+                                    fallback: Container(
+                                      color: panel,
+                                      child: const Icon(Icons.movie, color: gold),
+                                    ),
+                                  ),
+                            if (hasHindi)
+                              Positioned(
+                                top: 5,
+                                right: 5,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xDD111216),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'Hindi',
+                                    style: TextStyle(
+                                      color: white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
-                                fallback: Container(
-                                  color: panel,
-                                  child: const Icon(Icons.movie, color: gold),
-                                ),
                               ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    movie.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      const Icon(Icons.star, color: premiumGold, size: 12),
-                      const SizedBox(width: 3),
-                      Text(movie.rating.toStringAsFixed(1),
-                          style: const TextStyle(color: ink60, fontSize: 10)),
-                      const SizedBox(width: 6),
-                      Text(movie.year,
-                          style: const TextStyle(color: ink54, fontSize: 10)),
-                    ],
-                  ),
-                ],
+                    Container(
+                      height: 39,
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(horizontal: 7),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF202126),
+                        borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(7),
+                        ),
+                      ),
+                      child: Text(
+                        _displayTitle(movie),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
@@ -2781,13 +3170,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? (_sliderController.page?.round() ?? 0)
           : 0;
       if (currentPage >= visibleCount) {
-        if (_slide != 0) setState(() => _slide = 0);
+        _slide = 0;
         if (_sliderController.hasClients) _sliderController.jumpToPage(0);
         if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
         return;
       }
       final selectedIndex = _slide.clamp(0, visibleCount - 1).toInt();
-      if (selectedIndex != _slide) setState(() => _slide = selectedIndex);
+      _slide = selectedIndex;
       _scrollFeaturedCardTo(selectedIndex);
     });
   }
@@ -2804,6 +3193,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final heroHeight = (MediaQuery.of(context).size.width * 9 / 16)
         .clamp(200.0, 360.0)
         .toDouble();
+    final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final heroCacheWidth = (MediaQuery.sizeOf(context).width * pixelRatio)
+        .round()
+        .clamp(720, 1440)
+        .toInt();
+    final heroCacheHeight = (heroHeight * pixelRatio)
+        .round()
+        .clamp(450, 900)
+        .toInt();
 
     return SizedBox(
       height: heroHeight,
@@ -2812,11 +3210,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           PageView.builder(
             controller: _sliderController,
+            physics: const BouncingScrollPhysics(),
             itemCount: slides.length,
             onPageChanged: (index) {
-              if (_slide != index && mounted) {
-                setState(() => _slide = index);
-              }
+              if (_slide != index) _slide = index;
               _scrollFeaturedCardTo(index);
             },
             itemBuilder: (context, index) {
@@ -2832,6 +3229,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             imageUrl: movie.backdropUrl,
                             isOnline: _online,
                             fit: BoxFit.cover,
+                            memCacheWidth: heroCacheWidth,
+                            memCacheHeight: heroCacheHeight,
                             placeholder: Container(color: panel),
                             fallback: Container(color: panel),
                           ),
@@ -2894,6 +3293,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
         child: ListView.builder(
           controller: _featuredCardsController,
+          physics: const BouncingScrollPhysics(),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(
             horizontal: FeaturedCarouselLayout.horizontalPadding,
@@ -2930,6 +3330,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ].join(' | ');
 
             return GestureDetector(
+              key: ValueKey('featured:${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
               onTap: _isOpeningTitle ? null : () => _playMovie(movie),
               child: Container(
                 width: FeaturedCarouselLayout.cardWidth,
@@ -3001,13 +3402,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ),
                               const SizedBox(width: 5),
-                              const CircleAvatar(
-                                radius: 11,
-                                backgroundColor: Color(0xFF20E6A2),
-                                child: Icon(
-                                  Icons.play_arrow_rounded,
-                                  color: Color(0xFF06251A),
-                                  size: 17,
+                              IconButton(
+                                onPressed: _isOpeningTitle
+                                    ? null
+                                    : () => _playMovie(movie),
+                                tooltip: 'Play ${movie.title}',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 34,
+                                  height: 34,
+                                ),
+                                icon: const CircleAvatar(
+                                  radius: 15,
+                                  backgroundColor: gold,
+                                  child: Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: Color(0xFF151515),
+                                    size: 21,
+                                  ),
                                 ),
                               ),
                             ],
@@ -3087,12 +3499,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _deduplicateMovies([
           ...anime,
           ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-              title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+              _isAnimeTitle(title)),
         ]);
       case 'Korean Drama':
-        return koreanDrama;
+        return _deduplicateMovies([
+          ...koreanDrama,
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'tv' &&
+              title.originalLanguage.toLowerCase() == 'ko'),
+        ]);
       case 'Bengali':
-        return [...bengaliMovies, ...bengaliTv];
+        return _deduplicateMovies([
+          ...bengaliMovies, ...bengaliTv,
+          ...flixoraMovies.where((title) =>
+              title.originalLanguage.toLowerCase() == 'bn' ||
+              title.originCountry.toUpperCase().contains('BD')),
+        ]);
+      case 'Bengali Movies':
+        return _deduplicateMovies([
+          ...bengaliMovies,
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originalLanguage.toLowerCase() == 'bn' ||
+               title.originCountry.toUpperCase().contains('BD'))),
+        ]);
+      case 'Drama':
+        return _deduplicateMovies(_allMovies().where((title) =>
+            title.genres.any((genre) =>
+                genre.toLowerCase().contains('drama'))).toList());
       case 'Flixora Originals':
         return flixoraMovies;
       default:
@@ -3100,11 +3534,179 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  List<Movie> _gemsForYou() {
+    final titles = _deduplicateMovies([
+      ...flixoraMovies,
+      ...trending,
+      ...popular,
+      ...topRated,
+      ...trendingTv,
+      ...popularTv,
+      ...anime,
+      ...koreanDrama,
+    ]);
+    titles.sort((a, b) => b.rating.compareTo(a.rating));
+    return titles.take(14).toList();
+  }
+
+  Widget _homeCategoryCards() {
+    const routes = <String, String>{
+      'All': 'Trending',
+      'All Movies': 'Movies',
+      'All Dramas': 'Drama',
+      'Bengali Movies': 'Bengali Movies',
+      'Anime': 'Anime',
+    };
+    final available = routes.entries.where(
+      (entry) => _moviesForHomeCategory(entry.value).isNotEmpty,
+    ).toList();
+    if (available.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 22, 16, 10),
+          child: Text(
+            'Categories',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 76,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: available.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final entry = available[index];
+              final titles = _moviesForHomeCategory(entry.value);
+              final image = titles.firstWhere(
+                (movie) => movie.backdropUrl.isNotEmpty ||
+                    movie.posterUrl.isNotEmpty,
+                orElse: () => titles.first,
+              );
+              final imageUrl = image.backdropUrl.isNotEmpty
+                  ? image.backdropUrl
+                  : image.posterUrl;
+              return Material(
+                color: panel,
+                borderRadius: BorderRadius.circular(8),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => setState(() => _homeCategory = entry.value),
+                  child: SizedBox(
+                    width: 145,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (imageUrl.isNotEmpty)
+                            FlixoraCachedImage(
+                              imageUrl: imageUrl,
+                              isOnline: _online,
+                              fit: BoxFit.cover,
+                              memCacheWidth: 435,
+                              memCacheHeight: 228,
+                              fallback: const ColoredBox(color: panel),
+                            )
+                          else
+                            const ColoredBox(color: panel),
+                          const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Color(0xAA080808),
+                                  Color(0x33080808),
+                                ],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text(
+                                entry.key,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _homeTopCategories() {
+    const categories = [
+      'Trending', 'Movies', 'TV Series', 'Anime', 'Drama',
+      'Bengali', 'Bengali Movies', 'Korean Drama', 'Flixora Originals',
+    ];
+    final available = categories.where(
+      (category) => _moviesForHomeCategory(category).isNotEmpty,
+    ).toList();
+    if (available.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: available.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 22),
+        itemBuilder: (context, index) {
+          final category = available[index];
+          final selected = category == _homeCategory;
+          return InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _homeCategory = category),
+            child: Center(
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 180),
+                style: TextStyle(
+                  color: selected ? white : ink60,
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
+                child: Text(category),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _homeContent() {
     if (_homeCategory != 'Trending') {
       final movies = _moviesForHomeCategory(_homeCategory);
       return Column(
         children: [
+          _homeTopCategories(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
@@ -3129,7 +3731,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: panel,
       onRefresh: loadHome,
       child: ListView(
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         children: [
+          _homeTopCategories(),
           _featuredSlider(),
           _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
@@ -3138,6 +3744,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
+          _homeCategoryCards(),
+          _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
@@ -3181,96 +3789,479 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(12),
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        childAspectRatio: 0.53,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 14,
+        childAspectRatio: 0.60,
+        crossAxisSpacing: 9,
+        mainAxisSpacing: 12,
       ),
       itemCount: movies.length,
       itemBuilder: (context, index) {
         final movie = movies[index];
-
-        return GestureDetector(
-          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(9),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: movie.posterUrl.isEmpty
-                        ? Container(
-                            color: panel,
-                            child: const Icon(
-                              Icons.movie,
-                              color: gold,
-                            ),
-                          )
-                        : FlixoraCachedImage(
-                            imageUrl: movie.posterUrl,
-                            isOnline: _online,
-                            fit: BoxFit.cover,
-                            fallback: Container(
-                              color: panel,
-                              child: const Icon(
-                                Icons.movie,
-                                color: gold,
+        return Container(
+          key: ValueKey('collection:${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
+          decoration: BoxDecoration(
+            color: const Color(0xFF17181C),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF292B31), width: 0.8),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(7),
+                      ),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          movie.posterUrl.isEmpty
+                              ? Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                )
+                              : FlixoraCachedImage(
+                                  imageUrl: movie.posterUrl,
+                                  isOnline: _online,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 300,
+                                  memCacheHeight: 450,
+                                  fallback: Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold),
+                                  ),
+                                ),
+                          if (_hasHindiAudio(movie))
+                            Positioned(
+                              top: 5,
+                              right: 5,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xDD111216),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'Hindi',
+                                  style: TextStyle(
+                                    color: white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                  Container(
+                    height: 38,
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF202126),
+                      borderRadius: BorderRadius.vertical(
+                        bottom: Radius.circular(7),
+                      ),
+                    ),
+                    child: Text(
+                      _displayTitle(movie),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                movie.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: white,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 11,
-                ),
-              ),
-              Text(
-                movie.year,
-                style: const TextStyle(
-                  color: ink54,
-                  fontSize: 10,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
     );
   }
-  Widget _searchContent() {
-    if (_searchLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: gold),
-      );
-    }
 
-    if (searchResults.isEmpty) {
-      return Center(
-        child: Text(
-          _searchError ?? 'Search movies, TV shows, web series, dramas and anime.',
-          style: const TextStyle(color: ink54),
+  Widget _searchFilterBar(List<Movie> source) {
+    final filters = _availableSearchFilters(source);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 22),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final active = filter == selected;
+          return InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () => setState(() => _searchCategory = filter),
+            child: Container(
+              alignment: Alignment.center,
+              padding: const EdgeInsets.only(top: 2, bottom: 5),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: active ? gold : Colors.transparent,
+                    width: 2.5,
+                  ),
+                ),
+              ),
+              child: Text(
+                filter,
+                style: TextStyle(
+                  color: active ? white : ink60,
+                  fontSize: 14,
+                  fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _searchForTitle(String title) async {
+    if (!_searchOpen) await _openSearch();
+    if (!mounted) return;
+    _searchController.text = title;
+    _searchController.selection = TextSelection.collapsed(
+      offset: title.length,
+    );
+    _onSearchChanged(title);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  Widget _searchResultRow(Movie movie, {int? rank}) {
+    final metadata = <String>[
+      if (movie.rating > 0) movie.rating.toStringAsFixed(1),
+      if (movie.year.isNotEmpty && movie.year != 'N/A') movie.year,
+      if (movie.originCountry.isNotEmpty) movie.originCountry,
+      if (movie.genres.isNotEmpty) movie.genres.first,
+    ].join(' | ');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Material(
+        color: const Color(0xFF15161A),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+          child: SizedBox(
+            height: 94,
+            child: Row(
+              children: [
+                const SizedBox(width: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    width: 62,
+                    height: 82,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        movie.posterUrl.isEmpty
+                            ? Container(
+                                color: panel,
+                                child: const Icon(Icons.movie, color: gold),
+                              )
+                            : FlixoraCachedImage(
+                                imageUrl: movie.posterUrl,
+                                isOnline: _online,
+                                fit: BoxFit.cover,
+                                memCacheWidth: 186,
+                                memCacheHeight: 246,
+                                fallback: Container(
+                                  color: panel,
+                                  child: const Icon(Icons.movie, color: gold),
+                                ),
+                              ),
+                        if (rank != null)
+                          Positioned(
+                            left: 0,
+                            top: 0,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 3,
+                              ),
+                              decoration: const BoxDecoration(
+                                color: gold,
+                                borderRadius: BorderRadius.only(
+                                  bottomRight: Radius.circular(6),
+                                ),
+                              ),
+                              child: Text(
+                                '$rank',
+                                style: const TextStyle(
+                                  color: Color(0xFF171717),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (_hasHindiAudio(movie))
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              color: const Color(0xCC111216),
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: const Text(
+                                'Hindi',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _displayTitle(movie),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Row(
+                          children: [
+                            Icon(
+                              movie.mediaType == 'tv'
+                                  ? Icons.live_tv_rounded
+                                  : Icons.movie_creation_outlined,
+                              color: ink60,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            if (movie.rating > 0) ...[
+                              const Icon(
+                                Icons.star_rounded,
+                                color: premiumGold,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 2),
+                            ],
+                            Expanded(
+                              child: Text(
+                                metadata,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: ink60,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Play ${movie.title}',
+                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
+                  icon: const CircleAvatar(
+                    radius: 15,
+                    backgroundColor: gold,
+                    child: Icon(
+                      Icons.play_arrow_rounded,
+                      color: Color(0xFF151515),
+                      size: 21,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+            ),
+          ),
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    return _collectionContent('Search Results', searchResults);
+  Widget _searchLandingContent() {
+    final discovery = _searchDiscoveryMovies();
+    final suggestions = _searchSuggestions();
+    final filters = _availableSearchFilters(discovery);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    final visible = _filterSearchMovies(discovery, selected)
+        .take(16)
+        .toList();
+
+    return ListView(
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: const EdgeInsets.only(bottom: 20),
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 16, 10),
+          child: Text(
+            '🔥 Everyone is searching',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: suggestions.map((movie) {
+              return ActionChip(
+                backgroundColor: const Color(0xFF25262B),
+                side: BorderSide.none,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Text(
+                    _displayTitle(movie),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                onPressed: () => _searchForTitle(movie.title),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _searchFilterBar(discovery),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text(
+            'Trending now',
+            style: TextStyle(
+              color: white,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        if (visible.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No titles available yet.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: ink60),
+            ),
+          )
+        else
+          ...List.generate(
+            visible.length,
+            (index) => _searchResultRow(visible[index], rank: index + 1),
+          ),
+      ],
+    );
+  }
+
+  Widget _searchContent() {
+    final filters = _availableSearchFilters(searchResults);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    final filtered = _filterSearchMovies(searchResults, selected);
+    return Column(
+      children: [
+        _searchFilterBar(searchResults),
+        Expanded(
+          child: _searchLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: gold),
+                )
+              : searchResults.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          _searchError ?? 'No results found.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: ink60),
+                        ),
+                      ),
+                    )
+                  : filtered.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No titles in this category.',
+                            style: TextStyle(color: ink60),
+                          ),
+                        )
+                      : ListView.builder(
+                          physics: const BouncingScrollPhysics(),
+                          padding: const EdgeInsets.only(top: 4, bottom: 18),
+                          itemCount: filtered.length,
+                          itemBuilder: (context, index) =>
+                              _searchResultRow(filtered[index]),
+                        ),
+        ),
+      ],
+    );
   }
 
   Widget _downloadsContent() {
     return DownloadsScreen(
       tasks: _downloads,
+      isOnline: _online,
       onDelete: _deleteDownload,
       onPlay: (task) {
         if (task.filePath == null) return;
@@ -3776,21 +4767,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _libraryContent() {
-    const sections = ['Downloads', 'My List', 'Favourites', 'History'];
+    const sections = ['My List', 'Favourites', 'History'];
     Widget content;
     switch (_librarySection) {
-      case 'My List':
-        content = _collectionContent('My List', _moviesForIds(_saved));
-        break;
       case 'Favourites':
         content = _collectionContent('Favourites', _moviesForIds(_favourites));
         break;
       case 'History':
         content = _watchHistoryPage();
         break;
-      case 'Downloads':
+      case 'My List':
       default:
-        content = _downloadsContent();
+        content = _collectionContent('My List', _moviesForIds(_saved));
         break;
     }
 
@@ -4514,6 +5502,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _currentPage() {
     if (_showRanking) return _rankingContent();
+    if (_searchOpen) {
+      return _search.isEmpty
+          ? _searchLandingContent()
+          : _searchContent();
+    }
     if (_search.isNotEmpty) return _searchContent();
 
     switch (_tab) {
@@ -4561,6 +5554,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 2:
         return _libraryContent();
       case 3:
+        return _downloadsContent();
+      case 4:
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
@@ -4573,26 +5568,54 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final selected = _tab == index;
     return Expanded(
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        splashColor: gold.withValues(alpha: 0.12),
+        highlightColor: gold.withValues(alpha: 0.05),
         onTap: () {
+          _searchTimer?.cancel();
           FocusScope.of(context).unfocus();
           setState(() {
             _search = '';
+            _searchOpen = false;
+            _searchCategory = 'All';
             _showRanking = false;
             _searchController.clear();
+            searchResults = [];
+            _searchError = null;
             _searchLoading = false;
             _profileSection = null;
             _tab = index;
           });
         },
         child: SizedBox(
-          height: 56,
+          height: 60,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 22, color: selected ? gold : ink60),
-              const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
-            ],          ),
+              AnimatedScale(
+                scale: selected ? 1.08 : 1,
+                duration: const Duration(milliseconds: 170),
+                curve: Curves.easeOut,
+                child: Icon(
+                  selected ? activeIcon : icon,
+                  size: 23,
+                  color: selected ? gold : ink60,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? gold : ink60,
+                  fontSize: 10,
+                  height: 1,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -4603,109 +5626,165 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
-    if (_tab == 3) return _profileSection ?? 'CineProfile';
+    if (_tab == 3) return 'Downloads';
+    if (_tab == 4) return _profileSection ?? 'CineProfile';
     return 'FLIXORA';
+  }
+
+  Widget _searchField() {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            height: 46,
+            decoration: BoxDecoration(
+              color: const Color(0xFF3B3C40),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              readOnly: !_searchOpen,
+              autofocus: _searchOpen,
+              onTap: _openSearch,
+              onChanged: _onSearchChanged,
+              onSubmitted: (value) {
+                _searchTimer?.cancel();
+                FocusScope.of(context).unfocus();
+                searchMovies(value);
+              },
+              style: const TextStyle(color: white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search movies, series & anime...',
+                hintStyle: const TextStyle(
+                  color: ink70,
+                  fontSize: 13,
+                ),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: white,
+                  size: 22,
+                ),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                          if (_searchOpen) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) _searchFocusNode.requestFocus();
+                            });
+                          }
+                        },
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: ink70,
+                          size: 18,
+                        ),
+                      ),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 13,
+                  horizontal: 8,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 3),
+        TextButton(
+          onPressed: () {
+            if (!_searchOpen) {
+              _openSearch();
+              return;
+            }
+            _searchTimer?.cancel();
+            FocusScope.of(context).unfocus();
+            _onSearchChanged(_searchController.text);
+          },
+          style: TextButton.styleFrom(
+            foregroundColor: gold,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+          ),
+          child: const Text(
+            'Search',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
+      extendBodyBehindAppBar: false,
       appBar: AppBar(
-        backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
-        systemOverlayStyle: SystemUiOverlayStyle(
+        backgroundColor: bg,
+        systemOverlayStyle: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
           statusBarBrightness: Brightness.dark,
         ),
-        elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         centerTitle: _showRanking,
-        toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
-        titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
-        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 3 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
-        title: _showRanking ? const Text('Ranking', style: TextStyle(color: white, fontWeight: FontWeight.w700)) : _tab == 0
-            ? Row(
-                children: [
-                  Image.asset(
-                    'assets/images/flixora_logo.png',
-                    width: 39,
-                    height: 39,
-                    fit: BoxFit.contain,
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Container(
-                      height: 46,
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: white.withValues(alpha: 0.24)),
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: _onSearchChanged,
-                        onSubmitted: _onSearchChanged,
-                        style: const TextStyle(color: white, fontSize: 14),
-                        decoration: InputDecoration(
-                          hintText: 'Search movies & series...',
-                          hintStyle: const TextStyle(
-                            color: ink54,
-                            fontSize: 13,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            color: ink70,
-                            size: 21,
-                          ),
-                          suffixIcon: _searchController.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    _onSearchChanged('');
-                                  },
-                                  icon: const Icon(
-                                    Icons.close,
-                                    color: ink54,
-                                    size: 18,
-                                  ),
-                                ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 13,
-                            horizontal: 8,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      FocusScope.of(context).unfocus();
-                      _onSearchChanged(_searchController.text);
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: gold,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    child: const Text(
-                      'Search',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
+        toolbarHeight: _showRanking
+            ? kToolbarHeight
+            : (_tab == 0 ? 62 : kToolbarHeight),
+        titleSpacing: _searchOpen ? 0 : (_tab == 0 && !_showRanking ? 8 : 16),
+        leadingWidth: _searchOpen ? 48 : null,
+        leading: _showRanking
+            ? IconButton(
+                onPressed: () => setState(() => _showRanking = false),
+                icon: const Icon(Icons.arrow_back),
               )
-            : Text(
-                _pageTitle(),
-                style: const TextStyle(
-                  color: gold,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
+            : _searchOpen
+                ? IconButton(
+                    tooltip: 'Back',
+                    onPressed: _closeSearch,
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  )
+                : (_tab == 4 && _profileSection != null
+                    ? IconButton(
+                        onPressed: () => setState(() => _profileSection = null),
+                        icon: const Icon(Icons.arrow_back),
+                      )
+                    : null),
+        title: _showRanking
+            ? const Text(
+                'Ranking',
+                style: TextStyle(color: white, fontWeight: FontWeight.w700),
+              )
+            : _tab == 0
+                ? (_searchOpen
+                    ? _searchField()
+                    : Row(
+                        children: [
+                          Image.asset(
+                            'assets/images/flixora_logo.png',
+                            width: 39,
+                            height: 39,
+                            fit: BoxFit.contain,
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(child: _searchField()),
+                        ],
+                      ))
+                : Text(
+                    _pageTitle(),
+                    style: const TextStyle(
+                      color: gold,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
         actions: _tab == 0 || _showRanking
             ? const []
             : [
@@ -4727,26 +5806,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
-          : (_tab == 0 && !_online && _allMovies().isEmpty)
-              ? const NoInternetScreen()
+          : (_tab == 0 && !_searchOpen && !_online && _allMovies().isEmpty)
+              ? NoInternetScreen(
+                  onRetry: _retryInternetConnection,
+                  showAppBar: false,
+                )
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
-        color: panel,
+        decoration: const BoxDecoration(
+          color: Color(0xFF202126),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          border: Border(top: BorderSide(color: ink10, width: 0.5)),
+        ),
         child: SafeArea(
           top: false,
           maintainBottomViewPadding: true,
-          child: Container(
-            height: 56,
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: ink10, width: 0.5)),
-            ),
+          child: SizedBox(
+            height: 60,
             child: Row(
               children: [
-                _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
-                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
-                _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                _bottomNavItem(0, Icons.home_outlined, Icons.home_rounded, 'Home'),
+                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv_rounded, 'OTT'),
+                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library_rounded, 'Library'),
+                _bottomNavItem(3, Icons.download_outlined, Icons.download_rounded, 'Downloads'),
+                _bottomNavItem(4, Icons.person_outline, Icons.person_rounded, 'Me'),
               ],
             ),
           ),
@@ -4756,76 +5840,318 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-class NoInternetScreen extends StatelessWidget {
-  const NoInternetScreen({super.key});
+class NoInternetScreen extends StatefulWidget {
+  final String backdropUrl;
+  final Future<bool> Function()? onRetry;
+  final bool showAppBar;
 
-  Future<void> _openWifiSettings(BuildContext context) async {
+  const NoInternetScreen({
+    super.key,
+    this.backdropUrl = '',
+    this.onRetry,
+    this.showAppBar = true,
+  });
+
+  @override
+  State<NoInternetScreen> createState() => _NoInternetScreenState();
+}
+
+class _NoInternetScreenState extends State<NoInternetScreen> {
+  bool _checking = false;
+
+  Future<void> _openWifiSettings() async {
     try {
-      await AppSettings.openAppSettings(
-        type: AppSettingsType.wifi,
-      );
+      await AppSettings.openAppSettings(type: AppSettingsType.wifi);
     } catch (_) {
       try {
         await AppSettings.openAppSettings();
       } catch (_) {
-        if (context.mounted) {
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Unable to open settings.'),
-            ),
+            const SnackBar(content: Text('Unable to open settings.')),
           );
         }
       }
     }
   }
 
+  Future<void> _retry() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    var connected = false;
+    try {
+      if (widget.onRetry != null) {
+        connected = await widget.onRetry!();
+      } else {
+        InternetService.invalidate();
+        connected = await InternetService.isOnline();
+        if (connected && mounted) Navigator.of(context).maybePop();
+      }
+    } catch (error) {
+      debugPrint('Internet retry failed: $error');
+    }
+
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (!connected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Still offline. Check your internet and retry.'),
+        ),
+      );
+    }
+  }
+
+  Widget _feature(IconData icon, String label, {String? mark}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF92959D), width: 1.8),
+            ),
+            child: mark == null
+                ? Icon(icon, color: const Color(0xFF25C99A), size: 19)
+                : Text(
+                    mark,
+                    style: const TextStyle(
+                      color: Color(0xFF25C99A),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: white,
+                fontSize: 15,
+                height: 1.25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bg,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.wifi_off_rounded,
-                size: 75,
-                color: gold,
+      appBar: widget.showAppBar
+          ? AppBar(
+              backgroundColor: bg,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              centerTitle: true,
+              leading: IconButton(
+                tooltip: 'Back',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.arrow_back_rounded, color: white, size: 28),
               ),
-              const SizedBox(height: 20),
-              const Text(
-                'Connect to the internet',
-                textAlign: TextAlign.center,
+              title: const Text(
+                'No Internet',
                 style: TextStyle(
                   color: white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'When your internet connection is restored: Explore various movies, TV series and more',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: ink,
-                  fontSize: 15,
-                  height: 1.5,
+                  fontSize: 19,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 25),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: gold,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () => _openWifiSettings(context),
-                icon: const Icon(Icons.settings),
-                label: const Text('Open Wi-Fi Settings'),
+            )
+          : null,
+      body: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 190,
+                    width: double.infinity,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (widget.backdropUrl.isNotEmpty)
+                          FlixoraCachedImage(
+                            imageUrl: widget.backdropUrl,
+                            isOnline: false,
+                            fit: BoxFit.cover,
+                            fallback: const ColoredBox(color: panel),
+                          )
+                        else
+                          const ColoredBox(color: panel),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Color(0xB908090B),
+                                Color(0xE608090B),
+                                bg,
+                              ],
+                            ),
+                          ),
+                        ),
+                        Center(
+                          child: ShaderMask(
+                            blendMode: BlendMode.srcIn,
+                            shaderCallback: (bounds) =>
+                                const LinearGradient(
+                              colors: [
+                                Color(0xFF22C7A1),
+                                Color(0xFF26E879),
+                              ],
+                            ).createShader(bounds),
+                            child: const Icon(
+                              Icons.wifi_off_rounded,
+                              size: 92,
+                              color: white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(18, 8, 18, 22),
+                    child: Text(
+                      'Connect to the internet',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: white,
+                        fontSize: 26,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.fromLTRB(18, 17, 18, 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF25262B),
+                      borderRadius: BorderRadius.circular(17),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'When your internet connection is restored:',
+                          style: TextStyle(
+                            color: white,
+                            fontSize: 15,
+                            height: 1.3,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _feature(Icons.movie_creation_outlined,
+                            'Explore various movies, TV series and more',
+                            mark: 'FREE'),
+                        _feature(Icons.hd_outlined,
+                            'All free download with less data but good quality',
+                            mark: 'HD'),
+                        _feature(Icons.block_rounded,
+                            'Watch offline without ads',
+                            mark: 'AD'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 34),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 34),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 62,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFF1DAFEA),
+                                Color(0xFF21E99A),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(9),
+                              onTap: _checking ? null : _retry,
+                              child: Center(
+                                child: _checking
+                                    ? const SizedBox(
+                                        width: 25,
+                                        height: 25,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          color: white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Retry',
+                                        style: TextStyle(
+                                          color: white,
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 34),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 62,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF25262B),
+                            foregroundColor: white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                          ),
+                          onPressed: _openWifiSettings,
+                          child: const Text(
+                            'Go to Settings',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -4835,12 +6161,14 @@ class NoInternetScreen extends StatelessWidget {
 
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> tasks;
+  final bool isOnline;
   final Future<void> Function(DownloadTask) onDelete;
   final ValueChanged<DownloadTask> onPlay;
 
   const DownloadsScreen({
     super.key,
     required this.tasks,
+    required this.isOnline,
     required this.onDelete,
     required this.onPlay,
   });
@@ -4937,10 +6265,11 @@ class DownloadsScreen extends StatelessWidget {
                                   size: 30,
                                 ),
                               )
-                            : CachedNetworkImage(
+                            : FlixoraCachedImage(
                                 imageUrl: task.poster,
+                                isOnline: isOnline,
                                 fit: BoxFit.cover,
-                                errorWidget: (_, __, ___) => Container(
+                                fallback: Container(
                                   color: bg,
                                   child: const Icon(
                                     Icons.movie,
