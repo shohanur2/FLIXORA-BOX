@@ -49,6 +49,12 @@ void main() {
         PublicDomainMovieSourceService.isPublicDomainOrCc0(const {}),
         isFalse,
       );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'rights': 'This work is not public domain. All rights reserved.',
+        }),
+        isFalse,
+      );
     });
 
     test('only accepts safe Archive identifiers', () {
