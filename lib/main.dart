@@ -1601,6 +1601,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _connectionKnown = true;
             if (_allMovies().isEmpty) homeError = 'offline';
           });
+          if (_searchOpen) _showNoInternetScreen();
           return;
         }
 
@@ -1647,6 +1648,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _connectionKnown = true;
         if (!online && _allMovies().isEmpty) homeError = 'offline';
       });
+
+      if (!online && _searchOpen) {
+        _showNoInternetScreen();
+      }
 
       if (online && wasOffline) {
         _dismissNoInternetScreen();
@@ -1878,7 +1883,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openSearch() async {
-    if (_searchOpen) return;
+    if (_searchOpen) {
+      final online = await InternetService.isOnline();
+      if (!mounted) return;
+      setState(() {
+        _online = online;
+        _connectionKnown = true;
+      });
+      if (!online) _showNoInternetScreen();
+      return;
+    }
     FocusScope.of(context).unfocus();
     setState(() {
       _tab = 0;
@@ -4117,6 +4131,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _downloadsContent() {
     return DownloadsScreen(
       tasks: _downloads,
+      isOnline: _online,
       onDelete: _deleteDownload,
       onPlay: (task) {
         if (task.filePath == null) return;
@@ -5662,7 +5677,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: CircularProgressIndicator(color: gold),
             )
           : (_tab == 0 && !_online && _allMovies().isEmpty)
-              ? const NoInternetScreen()
+              ? NoInternetScreen(onRetry: _retryInternetConnection)
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
@@ -6009,12 +6024,14 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
 
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> tasks;
+  final bool isOnline;
   final Future<void> Function(DownloadTask) onDelete;
   final ValueChanged<DownloadTask> onPlay;
 
   const DownloadsScreen({
     super.key,
     required this.tasks,
+    required this.isOnline,
     required this.onDelete,
     required this.onPlay,
   });
@@ -6111,10 +6128,11 @@ class DownloadsScreen extends StatelessWidget {
                                   size: 30,
                                 ),
                               )
-                            : CachedNetworkImage(
+                            : FlixoraCachedImage(
                                 imageUrl: task.poster,
+                                isOnline: isOnline,
                                 fit: BoxFit.cover,
-                                errorWidget: (_, __, ___) => Container(
+                                fallback: Container(
                                   color: bg,
                                   child: const Icon(
                                     Icons.movie,
