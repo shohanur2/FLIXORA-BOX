@@ -834,28 +834,48 @@ class FlixoraMovieService {
     final audioLanguagesByMovie = <int, List<String>>{};
 
     if (movieIds.isNotEmpty) {
-      try {
-        final audioRows = await client.from('movie_languages')
-            .select('movie_id, languages(name,code)')
-            .inFilter('movie_id', movieIds);
-        for (final item in (audioRows as List).whereType<Map>()) {
-          final row = Map<String, dynamic>.from(item);
-          final movieId = _toInt(row['movie_id']);
-          final rawLanguage = row['languages'];
-          if (movieId <= 0 || rawLanguage is! Map) continue;
-          final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
-          if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+      Future<List<Map<String, dynamic>>> loadRows(
+        Future<List<Map<String, dynamic>>> request,
+        String label,
+      ) async {
+        try {
+          return await request;
+        } catch (error) {
+          debugPrint('$label: $error');
+          return <Map<String, dynamic>>[];
         }
-      } catch (e) {
-        debugPrint('Could not load movie audio languages: $e');
       }
-      try {
-        final qualityRows = await client
-            .from('movie_video_qualities')
-            .select('movie_id, quality, video_url')
-            .inFilter('movie_id', movieIds);
 
-        for (final item in (qualityRows as List).whereType<Map>()) {
+      // Fetch language labels and quality sources concurrently; neither query
+      // depends on the other, and serial waits slow down the first Home load.
+      final responses = await Future.wait<List<Map<String, dynamic>>>([
+        loadRows(
+          client.from('movie_languages')
+              .select('movie_id, languages(name,code)')
+              .inFilter('movie_id', movieIds),
+          'Could not load movie audio languages',
+        ),
+        loadRows(
+          client
+              .from('movie_video_qualities')
+              .select('movie_id, quality, video_url')
+              .inFilter('movie_id', movieIds),
+          'Could not resolve Admin video qualities',
+        ),
+      ]);
+
+      for (final item in responses[0]) {
+        final row = Map<String, dynamic>.from(item);
+        final movieId = _toInt(row['movie_id']);
+        final rawLanguage = row['languages'];
+        if (movieId <= 0 || rawLanguage is! Map) continue;
+        final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
+        if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+      }
+
+      final qualityRows = responses[1];
+      try {
+        for (final item in qualityRows) {
           final row = Map<String, dynamic>.from(item);
           final movieId = _toInt(row['movie_id']);
           final quality = (row['quality'] ?? '').toString().trim();
@@ -1222,6 +1242,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _networkTimer;
   Timer? _searchTimer;
+  DateTime? _lastCarouselInteractionAt;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<AuthState>? _authSubscription;
@@ -1257,6 +1278,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final ValueNotifier<String?> _openingTitleNotifier = ValueNotifier(null);
   List<Movie>? _allMoviesMemo;
   List<Movie>? _homeTrendingMemo;
+  List<Movie>? _homeGemsMemo;
+  final Map<String, List<Movie>> _homeCategoryMemo = {};
   final Map<String, Movie> _resolvedAdminMovies = {};
   final Set<String> _resolvedAdminChecked = {};
   final Set<String> _blockedAdminMovies = {};
@@ -1353,6 +1376,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _invalidateCatalogueMemo() {
     _allMoviesMemo = null;
     _homeTrendingMemo = null;
+    _homeGemsMemo = null;
+    _homeCategoryMemo.clear();
   }
 
   bool get _isOpeningTitle => _openingTitleNotifier.value != null;
@@ -1432,9 +1457,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _timer = Timer.periodic(
       const Duration(seconds: 5),
       (_) {
+        final lastInteraction = _lastCarouselInteractionAt;
         if (!mounted ||
             _tab != 0 ||
             _isOpeningTitle ||
+            (lastInteraction != null &&
+                DateTime.now().difference(lastInteraction) <
+                    const Duration(seconds: 8)) ||
             !(ModalRoute.of(context)?.isCurrent ?? true)) {
           return;
         }
@@ -1658,7 +1687,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final hasNetwork = !results.contains(ConnectivityResult.none);
 
         if (!hasNetwork) {
-          if (!mounted) return;
+          if (!mounted || (!_online && _connectionKnown)) return;
 
           setState(() {
             _online = false;
@@ -1677,10 +1706,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         final wasOffline = !_online;
 
-        setState(() {
-          _online = online;
-          _connectionKnown = true;
-        });
+        if (_online != online || !_connectionKnown) {
+          setState(() {
+            _online = online;
+            _connectionKnown = true;
+          });
+        }
 
         if (online && wasOffline) {
           _dismissNoInternetScreen();
@@ -1821,7 +1852,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
       ]);
 
-      // Secondary catalogs now fill their sections without delaying first paint.
+      // Keep the secondary catalogue broad without launching fifteen
+      // simultaneous TMDB requests. TMDB accepts comma-separated OR language
+      // filters, so related language groups can share one request.
       final secondaryResults = await Future.wait<List<Movie>>([
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16', 'with_origin_country': 'JP',
@@ -1837,43 +1870,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'hi', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'en', 'with_origin_country': 'US',
           'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ta', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'te', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ml', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'kn', 'with_origin_country': 'IN',
+          'with_original_language': 'ta,te,ml,kn',
+          'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ja', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'zh', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'th', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'sort_by': 'popularity.desc',
+          'with_original_language': 'ja,zh,th', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
       ]);
 
@@ -1884,24 +1896,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (secondaryResults[2].isNotEmpty) bengaliMovies = secondaryResults[2];
         if (secondaryResults[3].isNotEmpty) bengaliTv = secondaryResults[3];
 
-        final refreshedBollywood = [...secondaryResults[4], ...secondaryResults[14]];
-        if (refreshedBollywood.isNotEmpty) {
-          bollywoodMovies = _deduplicateMovies(refreshedBollywood);
+        if (secondaryResults[4].isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies(secondaryResults[4]);
         }
         if (secondaryResults[5].isNotEmpty) hollywoodMovies = secondaryResults[5];
 
-        final refreshedSouthIndian = [
-          ...secondaryResults[6], ...secondaryResults[7],
-          ...secondaryResults[8], ...secondaryResults[9],
-        ];
+        final refreshedSouthIndian = secondaryResults[6]
+            .where((movie) => const {'ta', 'te', 'ml', 'kn'}
+                .contains(movie.originalLanguage.toLowerCase()))
+            .toList();
         if (refreshedSouthIndian.isNotEmpty) {
           southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
         }
 
-        if (secondaryResults[10].isNotEmpty) indianDramaTv = secondaryResults[10];
+        if (secondaryResults[7].isNotEmpty) indianDramaTv = secondaryResults[7];
         final refreshedKoreanDrama = [
-          ...secondaryResults[1], ...secondaryResults[11],
-          ...secondaryResults[12], ...secondaryResults[13],
+          ...secondaryResults[1], ...secondaryResults[8],
         ];
         if (refreshedKoreanDrama.isNotEmpty) {
           koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
@@ -2790,7 +2800,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (downloaded != null) {
       _recordWatch(selectedMovie);
-      Navigator.push<void>(context, MaterialPageRoute<void>(
+      unawaited(Navigator.push<void>(context, MaterialPageRoute<void>(
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
@@ -2801,9 +2811,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
-      )).then((_) {
-        if (mounted) setState(() {});
-      });
+      )));
       return;
     }
 
@@ -2814,7 +2822,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     _recordWatch(selectedMovie);
-    Navigator.push<void>(context, MaterialPageRoute<void>(
+    unawaited(Navigator.push<void>(context, MaterialPageRoute<void>(
       builder: (_) => MoviePlayerScreen(
         movie: selectedMovie,
         recommendedMovies: _allMovies(),
@@ -2824,9 +2832,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
-    )).then((_) {
-      if (mounted) setState(() {});
-    });
+    )));
   }
 
   void _openRanking([String category = 'Cinema', bool tv = false]) {
@@ -2935,14 +2941,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _sectionBlock(String title, List<Movie> movies) {
     final allFilters = _sectionFilterOptions(title);
-    final filters = allFilters.where((filter) =>
-        _filterSectionMovies(title, movies, filter).isNotEmpty).toList();
+    final filteredByOption = <String, List<Movie>>{
+      for (final filter in allFilters)
+        filter: _filterSectionMovies(title, movies, filter),
+    };
+    final filters = allFilters
+        .where((filter) => filteredByOption[filter]!.isNotEmpty)
+        .toList(growable: false);
     final selected = filters.contains(_sectionFilters[title])
         ? _sectionFilters[title]!
         : (filters.isNotEmpty ? filters.first : '');
     final visibleMovies = filters.isEmpty
         ? _deduplicateMovies(movies)
-        : _filterSectionMovies(title, movies, selected);
+        : filteredByOption[selected] ?? const <Movie>[];
 
     // A category with no matching catalogue items is omitted instead of
     // leaving an empty strip on the Home page.
@@ -3208,52 +3219,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          PageView.builder(
-            controller: _sliderController,
-            physics: const BouncingScrollPhysics(),
-            itemCount: slides.length,
-            onPageChanged: (index) {
-              if (_slide != index) _slide = index;
-              _scrollFeaturedCardTo(index);
+          NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollStartNotification &&
+                  notification.dragDetails != null) {
+                _lastCarouselInteractionAt = DateTime.now();
+              }
+              return false;
             },
-            itemBuilder: (context, index) {
-              final movie = slides[index];
-              return GestureDetector(
-                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    movie.backdropUrl.isEmpty
-                        ? Container(color: panel)
-                        : FlixoraCachedImage(
-                            imageUrl: movie.backdropUrl,
-                            isOnline: _online,
-                            fit: BoxFit.cover,
-                            memCacheWidth: heroCacheWidth,
-                            memCacheHeight: heroCacheHeight,
-                            placeholder: Container(color: panel),
-                            fallback: Container(color: panel),
+            child: PageView.builder(
+              controller: _sliderController,
+              physics: const BouncingScrollPhysics(),
+              allowImplicitScrolling: true,
+              itemCount: slides.length,
+              onPageChanged: (index) {
+                if (_slide != index) _slide = index;
+                _scrollFeaturedCardTo(index);
+              },
+              itemBuilder: (context, index) {
+                final movie = slides[index];
+                return GestureDetector(
+                  onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      movie.backdropUrl.isEmpty
+                          ? Container(color: panel)
+                          : FlixoraCachedImage(
+                              imageUrl: movie.backdropUrl,
+                              isOnline: _online,
+                              fit: BoxFit.cover,
+                              memCacheWidth: heroCacheWidth,
+                              memCacheHeight: heroCacheHeight,
+                              placeholder: Container(color: panel),
+                              fallback: Container(color: panel),
+                            ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x55000000),
+                              Color(0x08000000),
+                              Colors.transparent,
+                              Color(0xFF080808),
+                            ],
+                            stops: [0, 0.28, 0.58, 1],
                           ),
-                    const DecoratedBox(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Color(0x55000000),
-                            Color(0x08000000),
-                            Colors.transparent,
-                            Color(0xFF080808),
-                          ],
-                          stops: [0, 0.28, 0.58, 1],
                         ),
                       ),
-                    ),
-                    _titleOpeningOverlay(movie),
-                  ],
-                ),
-              );
-            },
+                      _titleOpeningOverlay(movie),
+                    ],
+                  ),
+                );
+              },
+            ),
           ),
           Positioned(
             left: 0,
@@ -3273,6 +3294,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       height: FeaturedCarouselLayout.cardHeight,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
+          if (notification is ScrollStartNotification &&
+              notification.dragDetails != null) {
+            _lastCarouselInteractionAt = DateTime.now();
+          }
           if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
@@ -3481,6 +3506,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final Map<String, String> _sectionFilters = {};
 
   List<Movie> _moviesForHomeCategory(String category) {
+    return _homeCategoryMemo.putIfAbsent(
+      category,
+      () => _computeMoviesForHomeCategory(category),
+    );
+  }
+
+  List<Movie> _computeMoviesForHomeCategory(String category) {
     switch (category) {
       case 'Trending':
         return _deduplicateMovies([
@@ -3535,6 +3567,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _gemsForYou() {
+    final cached = _homeGemsMemo;
+    if (cached != null) return cached;
+
     final titles = _deduplicateMovies([
       ...flixoraMovies,
       ...trending,
@@ -3546,7 +3581,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...koreanDrama,
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
-    return titles.take(14).toList();
+    return _homeGemsMemo = titles.take(14).toList(growable: false);
   }
 
   Widget _homeCategoryCards() {
@@ -3731,6 +3766,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: panel,
       onRefresh: loadHome,
       child: ListView(
+        key: const PageStorageKey<String>('flixora-home-trending'),
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),
         ),
@@ -3789,6 +3825,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return GridView.builder(
+      key: PageStorageKey<String>('flixora-home-collection-$title'),
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -4137,6 +4174,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList();
 
     return ListView(
+      key: const PageStorageKey<String>('flixora-search-landing'),
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
@@ -4247,6 +4285,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         )
                       : ListView.builder(
+                          key: const PageStorageKey<String>('flixora-search-results'),
                           physics: const BouncingScrollPhysics(),
                           padding: const EdgeInsets.only(top: 4, bottom: 18),
                           itemCount: filtered.length,
@@ -6908,12 +6947,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<Map<String, dynamic>> _loadPlayerMovieDetails() async {
     final id = widget.movie.tmdbId;
     if (id <= 0) {
-      await _discoverAndMergePublicSources(
+      unawaited(_discoverAndMergePublicSources(
         baseSources: _providerSources,
         isTv: widget.movie.mediaType == 'tv',
         season: _selectedSeasonNumber,
         episode: _selectedEpisodeNumber,
-      );
+      ));
       return {};
     }
     try {
@@ -6951,16 +6990,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ? _toInt(seasons.first['season_number'])
             : 1;
         if (mounted && !_isDisposed) {
+          final initialSources = ProviderCatalog.forTv(
+            tmdbId: id,
+            imdbId: _tvImdbId,
+            seasonNumber: firstSeason,
+            episodeNumber: 1,
+            adminVideoUrl: widget.movie.videoUrl,
+          );
           setState(() {
             _tvSeasons = seasons;
             _selectedSeasonNumber = firstSeason;
             _selectedEpisodeNumber = 1;
+            _providerSources = initialSources;
+            final selectedId = _selectedProviderSource?.id;
+            if (selectedId != null) {
+              _selectedProviderSource = initialSources
+                  .where((source) => source.id == selectedId)
+                  .cast<ProviderEmbedSource?>()
+                  .firstWhere((source) => source != null, orElse: () => null);
+            }
           });
         }
 
-        // Anime is catalogued as TV by TMDB. Use AniList only when TMDB's
-        // metadata identifies a Japanese animated series and an exact title
-        // match is found; otherwise use the season-aware TMDB TV route.
+        // Anime mapping and episode metadata are secondary: start the
+        // season-aware provider immediately and enrich the controls in the
+        // background so a slow AniList/episode request cannot block playback.
         final genres = (details['genres'] as List? ?? [])
             .whereType<Map>()
             .map((genre) => (genre['name'] ?? '').toString().toLowerCase())
@@ -6973,19 +7027,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         final isAnime = genres.contains('animation') &&
             (language == 'ja' || countries.contains('JP'));
 
-        int? aniListId;
         if (isAnime) {
           final firstAirDate = (details['first_air_date'] ?? '').toString();
           final year = firstAirDate.length >= 4
               ? firstAirDate.substring(0, 4)
               : widget.movie.year;
-          aniListId = await AniListService.findMatchingAnimeId(
+          _aniListId = await AniListService.findMatchingAnimeId(
             title: (details['name'] ?? widget.movie.title).toString(),
             year: year,
           );
         }
-        _aniListId = aniListId;
-        await _loadTvSeasonEpisodes(firstSeason);
+        unawaited(_loadTvSeasonEpisodes(firstSeason));
       } else {
         if (mounted && !_isDisposed) {
           setState(() {
@@ -6996,24 +7048,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               adminVideoUrl: widget.movie.videoUrl,
             );
           });
-          await _discoverAndMergePublicSources(
+          unawaited(_discoverAndMergePublicSources(
             baseSources: _providerSources,
             isTv: false,
             season: 1,
             episode: 1,
-          );
+          ));
         }
       }
       return details;
     } catch (e) {
       debugPrint('Could not load player title metadata: $e');
       if (mounted && !_isDisposed) {
-        await _discoverAndMergePublicSources(
+        unawaited(_discoverAndMergePublicSources(
           baseSources: _providerSources,
           isTv: widget.movie.mediaType == 'tv',
           season: _selectedSeasonNumber,
           episode: _selectedEpisodeNumber,
-        );
+        ));
       }
       return {};
     }
@@ -7043,20 +7095,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       adminVideoUrl: widget.movie.videoUrl,
     );
     if (mounted && !_isDisposed) {
+      final selectedId = _selectedProviderSource?.id;
+      final replacement = selectedId == null
+          ? null
+          : sources
+              .where((source) => source.id == selectedId)
+              .cast<ProviderEmbedSource?>()
+              .firstWhere((source) => source != null, orElse: () => null);
       setState(() {
         _providerSources = sources;
-        _selectedProviderSource = null;
+        // Keep the active provider mounted when season metadata refreshes.
+        // Its URL is updated to the selected season/episode when applicable.
+        _selectedProviderSource = replacement;
         _failedProviderIds.clear();
         _errorMessage = null;
       });
     }
-    await _discoverAndMergePublicSources(
+    unawaited(_discoverAndMergePublicSources(
       baseSources: sources,
       isTv: true,
       season: season,
       episode: episode,
       selectProvider: selectProvider,
-    );
+    ));
   }
 
   List<ProviderEmbedSource> _mergePublicSources(
@@ -7520,9 +7581,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _isSelectingDefaultProvider = true;
     try {
-      // Resolve IMDb metadata before choosing Play4U. This is also important
-      // when a direct Admin source fails before the metadata request completes.
-      await _movieDetailsFuture;
+      // Give TMDB a short head start so Play4U can use its IMDb route when
+      // metadata is fast. If TMDB is slow, start the already-available VidRift
+      // route instead of leaving the player waiting on metadata/network retries.
+      try {
+        await _movieDetailsFuture.timeout(const Duration(milliseconds: 1400));
+      } on TimeoutException {
+        debugPrint('TMDB metadata is slow; starting an available fallback provider.');
+      }
       if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
       // Admin-managed direct MP4/HLS was already tried above.
@@ -8066,22 +8132,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _prepareAndInitializePlayer() async {
-    // Load Admin quality URLs before opening the player. This allows playback
-    // even when the legacy movies.video_url field is empty.
-    await _loadVideoQualities();
-    if (!mounted || _isDisposed) return;
-
-    // Admin-managed MP4/HLS always gets the first chance to play.
-    await _initializePlayer();
+    // If an Admin direct URL is already present, start it immediately while
+    // quality alternatives load in parallel. When the URL is only in the
+    // quality table, wait for that lookup before choosing a fallback provider.
+    final hasLegacyDirectUrl = _resolveInitialNetworkUrl().isNotEmpty;
+    if (hasLegacyDirectUrl) {
+      unawaited(_loadVideoQualities());
+      await _initializePlayer();
+    } else {
+      await _loadVideoQualities();
+      if (!mounted || _isDisposed) return;
+      await _initializePlayer();
+    }
     if (!mounted || _isDisposed || _validVideoUrl ||
         widget.localFilePath != null) {
       return;
     }
 
-    // Resolve the real IMDb ID before choosing the default provider. This
-    // avoids opening Play4U with a guessed or incomplete identifier.
-    await _movieDetailsFuture;
-    if (!mounted || _isDisposed) return;
+    // Provider selection races essential TMDB metadata against a short
+    // timeout; slow metadata must not hold the first playable fallback.
     await _selectDefaultProviderIfNeeded();
   }
 
