@@ -2164,18 +2164,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _toggleFavourite(Movie movie) async {
-    setState(() {
-      if (_favourites.contains(movie.id)) {
-        _favourites.remove(movie.id);
-      } else {
-        _favourites.add(movie.id);
-      }
-    });
-
-    await MovieCache.saveFavourites(_favourites);
-  }
-
   Future<void> _toggleSaved(Movie movie) async {
     setState(() {
       if (_saved.contains(movie.id)) {
@@ -2715,19 +2703,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       await _openResolvedPlayer(selectedMovie, movie);
-    } finally {
-      _endTitleOpening();
-    }
-  }
-
-  Future<void> _playResolvedMovie(
-    Movie selectedMovie,
-    Movie requestedMovie,
-  ) async {
-    if (!_beginTitleOpening(selectedMovie)) return;
-    try {
-      if (!await _ensureInternetForPlayback()) return;
-      await _openResolvedPlayer(selectedMovie, requestedMovie);
     } finally {
       _endTitleOpening();
     }
