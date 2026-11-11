@@ -6,6 +6,7 @@ import 'package:html/parser.dart' as html_parser;
 import 'package:http/http.dart' as http;
 
 import 'provider_catalog.dart';
+import 'public_domain_movie_source_service.dart';
 
 /// Discovers authorized direct media sources from configured external providers.
 /// Admin-managed FLIXORA sources remain higher priority.
@@ -60,6 +61,11 @@ class AuthorizedProviderService {
             isTv: isTv,
             season: season,
             episode: episode,
+          )),
+      _safe(() => PublicDomainMovieSourceService.discover(
+            query,
+            year: year,
+            isTv: isTv,
           )),
     ]);
 
