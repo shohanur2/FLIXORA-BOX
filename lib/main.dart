@@ -2327,56 +2327,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Keeps every catalogue entry point on one FLIXORA player-first route.
+  /// The player tries Admin-managed hosting (Publitio/Supabase/direct URL)
+  /// before falling back to the configured movie, TV and anime providers.
   Future<void> _openMovie(Movie movie) async {
-    if (!_beginTitleOpening(movie)) return;
-    try {
-      final hasInternet = await InternetService.isOnline();
-      if (!mounted) return;
-      if (!hasInternet) {
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-        });
-        _showNoInternetScreen();
-        return;
-      }
-      if (!_online) setState(() => _online = true);
-
-      final resolvedMovie = await _resolveMovieForOpening(movie);
-      if (!mounted) return;
-
-      if (resolvedMovie == null) {
-        _showMessage('This title is currently unavailable.');
-        return;
-      }
-
-      final selectedMovie = resolvedMovie;
-      final isFavourite = _favourites.contains(selectedMovie.id) ||
-          _favourites.contains(movie.id);
-      final isSaved = _saved.contains(selectedMovie.id) ||
-          _saved.contains(movie.id);
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => MovieDetailsScreen(
-            movie: selectedMovie,
-            isOnline: _online,
-            isFavourite: isFavourite,
-            isSaved: isSaved,
-            onShare: () => Share.share(
-              '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
-            ),
-            onFavourite: () => _toggleFavourite(selectedMovie),
-            onSave: () => _toggleSaved(selectedMovie),
-            onDownload: () => addDownload(selectedMovie),
-            onWatch: () => _playResolvedMovie(selectedMovie, movie),
-          ),
-        ),
-      );
-    } finally {
-      _endTitleOpening();
-    }
+    await _playMovie(movie);
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
