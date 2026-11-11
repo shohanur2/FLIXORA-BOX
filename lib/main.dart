@@ -1852,6 +1852,89 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return _deduplicateMovies(combined);
   }
 
+  void _openSearch() {
+    if (_searchOpen) return;
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _tab = 0;
+      _showRanking = false;
+      _searchOpen = true;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchTimer?.cancel();
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searchOpen = false;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+  }
+
+  List<Movie> _searchDiscoveryMovies() {
+    final titles = _allMovies();
+    titles.sort((a, b) {
+      final rating = b.rating.compareTo(a.rating);
+      return rating != 0 ? rating : b.year.compareTo(a.year);
+    });
+    return titles;
+  }
+
+  List<Movie> _searchSuggestions() {
+    final titles = _deduplicateMovies([
+      ...trending,
+      ...popular,
+      ...trendingTv,
+      ...popularTv,
+      ...flixoraMovies,
+    ]);
+    if (titles.isEmpty) return _searchDiscoveryMovies().take(4).toList();
+    return titles.take(4).toList();
+  }
+
+  List<Movie> _filterSearchMovies(List<Movie> source, String category) {
+    switch (category) {
+      case 'Movies':
+        return source.where((movie) => movie.mediaType == 'movie').toList();
+      case 'Series':
+        return source.where((movie) =>
+            movie.mediaType == 'tv' && !_isAnimeTitle(movie)).toList();
+      case 'Anime':
+        return source.where(_isAnimeTitle).toList();
+      case 'Drama':
+        return source.where((movie) => movie.genres.any(
+          (genre) => genre.toLowerCase().contains('drama'),
+        )).toList();
+      case 'Bengali':
+        return source.where((movie) =>
+            movie.originalLanguage.toLowerCase() == 'bn' ||
+            movie.originCountry.toUpperCase().contains('BD')).toList();
+      default:
+        return source;
+    }
+  }
+
+  List<String> _availableSearchFilters(List<Movie> source) {
+    const filters = ['All', 'Movies', 'Series', 'Anime', 'Drama', 'Bengali'];
+    return filters.where((filter) =>
+        filter == 'All' || _filterSearchMovies(source, filter).isNotEmpty
+    ).toList();
+  }
+
   Future<void> searchMovies(String query) async {
     final text = query.trim();
 
@@ -1869,7 +1952,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    final onlineNow = _online && await InternetService.isOnline();
+    final onlineNow = await InternetService.isOnline();
     if (!mounted) return;
     if (!onlineNow) {
       setState(() {
@@ -1920,10 +2003,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _onSearchChanged(String value) {
     _searchTimer?.cancel();
+    final query = value.trim();
 
-    if (value.trim().isEmpty) {
+    if (query.isEmpty) {
       setState(() {
         _search = '';
+        _searchCategory = 'All';
         searchResults = [];
         _searchError = null;
         _searchLoading = false;
@@ -1931,9 +2016,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    setState(() {
+      _search = query;
+      _searchCategory = 'All';
+      _searchLoading = true;
+      _searchError = null;
+    });
+
     _searchTimer = Timer(
-      const Duration(milliseconds: 500),
-      () => searchMovies(value),
+      const Duration(milliseconds: 350),
+      () => searchMovies(query),
     );
   }
 
