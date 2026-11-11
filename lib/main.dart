@@ -5665,7 +5665,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: CircularProgressIndicator(color: gold),
             )
           : (_tab == 0 && !_searchOpen && !_online && _allMovies().isEmpty)
-              ? const NoInternetScreen()
+              ? NoInternetScreen()
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
