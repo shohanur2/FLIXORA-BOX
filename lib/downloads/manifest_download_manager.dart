@@ -344,9 +344,8 @@ class ManifestDownloadManager {
     for (final resource in resources) {
       final target = File('${directory.path}/${resource.fileName}');
       if (await target.exists() && await target.length() > 0) {
-        task
-          ..completedSegments++
-          ..bytesReceived += await target.length();
+        task.completedSegments++;
+        task.bytesReceived += await target.length();
       }
     }
     _updateManifestProgress(task);
@@ -361,9 +360,8 @@ class ManifestDownloadManager {
       final target = File('${directory.path}/${resource.fileName}');
       if (await target.exists() && await target.length() > 0) continue;
       final size = await _downloadResource(resource.uri, target, token);
-      task
-        ..completedSegments++
-        ..bytesReceived += size;
+      task.completedSegments++;
+      task.bytesReceived += size;
       _updateManifestProgress(task);
       onProgress();
     }
