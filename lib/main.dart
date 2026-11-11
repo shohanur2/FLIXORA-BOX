@@ -1222,6 +1222,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _networkTimer;
   Timer? _searchTimer;
+  DateTime? _lastCarouselInteractionAt;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<AuthState>? _authSubscription;
@@ -1257,6 +1258,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final ValueNotifier<String?> _openingTitleNotifier = ValueNotifier(null);
   List<Movie>? _allMoviesMemo;
   List<Movie>? _homeTrendingMemo;
+  List<Movie>? _homeGemsMemo;
+  final Map<String, List<Movie>> _homeCategoryMemo = {};
   final Map<String, Movie> _resolvedAdminMovies = {};
   final Set<String> _resolvedAdminChecked = {};
   final Set<String> _blockedAdminMovies = {};
@@ -1353,6 +1356,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _invalidateCatalogueMemo() {
     _allMoviesMemo = null;
     _homeTrendingMemo = null;
+    _homeGemsMemo = null;
+    _homeCategoryMemo.clear();
   }
 
   bool get _isOpeningTitle => _openingTitleNotifier.value != null;
@@ -1432,9 +1437,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _timer = Timer.periodic(
       const Duration(seconds: 5),
       (_) {
+        final lastInteraction = _lastCarouselInteractionAt;
         if (!mounted ||
             _tab != 0 ||
             _isOpeningTitle ||
+            (lastInteraction != null &&
+                DateTime.now().difference(lastInteraction) <
+                    const Duration(seconds: 8)) ||
             !(ModalRoute.of(context)?.isCurrent ?? true)) {
           return;
         }
@@ -1658,7 +1667,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final hasNetwork = !results.contains(ConnectivityResult.none);
 
         if (!hasNetwork) {
-          if (!mounted) return;
+          if (!mounted || (!_online && _connectionKnown)) return;
 
           setState(() {
             _online = false;
@@ -1677,10 +1686,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         final wasOffline = !_online;
 
-        setState(() {
-          _online = online;
-          _connectionKnown = true;
-        });
+        if (_online != online || !_connectionKnown) {
+          setState(() {
+            _online = online;
+            _connectionKnown = true;
+          });
+        }
 
         if (online && wasOffline) {
           _dismissNoInternetScreen();
@@ -2801,9 +2812,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
-      )).then((_) {
-        if (mounted) setState(() {});
-      });
+      ));
       return;
     }
 
@@ -2824,9 +2833,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
-    )).then((_) {
-      if (mounted) setState(() {});
-    });
+    ));
   }
 
   void _openRanking([String category = 'Cinema', bool tv = false]) {
@@ -2935,14 +2942,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _sectionBlock(String title, List<Movie> movies) {
     final allFilters = _sectionFilterOptions(title);
-    final filters = allFilters.where((filter) =>
-        _filterSectionMovies(title, movies, filter).isNotEmpty).toList();
+    final filteredByOption = <String, List<Movie>>{
+      for (final filter in allFilters)
+        filter: _filterSectionMovies(title, movies, filter),
+    };
+    final filters = allFilters
+        .where((filter) => filteredByOption[filter]!.isNotEmpty)
+        .toList(growable: false);
     final selected = filters.contains(_sectionFilters[title])
         ? _sectionFilters[title]!
         : (filters.isNotEmpty ? filters.first : '');
     final visibleMovies = filters.isEmpty
         ? _deduplicateMovies(movies)
-        : _filterSectionMovies(title, movies, selected);
+        : filteredByOption[selected] ?? const <Movie>[];
 
     // A category with no matching catalogue items is omitted instead of
     // leaving an empty strip on the Home page.
@@ -3208,7 +3220,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          PageView.builder(
+          NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollStartNotification &&
+                  notification.dragDetails != null) {
+                _lastCarouselInteractionAt = DateTime.now();
+              }
+              return false;
+            },
+            child: PageView.builder(
             controller: _sliderController,
             physics: const BouncingScrollPhysics(),
             itemCount: slides.length,
@@ -3255,6 +3275,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               );
             },
           ),
+          ),
           Positioned(
             left: 0,
             right: 0,
@@ -3273,6 +3294,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       height: FeaturedCarouselLayout.cardHeight,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
+          if (notification is ScrollStartNotification &&
+              notification.dragDetails != null) {
+            _lastCarouselInteractionAt = DateTime.now();
+          }
           if (notification is ScrollEndNotification &&
               notification.metrics.axis == Axis.horizontal &&
               _sliderController.hasClients) {
@@ -3481,6 +3506,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final Map<String, String> _sectionFilters = {};
 
   List<Movie> _moviesForHomeCategory(String category) {
+    return _homeCategoryMemo.putIfAbsent(
+      category,
+      () => _computeMoviesForHomeCategory(category),
+    );
+  }
+
+  List<Movie> _computeMoviesForHomeCategory(String category) {
     switch (category) {
       case 'Trending':
         return _deduplicateMovies([
@@ -3535,6 +3567,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _gemsForYou() {
+    final cached = _homeGemsMemo;
+    if (cached != null) return cached;
+
     final titles = _deduplicateMovies([
       ...flixoraMovies,
       ...trending,
@@ -3546,7 +3581,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...koreanDrama,
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
-    return titles.take(14).toList();
+    return _homeGemsMemo = titles.take(14).toList(growable: false);
   }
 
   Widget _homeCategoryCards() {
@@ -3731,6 +3766,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: panel,
       onRefresh: loadHome,
       child: ListView(
+        key: const PageStorageKey<String>('flixora-home-trending'),
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),
         ),
@@ -3789,6 +3825,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return GridView.builder(
+      key: PageStorageKey<String>('flixora-home-collection-$title'),
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 22),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -4137,6 +4174,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList();
 
     return ListView(
+      key: const PageStorageKey<String>('flixora-search-landing'),
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
@@ -6985,7 +7023,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           );
         }
         _aniListId = aniListId;
-        await _loadTvSeasonEpisodes(firstSeason);
+        unawaited(_loadTvSeasonEpisodes(firstSeason));
       } else {
         if (mounted && !_isDisposed) {
           setState(() {
@@ -6996,24 +7034,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               adminVideoUrl: widget.movie.videoUrl,
             );
           });
-          await _discoverAndMergePublicSources(
+          unawaited(_discoverAndMergePublicSources(
             baseSources: _providerSources,
             isTv: false,
             season: 1,
             episode: 1,
-          );
+          ));
         }
       }
       return details;
     } catch (e) {
       debugPrint('Could not load player title metadata: $e');
       if (mounted && !_isDisposed) {
-        await _discoverAndMergePublicSources(
+        unawaited(_discoverAndMergePublicSources(
           baseSources: _providerSources,
           isTv: widget.movie.mediaType == 'tv',
           season: _selectedSeasonNumber,
           episode: _selectedEpisodeNumber,
-        );
+        ));
       }
       return {};
     }
@@ -7050,13 +7088,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
       });
     }
-    await _discoverAndMergePublicSources(
+    unawaited(_discoverAndMergePublicSources(
       baseSources: sources,
       isTv: true,
       season: season,
       episode: episode,
       selectProvider: selectProvider,
-    );
+    ));
   }
 
   List<ProviderEmbedSource> _mergePublicSources(
@@ -7520,9 +7558,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _isSelectingDefaultProvider = true;
     try {
-      // Resolve IMDb metadata before choosing Play4U. This is also important
-      // when a direct Admin source fails before the metadata request completes.
-      await _movieDetailsFuture;
+      // Give TMDB a short head start so Play4U can use its IMDb route when
+      // metadata is fast. If TMDB is slow, start the already-available VidRift
+      // route instead of leaving the player waiting on metadata/network retries.
+      try {
+        await _movieDetailsFuture.timeout(const Duration(milliseconds: 1400));
+      } on TimeoutException {
+        debugPrint('TMDB metadata is slow; starting an available fallback provider.');
+      }
       if (!mounted || _isDisposed || _selectedProviderSource != null) return;
 
       // Admin-managed direct MP4/HLS was already tried above.
