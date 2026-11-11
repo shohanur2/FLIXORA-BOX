@@ -85,7 +85,7 @@ const Color playerWhite = Colors.white;
 final cache_manager.CacheManager flixoraImageCacheManager =
     cache_manager.CacheManager(
   cache_manager.Config(
-    'flixoraImageCache',
+    'libCachedImageData',
     stalePeriod: const Duration(days: 90),
     maxNrOfCacheObjects: 600,
   ),
