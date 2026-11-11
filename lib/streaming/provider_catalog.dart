@@ -37,9 +37,6 @@ class ProviderEmbedSource {
 class ProviderCatalog {
   ProviderCatalog._();
 
-  static const String _pvrPlayHost =
-      'dbhnmkjasgbvsdkjbskkvnskjbfckldsnckjbckjnxkjcsknxjvkjxnvcxknvku.pvrplay.fun';
-
   /// Configure this through the DAILYMOTION_PLAYER_ID GitHub Actions secret.
   static const String _dailymotionPlayerId =
       String.fromEnvironment('DAILYMOTION_PLAYER_ID');
@@ -91,16 +88,6 @@ class ProviderCatalog {
   // registry. Main-frame redirects stay on this explicit HTTPS allowlist.
   static const Set<String> _approvedRedirectHosts = <String>{
     'play4u.org',
-    'yapgrid.com',
-    'pvrplay.fun',
-    'reelsdownload.online',
-    'cinesrc.st',
-    'framextv.xyz',
-    'framextv.cc',
-    'streamrip.fun',
-    'filmu.in',
-    'multiembed.mov',
-    'codespecters.com',
     'youtube.com',
     'youtube-nocookie.com',
     'youtu.be',
@@ -314,8 +301,6 @@ class ProviderCatalog {
     }
 
     final id = tmdbId.toString();
-    final nexStreamKey = _dynamicNexStreamDemoKey();
-
     return <ProviderEmbedSource>[
       if (adminSource != null) adminSource,
       ProviderEmbedSource(
@@ -323,67 +308,16 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        // Keep the exact FLIXORA-REFERENCE embed URL, but load the
-        // provider page directly in Android WebView. A second wrapper iframe
-        // can leave Play4U's video surface black on some Android WebView builds.
-        // The provider's own nested player frames remain allowed by the
-        // Play4U-specific secure subframe navigation policy.
+        // Load Play4U directly so its own nested player frames remain in
+        // control of playback instead of adding a second iframe wrapper.
         loadInIframe: false,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
       ),
       ProviderEmbedSource(
-        id: 'yapgrid',
-        name: 'STREAM 2 · YapGrid',
-        url: 'https://yapgrid.com/embed/movie/$id?autoplay=1',
-        allowedHosts: const <String>{'yapgrid.com'},
-      ),
-      ProviderEmbedSource(
-        id: 'pvrplay',
-        name: 'STREAM 3 · PVRPlay',
-        url: 'https://$_pvrPlayHost/watch/movie/$id',
-        allowedHosts: const <String>{'pvrplay.fun'},
-      ),
-      ProviderEmbedSource(
-        id: 'cinesrc',
-        name: 'STREAM 4 · CineSRC',
-        url: 'https://cinesrc.st/embed/movie/$id',
-        allowedHosts: const <String>{'cinesrc.st'},
-      ),
-      ProviderEmbedSource(
-        id: 'framex',
-        name: 'STREAM 5 · Frame X',
-        url: 'https://framextv.xyz/embed/$id',
-        allowedHosts: const <String>{'framextv.xyz', 'framextv.cc'},
-      ),
-      ProviderEmbedSource(
-        id: 'streamrip',
-        name: 'STREAM 6 · Stream Rip',
-        url: 'https://streamrip.fun/play?type=movie&id=$id',
-        allowedHosts: const <String>{'streamrip.fun'},
-      ),
-      ProviderEmbedSource(
-        id: 'filmu',
-        name: 'STREAM 7 · FilmU',
-        url: 'https://embed.filmu.in/movie/$id',
-        allowedHosts: const <String>{'filmu.in'},
-      ),
-      ProviderEmbedSource(
-        id: 'multiembed',
-        name: 'STREAM 8 · Multiembed',
-        url: 'https://multiembed.mov/?video_id=$id&tmdb=1',
-        allowedHosts: const <String>{'multiembed.mov'},
-      ),
-      ProviderEmbedSource(
-        id: 'nexstream',
-        name: 'STREAM 9 · NexStream',
-        url: 'https://api.codespecters.com/embed/movie/$id?apikey=$nexStreamKey',
-        allowedHosts: const <String>{'codespecters.com'},
-      ),
-      ProviderEmbedSource(
         id: 'vidrift-movie',
-        name: 'STREAM 10 · VidRift',
+        name: 'STREAM 2 · VidRift',
         url: 'https://embed.vidrift.net/embed/movie/$id?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1',
         allowedHosts: const <String>{
           'embed.vidrift.net',
@@ -428,89 +362,34 @@ class ProviderCatalog {
     };
     const brand = '?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1';
 
-    // Provider routes must resolve an authorized player for the exact TV episode.
-    // Each provider must still have the selected title/episode in its catalogue.
-    final tvProviders = <ProviderEmbedSource>[
-      ProviderEmbedSource(
-        id: 'play4u-tv',
-        name: 'STREAM 1 · Play4U',
-        url: _play4uTvUrl(imdbId, season, episode),
-        allowedHosts: const <String>{'play4u.org'},
-        // Load the exact reference episode route directly in Android
-        // WebView instead of wrapping it in a second iframe; Play4U creates
-        // and controls its own nested player frames.
-        loadInIframe: false,
-        unavailableReason: _validatedPlay4uImdbId(imdbId) == null
-            ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
-            : null,
-      ),
-      ProviderEmbedSource(
-        id: 'yapgrid-tv',
-        name: 'YapGrid · TV / Series',
-        url: 'https://yapgrid.com/embed/tv/$tmdbId/$season/$episode',
-        allowedHosts: const <String>{'yapgrid.com'},
-      ),
-      ProviderEmbedSource(
-        id: 'pvrplay-tv',
-        name: 'PVRPlay · TV / Series',
-        url: 'https://$_pvrPlayHost/watch/tv/$tmdbId/$season/$episode',
-        allowedHosts: const <String>{'pvrplay.fun'},
-      ),
-      ProviderEmbedSource(
-        id: 'cinesrc-tv',
-        name: 'CineSRC · TV / Series',
-        url: 'https://cinesrc.st/embed/tv/$tmdbId/$season/$episode',
-        allowedHosts: const <String>{'cinesrc.st'},
-      ),
-      ProviderEmbedSource(
-        id: 'framex-tv',
-        name: 'Frame X · TV / Series',
-        url: 'https://framextv.xyz/embed/$tmdbId/$season/$episode',
-        allowedHosts: const <String>{'framextv.xyz', 'framextv.cc'},
-      ),
-      ProviderEmbedSource(
-        id: 'streamrip-tv',
-        name: 'Stream Rip · TV / Series',
-        url: 'https://streamrip.fun/play?type=tv&id=$tmdbId&season=$season&episode=$episode',
-        allowedHosts: const <String>{'streamrip.fun'},
-      ),
-      ProviderEmbedSource(
-        id: 'filmu-tv',
-        name: 'FilmU · TV / Series',
-        url: 'https://embed.filmu.in/tv/$tmdbId/$season/$episode',
-        allowedHosts: const <String>{'filmu.in'},
-      ),
-      ProviderEmbedSource(
-        id: 'multiembed-tv',
-        name: 'Multiembed · TV / Series',
-        url: 'https://multiembed.mov/?video_id=$tmdbId&tmdb=1&s=$season&e=$episode',
-        allowedHosts: const <String>{'multiembed.mov'},
-      ),
-      ProviderEmbedSource(
-        id: 'nexstream-tv',
-        name: 'NexStream · TV / Series',
-        url: 'https://api.codespecters.com/embed/tv/$tmdbId/$season/$episode?apikey=' + _dynamicNexStreamDemoKey(),
-        allowedHosts: const <String>{'codespecters.com'},
-      ),
-      ProviderEmbedSource(
-        id: 'vidrift-tv',
-        name: 'VidRift · TV / Seasons & Episodes',
-        url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
-        allowedHosts: vidriftHosts,
-        loadInIframe: true,
-      ),
-    ];
+    final play4u = ProviderEmbedSource(
+      id: 'play4u-tv',
+      name: 'STREAM 1 · Play4U',
+      url: _play4uTvUrl(imdbId, season, episode),
+      allowedHosts: const <String>{'play4u.org'},
+      // Play4U owns its nested player frames; load its exact episode route.
+      loadInIframe: false,
+      unavailableReason: _validatedPlay4uImdbId(imdbId) == null
+          ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
+          : null,
+    );
+    final vidriftTv = ProviderEmbedSource(
+      id: 'vidrift-tv',
+      name: 'STREAM 2 · VidRift',
+      url: 'https://embed.vidrift.net/embed/tv/$tmdbId/$season/$episode$brand',
+      allowedHosts: vidriftHosts,
+      loadInIframe: true,
+    );
 
-    // Keep Play4U as STREAM 1 for movies and series, matching the
-    // reference registry. Anime Sub/Dub remain immediately selectable
-    // alternatives after Play4U.
+    // Anime gets VidRift's AniList Sub/Dub routes as variants of the same
+    // second provider. The TMDB TV route remains its final VidRift fallback.
     if (aniListId != null && aniListId > 0 && season == 1) {
       return <ProviderEmbedSource>[
         if (adminSource != null) adminSource,
-        tvProviders.first,
+        play4u,
         ProviderEmbedSource(
           id: 'vidrift-anime-sub',
-          name: 'VidRift Anime · Sub',
+          name: 'VidRift · Anime Sub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand',
           allowedHosts: vidriftHosts,
           loadInIframe: true,
@@ -518,37 +397,21 @@ class ProviderCatalog {
         ),
         ProviderEmbedSource(
           id: 'vidrift-anime-dub',
-          name: 'VidRift Anime · Dub',
+          name: 'VidRift · Anime Dub',
           url: 'https://embed.vidrift.net/embed/anilist/$aniListId/$animeEpisode$brand&dub=1',
           allowedHosts: vidriftHosts,
           loadInIframe: true,
           languageLabel: 'Dub',
         ),
-        ...tvProviders.skip(1),
+        vidriftTv,
       ];
     }
 
     return <ProviderEmbedSource>[
       if (adminSource != null) adminSource,
-      ...tvProviders,
+      play4u,
+      vidriftTv,
     ];
-  }
-
-  /// Mirrors the reference project's five-minute NexStream demo-key window.
-  /// A provider-issued production API key can replace this if required.
-  static String _dynamicNexStreamDemoKey() {
-    final timeWindow =
-        DateTime.now().millisecondsSinceEpoch ~/ 300000;
-    final value = 'NEXSTREAM$timeWindow';
-    var hash = 0;
-
-    for (final unit in value.codeUnits) {
-      hash = ((hash << 5) - hash + unit) & 0xffffffff;
-    }
-
-    if (hash >= 0x80000000) hash -= 0x100000000;
-    final hex = hash.abs().toRadixString(16).padRight(8, '0');
-    return 'DEMO_$hex';
   }
 
   /// Returns the next available provider after a failed source, wrapping once
@@ -591,7 +454,9 @@ class ProviderCatalog {
     // nested video-player frames. Those frames can use separate HTTPS hosts.
     // Allow secure public hosts for Play4U only; keep local/private targets
     // and insecure schemes blocked, and retain strict allowlists elsewhere.
-    if (source.id == 'play4u' || source.id == 'play4u-tv') {
+    if (source.id == 'play4u' ||
+        source.id == 'play4u-tv' ||
+        source.id.startsWith('vidrift-')) {
       return _isSafePublicHttpsSubframeHost(host);
     }
 
