@@ -2022,7 +2022,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final cachedQueryResults = await MovieCache.getSearch(text);
       if (!mounted) return;
 
-      final terms = text.toLowerCase().split(RegExp(r'\\s+'))
+      final terms = text.toLowerCase().split(RegExp(r'\s+'))
           .where((term) => term.isNotEmpty)
           .toList();
       final cachedCatalogueMatches = _allMovies().where((movie) {
