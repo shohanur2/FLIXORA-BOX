@@ -1615,6 +1615,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return;
         }
 
+        InternetService.invalidate();
         final online = await InternetService.isOnline();
 
         if (!mounted) return;
@@ -1894,6 +1895,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _openSearch() async {
     if (_searchOpen) {
+      InternetService.invalidate();
       final online = await InternetService.isOnline();
       if (!mounted) return;
       setState(() {
@@ -1916,6 +1918,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchController.clear();
     });
 
+    InternetService.invalidate();
     final online = await InternetService.isOnline();
     if (!mounted) return;
     setState(() {
@@ -2013,6 +2016,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
+    InternetService.invalidate();
     final onlineNow = await InternetService.isOnline();
     if (!mounted) return;
     if (!onlineNow) {
@@ -2112,6 +2116,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> addDownload(Movie movie) async {
+    InternetService.invalidate();
     final hasInternet = await InternetService.isOnline();
     if (!hasInternet) {
       if (mounted) {
@@ -2559,6 +2564,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
+      InternetService.invalidate();
       final hasInternet = await InternetService.isOnline();
       if (!mounted) return;
       if (!hasInternet) {
@@ -2691,6 +2697,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // A completed local download is handled above and remains available
     // offline. Every network/provider stream requires a live connection.
+    InternetService.invalidate();
     final hasInternet = await InternetService.isOnline();
     if (!mounted) return;
     if (!hasInternet) {
