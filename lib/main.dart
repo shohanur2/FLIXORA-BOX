@@ -6704,6 +6704,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   ProviderEmbedSource? _selectedProviderSource;
   List<Map<String, dynamic>> _tvSeasons = [];
   List<Map<String, dynamic>> _tvEpisodes = [];
+  List<Map<String, dynamic>> _movieBoxSeasons = [];
+  List<Map<String, dynamic>> _movieBoxAllLinks = [];
+  List<Map<String, dynamic>> _movieBoxSubtitles = [];
+  final Map<String, Map<String, String>> _movieBoxHeadersByUrl = {};
+  List<String> _movieBoxLanguages = [];
+  String? _selectedMovieBoxLanguage;
+  Map<String, dynamic>? _movieBoxDetail;
   int _selectedSeasonNumber = 1;
   int _selectedEpisodeNumber = 1;
   int? _aniListId;
@@ -6760,6 +6767,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return defaultQuality['video_url'] ?? '';
     }
 
+    if (widget.movie.isMovieBox && _availableQualities.isNotEmpty) {
+      return _availableQualities.first['video_url'] ?? '';
+    }
+
     final legacyUrl = widget.movie.videoUrl.trim();
     // Dailymotion share links are provider pages, not direct media files.
     // Route them through the dedicated Player-ID embed source instead.
@@ -6787,16 +6798,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
-    _providerSources = widget.movie.mediaType == 'tv'
-        ? ProviderCatalog.forTv(
-            tmdbId: widget.movie.tmdbId,
-            adminVideoUrl: widget.movie.videoUrl,
-          )
-        : ProviderCatalog.forMovie(
-            tmdbId: widget.movie.tmdbId,
-            dailymotionUrl: widget.movie.videoUrl,
-            adminVideoUrl: widget.movie.videoUrl,
-          );
+    _providerSources = widget.movie.isMovieBox
+        ? <ProviderEmbedSource>[]
+        : widget.movie.mediaType == 'tv'
+            ? ProviderCatalog.forTv(
+                tmdbId: widget.movie.tmdbId,
+                adminVideoUrl: widget.movie.videoUrl,
+              )
+            : ProviderCatalog.forMovie(
+                tmdbId: widget.movie.tmdbId,
+                dailymotionUrl: widget.movie.videoUrl,
+                adminVideoUrl: widget.movie.videoUrl,
+              );
     _movieDetailsFuture = _loadPlayerMovieDetails();
     _player = Player(
       configuration: PlayerConfiguration(
@@ -6906,7 +6919,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _refreshTvProviderSources({bool selectProvider = false}) {
     final id = widget.movie.tmdbId;
-    if (widget.movie.mediaType != 'tv') return;
+    if (widget.movie.mediaType != 'tv' || widget.movie.isMovieBox) return;
     final sources = ProviderCatalog.forTv(
       tmdbId: id,
       aniListId: _aniListId,
@@ -6936,6 +6949,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     int seasonNumber, {
     bool selectProvider = false,
   }) async {
+    if (widget.movie.isMovieBox) {
+      await _loadMovieBoxSeasonEpisodes(seasonNumber, resolveStreams: true);
+      return;
+    }
     if (widget.movie.tmdbId <= 0 || _isDisposed) return;
     final requestToken = ++_tvSeasonRequestToken;
     if (mounted) {
@@ -6979,6 +6996,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void _selectTvEpisode(int episodeNumber) {
     if (episodeNumber <= 0 || episodeNumber == _selectedEpisodeNumber) return;
     setState(() => _selectedEpisodeNumber = episodeNumber);
+    if (widget.movie.isMovieBox) {
+      unawaited(_loadMovieBoxStreams(
+        season: _selectedSeasonNumber,
+        episode: episodeNumber,
+        openPlayer: true,
+      ));
+      return;
+    }
     _refreshTvProviderSources(selectProvider: true);
   }
 
@@ -7224,6 +7249,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _selectDefaultProviderIfNeeded({bool force = false}) async {
+    if (widget.movie.isMovieBox) return;
     if (!mounted ||
         _isDisposed ||
         !_playerIsOnline ||
@@ -7330,7 +7356,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _providerSelector() {
-    if (widget.localFilePath != null ||
+    if (widget.movie.isMovieBox || widget.localFilePath != null ||
         (widget.movie.tmdbId <= 0 && _providerSources.isEmpty)) {
       return const SizedBox.shrink();
     }
@@ -7549,7 +7575,333 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
+  Future<void> _prepareMovieBoxPlayback() async {
+    if (_isDisposed || !_playerIsOnline) {
+      if (mounted) {
+        setState(() => _errorMessage = 'Connect to the internet to load this MovieBox title.');
+      }
+      return;
+    }
+
+    if (mounted) setState(() => _loadingQualities = true);
+    try {
+      final rawItem = widget.movie.toMovieBoxMap();
+      Map<String, dynamic> playItem = rawItem;
+      try {
+        final rich = await MovieBoxService.detail(rawItem);
+        if (rich['item'] is Map) {
+          playItem = Map<String, dynamic>.from(rich['item'] as Map);
+        }
+      } catch (error) {
+        debugPrint('MovieBox rich details unavailable; using catalogue item: $error');
+      }
+
+      _movieBoxDetail = await MovieBoxService.playDetail(playItem);
+
+      if (widget.movie.movieBoxIsSeries) {
+        _movieBoxSeasons = await MovieBoxService.seasons(widget.movie.movieBoxId);
+        final normalizedSeasons = _movieBoxSeasons
+            .map((season) {
+              final episodes = (season['episodes'] as List? ?? const [])
+                  .map(_toInt)
+                  .where((number) => number > 0)
+                  .toList(growable: false);
+              return <String, dynamic>{
+                'season_number': _toInt(season['se']),
+                'episode_count': _toInt(season['maxEp']),
+                'episodes': episodes,
+              };
+            })
+            .where((season) => _toInt(season['season_number']) > 0)
+            .toList(growable: false)
+          ..sort((a, b) => _toInt(a['season_number'])
+              .compareTo(_toInt(b['season_number'])));
+
+        if (normalizedSeasons.isNotEmpty) {
+          final firstSeason = _toInt(normalizedSeasons.first['season_number']);
+          if (mounted && !_isDisposed) {
+            setState(() {
+              _tvSeasons = normalizedSeasons;
+              _selectedSeasonNumber = firstSeason;
+              _selectedEpisodeNumber = 1;
+            });
+          }
+          await _loadMovieBoxSeasonEpisodes(
+            firstSeason,
+            resolveStreams: false,
+          );
+        }
+      }
+
+      await _loadMovieBoxStreams(
+        season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
+        episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
+        openPlayer: false,
+      );
+    } catch (error) {
+      debugPrint('MovieBox playback preparation failed: $error');
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _errorMessage = 'MovieBox could not resolve a playable stream. Please retry.';
+          _tvEpisodeError = error.toString();
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingQualities = false);
+      }
+    }
+  }
+
+  Future<void> _loadMovieBoxSeasonEpisodes(
+    int seasonNumber, {
+    required bool resolveStreams,
+  }) async {
+    if (_isDisposed) return;
+    final season = _movieBoxSeasons.cast<Map<String, dynamic>?>().firstWhere(
+      (item) => _toInt(item?['se']) == seasonNumber,
+      orElse: () => null,
+    );
+    final episodeNumbers = (season?['episodes'] as List? ?? const [])
+        .map(_toInt)
+        .where((number) => number > 0)
+        .toList(growable: false);
+    final episodes = episodeNumbers
+        .map((number) => <String, dynamic>{
+              'episode_number': number,
+              'name': 'Episode $number',
+            })
+        .toList(growable: false);
+    final firstEpisode = episodeNumbers.isNotEmpty ? episodeNumbers.first : 1;
+
+    if (!mounted || _isDisposed) return;
+    setState(() {
+      _selectedSeasonNumber = seasonNumber;
+      _selectedEpisodeNumber = firstEpisode;
+      _tvEpisodes = episodes;
+      _loadingTvEpisodes = false;
+      _tvEpisodeError = episodes.isEmpty
+          ? 'No episode list was returned for this season.'
+          : null;
+    });
+
+    if (resolveStreams) {
+      await _loadMovieBoxStreams(
+        season: seasonNumber,
+        episode: firstEpisode,
+        openPlayer: true,
+      );
+    }
+  }
+
+  String _movieBoxVariant(Map<String, dynamic> link) {
+    final label = (link['label'] ?? '').toString();
+    return label.split(' · ').first.trim();
+  }
+
+  List<Map<String, String>> _movieBoxOptionsForLanguage(String language) {
+    return _movieBoxAllLinks.where((link) {
+      return _movieBoxVariant(link) == language;
+    }).map((link) {
+      final headers = link['headers'] is Map
+          ? Map<String, String>.from(
+              (link['headers'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : <String, String>{};
+      return <String, String>{
+        'quality': (link['label'] ?? 'Original').toString(),
+        'video_url': (link['url'] ?? '').toString(),
+        'headers': jsonEncode(headers),
+      };
+    }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+  }
+
+  Future<void> _loadMovieBoxStreams({
+    required int season,
+    required int episode,
+    required bool openPlayer,
+  }) async {
+    final detail = _movieBoxDetail;
+    if (detail == null || _isDisposed) return;
+    if (mounted) {
+      setState(() {
+        _loadingQualities = true;
+        _tvEpisodeError = null;
+      });
+    }
+
+    try {
+      final result = await MovieBoxService.streams(
+        detail,
+        season: season,
+        episode: episode,
+        isSeries: widget.movie.movieBoxIsSeries,
+      );
+      final rawLinks = result['links'] as List? ?? const [];
+      final links = rawLinks
+          .whereType<Map>()
+          .map((link) => Map<String, dynamic>.from(link))
+          .where((link) {
+            final uri = Uri.tryParse((link['url'] ?? '').toString());
+            return uri != null &&
+                (uri.scheme == 'http' || uri.scheme == 'https') &&
+                uri.host.isNotEmpty;
+          })
+          .toList(growable: false);
+      if (links.isEmpty) {
+        throw StateError('No HLS, DASH or MP4 streams were returned for this title.');
+      }
+
+      final subtitles = (result['subtitles'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => (item['url'] ?? '').toString().isNotEmpty)
+          .toList(growable: false);
+      final languages = <String>[];
+      _movieBoxHeadersByUrl.clear();
+      for (final link in links) {
+        final language = _movieBoxVariant(link);
+        if (language.isNotEmpty && !languages.contains(language)) {
+          languages.add(language);
+        }
+        final url = (link['url'] ?? '').toString();
+        final rawHeaders = link['headers'];
+        if (url.isNotEmpty && rawHeaders is Map) {
+          _movieBoxHeadersByUrl[url] = Map<String, String>.from(
+            rawHeaders.map(
+              (key, value) => MapEntry(key.toString(), value.toString()),
+            ),
+          );
+        }
+      }
+
+      final selectedLanguage = _selectedMovieBoxLanguage != null &&
+              languages.contains(_selectedMovieBoxLanguage)
+          ? _selectedMovieBoxLanguage!
+          : (languages.contains('Original') ? 'Original' : languages.first);
+      final options = _movieBoxOptionsForLanguage(selectedLanguage);
+      if (options.isEmpty) {
+        throw StateError('No playable quality was returned for $selectedLanguage.');
+      }
+
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _movieBoxAllLinks = links;
+        _movieBoxSubtitles = subtitles;
+        _movieBoxLanguages = languages;
+        _selectedMovieBoxLanguage = selectedLanguage;
+        _availableQualities = options;
+        _selectedQuality = options.first['quality'];
+        _errorMessage = null;
+      });
+
+      if (openPlayer && _initialized && options.first['video_url'] != _currentVideoUrl) {
+        await _player.seek(Duration.zero);
+        if (mounted && !_isDisposed) {
+          setState(() => _position = Duration.zero);
+        }
+        await _changeVideoQuality(options.first);
+      }
+    } catch (error) {
+      debugPrint('MovieBox stream resolution failed: $error');
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _tvEpisodeError = error.toString();
+          _errorMessage = 'Unable to resolve this MovieBox stream.';
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingQualities = false);
+      }
+    }
+  }
+
+  Future<void> _selectMovieBoxLanguage(String language) async {
+    if (language == _selectedMovieBoxLanguage || _isDisposed) return;
+    final options = _movieBoxOptionsForLanguage(language);
+    if (options.isEmpty) return;
+    setState(() {
+      _selectedMovieBoxLanguage = language;
+      _availableQualities = options;
+      _selectedQuality = options.first['quality'];
+    });
+    if (_initialized) {
+      await _changeVideoQuality(options.first);
+    }
+  }
+
+  Widget _movieBoxLanguageSelector() {
+    if (!widget.movie.isMovieBox || _movieBoxLanguages.length < 2) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: playerPanel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x3DFFFFFF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.translate_rounded, color: playerGoldLight, size: 18),
+          const SizedBox(width: 9),
+          const Text(
+            'Language',
+            style: TextStyle(
+              color: playerWhite,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _movieBoxLanguages.contains(_selectedMovieBoxLanguage)
+                    ? _selectedMovieBoxLanguage
+                    : _movieBoxLanguages.first,
+                isExpanded: true,
+                dropdownColor: playerPanel,
+                style: const TextStyle(
+                  color: playerGoldLight,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+                items: _movieBoxLanguages.map((language) {
+                  return DropdownMenuItem<String>(
+                    value: language,
+                    child: Text(language, overflow: TextOverflow.ellipsis),
+                  );
+                }).toList(),
+                onChanged: _loadingQualities
+                    ? null
+                    : (language) {
+                        if (language != null) {
+                          _selectMovieBoxLanguage(language);
+                        }
+                      },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _prepareAndInitializePlayer() async {
+    if (widget.movie.isMovieBox) {
+      await _prepareMovieBoxPlayback();
+      if (!mounted || _isDisposed) return;
+      if (_availableQualities.isNotEmpty) {
+        await _initializePlayer();
+      }
+      return;
+    }
+
     // Load Admin quality URLs before opening the player. This allows playback
     // even when the legacy movies.video_url field is empty.
     await _loadVideoQualities();
@@ -7616,6 +7968,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  Map<String, String> _headersForQuality(Map<String, String> item) {
+    try {
+      final decoded = jsonDecode(item['headers'] ?? '{}');
+      if (decoded is Map) {
+        return Map<String, String>.from(
+          decoded.map((key, value) => MapEntry(key.toString(), value.toString())),
+        );
+      }
+    } catch (_) {}
+    return const <String, String>{};
+  }
+
   Future<void> _changeVideoQuality(Map<String, String> item) async {
     final url = item['video_url']?.trim() ?? '';
     if (url.isEmpty || _isDisposed || widget.localFilePath != null) return;
@@ -7642,7 +8006,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      await _player.open(Media(url));
+      await _player.open(Media(
+        url,
+        httpHeaders: _headersForQuality(item),
+      ));
       if (!mounted || _isDisposed) return;
       if (resumeAt > Duration.zero) await _player.seek(resumeAt);
       if (wasPlaying) {
@@ -7664,7 +8031,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       var restored = false;
       if (previousUrl.isNotEmpty && !_isDisposed) {
         try {
-          await _player.open(Media(previousUrl));
+          await _player.open(Media(
+            previousUrl,
+            httpHeaders: _movieBoxHeadersByUrl[previousUrl] ?? const <String, String>{},
+          ));
           if (resumeAt > Duration.zero) await _player.seek(resumeAt);
           if (wasPlaying) {
             await _player.play();
@@ -7855,7 +8225,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (playbackSource.trim().isEmpty) {
         throw Exception('No playable video URL is available.');
       }
-      await _player.open(Media(playbackSource));
+      await _player.open(Media(
+        playbackSource,
+        httpHeaders: _movieBoxHeadersByUrl[playbackSource] ?? const <String, String>{},
+      ));
       if (widget.localFilePath == null) {
         _currentVideoUrl = playbackSource;
       }
@@ -8204,6 +8577,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         );
       }
     }
+  }
+
+  Future<void> _selectMovieBoxSubtitle(Map<String, dynamic> subtitle) async {
+    final url = (subtitle['url'] ?? '').toString().trim();
+    if (url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      return;
+    }
+    await _selectSubtitleTrack(SubtitleTrack.uri(
+      url,
+      title: (subtitle['label'] ?? 'MovieBox subtitle').toString(),
+      language: (subtitle['label'] ?? '').toString(),
+    ));
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
@@ -8653,6 +9041,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     SubtitleTrack.no(),
                   ),
                 ),
+                ..._movieBoxSubtitles.map((subtitle) {
+                  final label = (subtitle['label'] ?? 'External subtitle').toString();
+                  return ListTile(
+                    leading: const Icon(Icons.subtitles, color: playerGoldLight),
+                    title: Text(label, style: const TextStyle(color: playerWhite)),
+                    onTap: () => _selectMovieBoxSubtitle(subtitle),
+                  );
+                }),
                 ...subtitleTracks.map((track) {
                   return ListTile(
                     leading: const Icon(
@@ -10486,6 +10882,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
                 const SizedBox(height: 18),
                 _playerResources(),
+                _movieBoxLanguageSelector(),
                 _tvEpisodeSelector(),
                 const SizedBox(height: 16),
                 const Text(
