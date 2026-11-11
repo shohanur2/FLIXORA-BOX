@@ -6946,12 +6946,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   Future<Map<String, dynamic>> _loadPlayerMovieDetails() async {
     final id = widget.movie.tmdbId;
     if (id <= 0) {
-      await _discoverAndMergePublicSources(
+      unawaited(_discoverAndMergePublicSources(
         baseSources: _providerSources,
         isTv: widget.movie.mediaType == 'tv',
         season: _selectedSeasonNumber,
         episode: _selectedEpisodeNumber,
-      );
+      ));
       return {};
     }
     try {
@@ -6989,16 +6989,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ? _toInt(seasons.first['season_number'])
             : 1;
         if (mounted && !_isDisposed) {
+          final initialSources = ProviderCatalog.forTv(
+            tmdbId: id,
+            imdbId: _tvImdbId,
+            seasonNumber: firstSeason,
+            episodeNumber: 1,
+            adminVideoUrl: widget.movie.videoUrl,
+          );
           setState(() {
             _tvSeasons = seasons;
             _selectedSeasonNumber = firstSeason;
             _selectedEpisodeNumber = 1;
+            _providerSources = initialSources;
+            final selectedId = _selectedProviderSource?.id;
+            if (selectedId != null) {
+              _selectedProviderSource = initialSources
+                  .where((source) => source.id == selectedId)
+                  .cast<ProviderEmbedSource?>()
+                  .firstWhere((source) => source != null, orElse: () => null);
+            }
           });
         }
 
-        // Anime is catalogued as TV by TMDB. Use AniList only when TMDB's
-        // metadata identifies a Japanese animated series and an exact title
-        // match is found; otherwise use the season-aware TMDB TV route.
+        // Anime mapping and episode metadata are secondary: start the
+        // season-aware provider immediately and enrich the controls in the
+        // background so a slow AniList/episode request cannot block playback.
         final genres = (details['genres'] as List? ?? [])
             .whereType<Map>()
             .map((genre) => (genre['name'] ?? '').toString().toLowerCase())
@@ -7011,18 +7026,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         final isAnime = genres.contains('animation') &&
             (language == 'ja' || countries.contains('JP'));
 
-        int? aniListId;
         if (isAnime) {
           final firstAirDate = (details['first_air_date'] ?? '').toString();
           final year = firstAirDate.length >= 4
               ? firstAirDate.substring(0, 4)
               : widget.movie.year;
-          aniListId = await AniListService.findMatchingAnimeId(
+          unawaited(AniListService.findMatchingAnimeId(
             title: (details['name'] ?? widget.movie.title).toString(),
             year: year,
-          );
+          ).then((aniListId) async {
+            if (!mounted || _isDisposed) return;
+            _aniListId = aniListId;
+            await _refreshTvProviderSources();
+          }).catchError((Object error) {
+            debugPrint('AniList episode mapping failed: $error');
+          }));
         }
-        _aniListId = aniListId;
         unawaited(_loadTvSeasonEpisodes(firstSeason));
       } else {
         if (mounted && !_isDisposed) {
@@ -7081,9 +7100,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       adminVideoUrl: widget.movie.videoUrl,
     );
     if (mounted && !_isDisposed) {
+      final selectedId = _selectedProviderSource?.id;
+      final replacement = selectedId == null
+          ? null
+          : sources
+              .where((source) => source.id == selectedId)
+              .cast<ProviderEmbedSource?>()
+              .firstWhere((source) => source != null, orElse: () => null);
       setState(() {
         _providerSources = sources;
-        _selectedProviderSource = null;
+        // Keep the active provider mounted when season metadata refreshes.
+        // Its URL is updated to the selected season/episode when applicable.
+        _selectedProviderSource = replacement;
         _failedProviderIds.clear();
         _errorMessage = null;
       });
@@ -8121,10 +8149,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return;
     }
 
-    // Resolve the real IMDb ID before choosing the default provider. This
-    // avoids opening Play4U with a guessed or incomplete identifier.
-    await _movieDetailsFuture;
-    if (!mounted || _isDisposed) return;
+    // Provider selection races essential TMDB metadata against a short
+    // timeout; slow metadata must not hold the first playable fallback.
     await _selectDefaultProviderIfNeeded();
   }
 
