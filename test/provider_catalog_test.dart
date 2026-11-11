@@ -91,6 +91,34 @@ void main() {
     });
   });
 
+  group('ProviderCatalog IMDb metadata', () {
+    test('reads IMDb ID from appended external_ids', () {
+      expect(
+        ProviderCatalog.imdbIdFromTmdbDetails({
+          'external_ids': {'imdb_id': 'tt0816692'},
+        }),
+        'tt0816692',
+      );
+    });
+
+    test('falls back to the direct movie imdb_id field', () {
+      expect(
+        ProviderCatalog.imdbIdFromTmdbDetails({'imdb_id': 'tt0137523'}),
+        'tt0137523',
+      );
+    });
+
+    test('rejects malformed IMDb identifiers instead of guessing', () {
+      expect(
+        ProviderCatalog.imdbIdFromTmdbDetails({
+          'external_ids': {'imdb_id': '157336'},
+          'imdb_id': 'not-an-imdb-id',
+        }),
+        isNull,
+      );
+    });
+  });
+
   group('ProviderCatalog TV and anime', () {
     test('builds ten TV provider candidates and requires an IMDb ID for Play4U', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1399);

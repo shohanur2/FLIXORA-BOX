@@ -736,6 +736,24 @@ class TmdbService {
     if (response.statusCode != 200) throw Exception('Could not load title details.');
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
+
+  /// Explicit endpoint fallback for titles whose details response omits
+  /// appended external IDs. Play4U requires the real IMDb title identifier.
+  static Future<Map<String, dynamic>> externalIds(
+    int id, {String mediaType = 'movie'}
+  ) async {
+    if (apiKey.isEmpty || id <= 0) return const <String, dynamic>{};
+    final endpoint = mediaType == 'tv' ? 'tv' : 'movie';
+    final uri = Uri.parse('$base/$endpoint/$id/external_ids').replace(
+      queryParameters: {'api_key': apiKey},
+    );
+    final response = await _getWithRetry(uri);
+    if (response.statusCode != 200) return const <String, dynamic>{};
+    final decoded = jsonDecode(response.body);
+    return decoded is Map
+        ? Map<String, dynamic>.from(decoded)
+        : const <String, dynamic>{};
+  }
 }
 
 class FlixoraMovieService {
@@ -5567,11 +5585,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         mediaType: isTv ? 'tv' : 'movie',
       );
 
+      var imdbId = ProviderCatalog.imdbIdFromTmdbDetails(details);
+      if (imdbId == null) {
+        try {
+          final externalIds = await TmdbService.externalIds(
+            id,
+            mediaType: isTv ? 'tv' : 'movie',
+          );
+          imdbId = ProviderCatalog.imdbIdFromTmdbDetails({
+            'external_ids': externalIds,
+          });
+        } catch (error) {
+          debugPrint('Could not resolve IMDb title ID: $error');
+        }
+      }
+
       if (isTv) {
-        final externalIds = details['external_ids'];
-        _tvImdbId = externalIds is Map
-            ? (externalIds['imdb_id'] ?? '').toString()
-            : '';
+        _tvImdbId = imdbId ?? '';
         final seasons = (details['seasons'] as List? ?? [])
             .whereType<Map>()
             .map((item) => Map<String, dynamic>.from(item))
@@ -5619,10 +5649,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _aniListId = aniListId;
         await _loadTvSeasonEpisodes(firstSeason);
       } else {
-        final externalIds = details['external_ids'];
-        final imdbId = externalIds is Map
-            ? (externalIds['imdb_id'] ?? '').toString()
-            : '';
         if (mounted && !_isDisposed) {
           setState(() {
             _providerSources = ProviderCatalog.forMovie(
