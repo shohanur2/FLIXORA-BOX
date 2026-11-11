@@ -1413,14 +1413,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       .toLowerCase()
       // Preserve Bengali and other non-Latin scripts while normalizing
       // common title punctuation and whitespace.
-      .replaceAll(RegExp(r'[\\s\\-_.,:;!?()\\[\\]{}]+'), ' ')
+      .replaceAll(RegExp(r'[\s\-_.,:;!?()\[\]{}]+'), ' ')
       .trim();
 
   List<Movie> _movieBoxSectionItems(MovieBoxHomeSection section) {
     final adminMatches = flixoraMovies.where((admin) {
-      if (admin.mediaType == 'tv' != section.items.any((item) => item.mediaType == 'tv')) {
-        // A section can contain mixed media; the per-item check below is authoritative.
-      }
       return section.items.any((item) {
         if (admin.mediaType != item.mediaType) return false;
         if (admin.tmdbId > 0 && item.tmdbId > 0) {
