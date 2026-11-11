@@ -17,6 +17,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'downloads/download_task.dart';
 import 'downloads/download_manager.dart';
+import 'downloads/provider_download_adapter.dart';
 import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/episode_number_mapper.dart';
@@ -554,8 +555,22 @@ class MovieCache {
         }
 
         final partialPath = task.partialPath;
-        if (partialPath != null && await File(partialPath).exists()) {
-          task.bytesReceived = await File(partialPath).length();
+        final hasPartialFile = partialPath != null &&
+            await File(partialPath).exists();
+        final hasPartialDirectory = partialPath != null &&
+            await Directory(partialPath).exists();
+        if (hasPartialDirectory) {
+          task.bytesReceived = await DownloadManager.getTaskStorageBytes(task);
+          if (task.totalSegments > 0) {
+            task.progress = (task.completedSegments / task.totalSegments)
+                .clamp(0.0, 1.0)
+                .toDouble();
+          }
+          if (task.status == 'Downloading' || task.status == 'Waiting') {
+            task.status = 'Paused';
+          }
+        } else if (hasPartialFile) {
+          task.bytesReceived = await File(partialPath!).length();
           if (task.totalBytes > 0) {
             task.progress =
                 (task.bytesReceived / task.totalBytes).clamp(0.0, 1.0).toDouble();
@@ -978,19 +993,17 @@ class FlixoraMovieService {
                 item['video_url']!.isNotEmpty)
             .toList();
 
-        final inspected = await Future.wait<Map<String, String>?>(
+        final inspected = await Future.wait<List<Map<String, String>>>(
           candidates.map((item) async {
             final url = item['video_url']!;
-            if (!seenUrls.add(url)) return null;
-            final info = await DownloadManager.inspectRemoteFile(url);
-            if (info == null) return null;
-            return <String, String>{
-              ...item,
-              'size_bytes': info.sizeBytes?.toString() ?? '',
-            };
+            if (!seenUrls.add(url)) return const <Map<String, String>>[];
+            return DownloadManager.inspectDownloadSources(
+              url,
+              qualityLabel: item['quality'],
+            );
           }),
         );
-        options.addAll(inspected.whereType<Map<String, String>>());
+        options.addAll(inspected.expand((items) => items));
       } catch (e) {
         debugPrint('Could not load Admin download qualities: $e');
       }
@@ -1004,12 +1017,11 @@ class FlixoraMovieService {
       for (final item in fallbacks) {
         final url = item['video_url']!;
         if (url.isEmpty || !seenUrls.add(url)) continue;
-        final info = await DownloadManager.inspectRemoteFile(url);
-        if (info == null) continue;
-        options.add(<String, String>{
-          ...item,
-          'size_bytes': info.sizeBytes?.toString() ?? '',
-        });
+        final inspected = await DownloadManager.inspectDownloadSources(
+          url,
+          qualityLabel: item['quality'],
+        );
+        options.addAll(inspected);
       }
     }
 
@@ -1017,6 +1029,47 @@ class FlixoraMovieService {
       options,
       (item) => item['quality'] ?? 'Original',
     );
+  }
+
+  /// Episode sources are stored separately from title-level video qualities.
+  /// This optional query stays harmless until the Admin episode-source editor
+  /// and its additive Supabase migration are enabled.
+  static Future<List<Map<String, String>>> getEpisodeDownloadQualities(
+    Movie movie,
+    int seasonNumber,
+    int episodeNumber,
+  ) async {
+    final client = supabaseClient;
+    if (client == null || movie.sourceId <= 0) return const [];
+    try {
+      final rows = await client
+          .from('movie_episode_video_qualities')
+          .select('quality, video_url')
+          .eq('movie_id', movie.sourceId)
+          .eq('season_number', seasonNumber)
+          .eq('episode_number', episodeNumber);
+      final candidates = (rows as List)
+          .whereType<Map>()
+          .map((item) => {
+                'quality': (item['quality'] ?? 'Original').toString().trim(),
+                'video_url': (item['video_url'] ?? '').toString().trim(),
+              })
+          .where((item) => item['video_url']!.isNotEmpty)
+          .toList();
+      final inspected = await Future.wait<List<Map<String, String>>>(
+        candidates.map((item) => DownloadManager.inspectDownloadSources(
+          item['video_url']!,
+          qualityLabel: item['quality'],
+        )),
+      );
+      return VideoQualityService.sort(
+        inspected.expand((items) => items).toList(),
+        (item) => item['quality'] ?? 'Original',
+      );
+    } catch (error) {
+      debugPrint('Episode-specific download sources are not configured: $error');
+      return const [];
+    }
   }
 
   static Future<List<Movie>> getPublishedMovies() async {
@@ -2092,7 +2145,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (rawOptions.isEmpty) {
       _showMessage(
-        'No direct download file is available. Ask Admin to add an MP4/MKV/WebM file. Embed, HLS and DASH streams are playback-only.',
+        'No downloadable source is available. Add a direct video file or a clear HLS/DASH VOD manifest in Admin. Embed-only provider pages cannot be saved.',
       );
       return;
     }
@@ -2215,10 +2268,175 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       videoUrl: selectedUrl,
       quality: selected['quality'] ?? 'Original',
       mediaType: movie.mediaType,
+      downloadType: selected['download_type'] ?? 'direct',
+      audioUrl: selected['audio_url'],
+      audioName: selected['audio_name'],
+      manifestBandwidth: int.tryParse(selected['manifest_bandwidth'] ?? '') ?? 0,
+      manifestResolution: selected['manifest_resolution'],
       totalBytes: expectedBytes,
       status: 'Waiting',
     );
 
+    setState(() => _downloads.insert(0, task));
+    await MovieCache.saveDownloads(_downloads);
+    _startDownloadTask(task);
+  }
+
+  Future<void> addDownloadEpisode(
+    Movie movie,
+    int seasonNumber,
+    int episodeNumber,
+    String episodeTitle, {
+    String? providerId,
+  }) async {
+    InternetService.invalidate();
+    final hasInternet = await InternetService.isOnline();
+    if (!hasInternet) {
+      if (mounted) {
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
+        _showMessage('Check your internet connection');
+      }
+      return;
+    }
+    if (mounted && !_online) setState(() => _online = true);
+
+    final alreadyAdded = _downloads.any((task) =>
+        task.movieId == movie.id &&
+        task.seasonNumber == seasonNumber &&
+        task.episodeNumber == episodeNumber &&
+        (task.status == 'Downloading' ||
+            task.status == 'Waiting' ||
+            task.status == 'Paused' ||
+            task.status == 'Completed'));
+    if (alreadyAdded) {
+      _showMessage('This episode is already in your Downloads.');
+      return;
+    }
+
+    final rawOptions = await FlixoraMovieService.getEpisodeDownloadQualities(
+      movie,
+      seasonNumber,
+      episodeNumber,
+    );
+    if (!mounted) return;
+    if (rawOptions.isEmpty) {
+      _showMessage(ProviderDownloadAdapter.unavailableReason(providerId) ??
+          'No official downloadable source is available for this episode.');
+      return;
+    }
+
+    final options = rawOptions.map((item) {
+      final size = int.tryParse(item['size_bytes'] ?? '') ?? 0;
+      return <String, String>{
+        ...item,
+        'size_label': size > 0
+            ? DownloadManager.formatBytes(size)
+            : 'File size unavailable',
+      };
+    }).toList();
+
+    final selected = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.72,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Choose Episode Download Quality',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '${movie.title} · S${seasonNumber.toString().padLeft(2, '0')} E${episodeNumber.toString().padLeft(2, '0')}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: ink70, fontSize: 12),
+                ),
+                const SizedBox(height: 14),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = options[index];
+                      return ListTile(
+                        tileColor: bg,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: const BorderSide(color: ink12),
+                        ),
+                        leading: const Icon(
+                          Icons.download_for_offline_rounded,
+                          color: goldLight,
+                        ),
+                        title: Text(
+                          item['quality'] ?? 'Original',
+                          style: const TextStyle(
+                            color: white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'File size: ${item['size_label']}',
+                          style: const TextStyle(color: ink70, fontSize: 11),
+                        ),
+                        onTap: () => Navigator.pop(sheetContext, item),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || selected == null) return;
+
+    final url = selected['video_url'] ?? '';
+    if (url.isEmpty) {
+      _showMessage('This episode download source is invalid.');
+      return;
+    }
+    final task = DownloadTask(
+      movieId: movie.id,
+      tmdbId: movie.tmdbId,
+      title: movie.title,
+      poster: movie.posterUrl,
+      videoUrl: url,
+      quality: selected['quality'] ?? 'Original',
+      mediaType: movie.mediaType,
+      downloadType: selected['download_type'] ?? 'direct',
+      audioUrl: selected['audio_url'],
+      audioName: selected['audio_name'],
+      manifestBandwidth: int.tryParse(selected['manifest_bandwidth'] ?? '') ?? 0,
+      manifestResolution: selected['manifest_resolution'],
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      episodeTitle: episodeTitle,
+      totalBytes: int.tryParse(selected['size_bytes'] ?? '') ?? 0,
+      status: 'Waiting',
+    );
     setState(() => _downloads.insert(0, task));
     await MovieCache.saveDownloads(_downloads);
     _startDownloadTask(task);
@@ -2239,7 +2457,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       },
       onComplete: (path) async {
         if (!mounted) return;
-        final fileSize = await File(path).length();
+        final fileSize = await DownloadManager.getTaskStorageBytes(task);
         setState(() {
           task
             ..progress = 1
