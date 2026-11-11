@@ -36,9 +36,9 @@ void main() {
       final lastOffset = FeaturedCarouselLayout.targetScrollOffset(
         index: 4,
         viewportWidth: 393,
-        maxScrollExtent: 900,
+        maxScrollExtent: 800,
       );
-      expect(lastOffset, 900);
+      expect(lastOffset, 800);
       expect(
         FeaturedCarouselLayout.indexForScrollOffset(
           pixels: lastOffset,
