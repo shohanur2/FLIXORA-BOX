@@ -379,18 +379,17 @@ class DownloadManager {
         } catch (_) {}
         sink = null;
       }
-      if (_pauseRequests.remove(task.taskId) || token.isCancelled &&
-          !_cancelRequests.contains(task.taskId)) {
-        task
-          ..status = 'Paused'
-          ..errorMessage = null;
-        onStateChanged?.call();
-      } else if (_cancelRequests.remove(task.taskId)) {
+      if (_cancelRequests.remove(task.taskId)) {
         await _removePartial(partialFile);
         task
           ..status = 'Cancelled'
           ..progress = 0
           ..bytesReceived = 0
+          ..errorMessage = null;
+        onStateChanged?.call();
+      } else if (_pauseRequests.remove(task.taskId) || token.isCancelled) {
+        task
+          ..status = 'Paused'
           ..errorMessage = null;
         onStateChanged?.call();
       } else {
@@ -408,18 +407,17 @@ class DownloadManager {
         } catch (_) {}
         sink = null;
       }
-      if (_pauseRequests.remove(task.taskId) ||
-          token.isCancelled && !_cancelRequests.contains(task.taskId)) {
-        task
-          ..status = 'Paused'
-          ..errorMessage = null;
-        onStateChanged?.call();
-      } else if (_cancelRequests.remove(task.taskId)) {
+      if (_cancelRequests.remove(task.taskId)) {
         await _removePartial(partialFile);
         task
           ..status = 'Cancelled'
           ..progress = 0
           ..bytesReceived = 0
+          ..errorMessage = null;
+        onStateChanged?.call();
+      } else if (_pauseRequests.remove(task.taskId) || token.isCancelled) {
+        task
+          ..status = 'Paused'
           ..errorMessage = null;
         onStateChanged?.call();
       } else {
