@@ -1302,6 +1302,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 title.originCountry.toUpperCase() == 'JP'));
   }
 
+  bool _hasHindiAudio(Movie movie) {
+    return movie.audioLanguages.any((language) {
+      final value = language.trim().toLowerCase();
+      return value == 'hi' || value.contains('hindi');
+    }) || movie.originalLanguage.toLowerCase() == 'hi';
+  }
+
+  String _displayTitle(Movie movie) {
+    if (_hasHindiAudio(movie) &&
+        !movie.title.toLowerCase().contains('[hindi]')) {
+      return '${movie.title} [Hindi]';
+    }
+    return movie.title;
+  }
+
   /// TMDB does not define "Web Series" as a TV genre. Prefer titles explicitly
   /// tagged by FLIXORA Admin; if none exist yet, show the available non-anime
   /// TV catalogue instead of leaving the Home section blank.
@@ -3187,12 +3202,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _deduplicateMovies([
           ...anime,
           ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-              title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+              _isAnimeTitle(title)),
         ]);
       case 'Korean Drama':
-        return koreanDrama;
+        return _deduplicateMovies([
+          ...koreanDrama,
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'tv' &&
+              title.originalLanguage.toLowerCase() == 'ko'),
+        ]);
       case 'Bengali':
-        return [...bengaliMovies, ...bengaliTv];
+        return _deduplicateMovies([
+          ...bengaliMovies, ...bengaliTv,
+          ...flixoraMovies.where((title) =>
+              title.originalLanguage.toLowerCase() == 'bn' ||
+              title.originCountry.toUpperCase().contains('BD')),
+        ]);
       case 'Flixora Originals':
         return flixoraMovies;
       default:
@@ -3200,11 +3225,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Widget _homeTopCategories() {
+    const categories = [
+      'Trending', 'Movies', 'TV Series', 'Anime',
+      'Korean Drama', 'Bengali', 'Flixora Originals',
+    ];
+    final available = categories.where(
+      (category) => _moviesForHomeCategory(category).isNotEmpty,
+    ).toList();
+    if (available.isEmpty) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: 44,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: available.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 22),
+        itemBuilder: (context, index) {
+          final category = available[index];
+          final selected = category == _homeCategory;
+          return InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _homeCategory = category),
+            child: Center(
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 180),
+                style: TextStyle(
+                  color: selected ? white : ink60,
+                  fontSize: 14,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
+                child: Text(category),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _homeContent() {
     if (_homeCategory != 'Trending') {
       final movies = _moviesForHomeCategory(_homeCategory);
       return Column(
         children: [
+          _homeTopCategories(),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
@@ -3229,7 +3296,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       backgroundColor: panel,
       onRefresh: loadHome,
       child: ListView(
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         children: [
+          _homeTopCategories(),
           _featuredSlider(),
           _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
