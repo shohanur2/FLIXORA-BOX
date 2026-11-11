@@ -3193,13 +3193,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ),
                               ),
                               const SizedBox(width: 5),
-                              const CircleAvatar(
-                                radius: 11,
-                                backgroundColor: Color(0xFF20E6A2),
-                                child: Icon(
-                                  Icons.play_arrow_rounded,
-                                  color: Color(0xFF06251A),
-                                  size: 17,
+                              IconButton(
+                                onPressed: _isOpeningTitle
+                                    ? null
+                                    : () => _playMovie(movie),
+                                tooltip: 'Play ${movie.title}',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 34,
+                                  height: 34,
+                                ),
+                                icon: const CircleAvatar(
+                                  radius: 15,
+                                  backgroundColor: gold,
+                                  child: Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: Color(0xFF151515),
+                                    size: 21,
+                                  ),
                                 ),
                               ),
                             ],
