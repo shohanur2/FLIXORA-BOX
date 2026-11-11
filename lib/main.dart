@@ -7008,6 +7008,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _selectAdminSubtitle(AdminSubtitleTrack track) async {
+    if (_selectedProviderSource != null) return;
     try {
       await _player.setSubtitleTrack(
         SubtitleTrack.uri(
@@ -7483,7 +7484,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     onTap: () => _selectSubtitleTrack(track),
                   );
                 }),
-                if (_loadingAdminSubtitles)
+                if (_selectedProviderSource == null && _loadingAdminSubtitles)
                   const ListTile(
                     leading: SizedBox(
                       width: 18,
@@ -7495,7 +7496,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       style: TextStyle(color: ink70),
                     ),
                   ),
-                ..._adminSubtitles.map((track) => ListTile(
+                if (_selectedProviderSource == null)
+                  ..._adminSubtitles.map((track) => ListTile(
                       leading: const Icon(
                         Icons.subtitles_rounded,
                         color: Color(0xFF39E69B),
