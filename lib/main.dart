@@ -834,28 +834,48 @@ class FlixoraMovieService {
     final audioLanguagesByMovie = <int, List<String>>{};
 
     if (movieIds.isNotEmpty) {
-      try {
-        final audioRows = await client.from('movie_languages')
-            .select('movie_id, languages(name,code)')
-            .inFilter('movie_id', movieIds);
-        for (final item in (audioRows as List).whereType<Map>()) {
-          final row = Map<String, dynamic>.from(item);
-          final movieId = _toInt(row['movie_id']);
-          final rawLanguage = row['languages'];
-          if (movieId <= 0 || rawLanguage is! Map) continue;
-          final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
-          if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+      Future<List<Map<String, dynamic>>> loadRows(
+        Future<List<Map<String, dynamic>>> request,
+        String label,
+      ) async {
+        try {
+          return await request;
+        } catch (error) {
+          debugPrint('$label: $error');
+          return <Map<String, dynamic>>[];
         }
-      } catch (e) {
-        debugPrint('Could not load movie audio languages: $e');
       }
-      try {
-        final qualityRows = await client
-            .from('movie_video_qualities')
-            .select('movie_id, quality, video_url')
-            .inFilter('movie_id', movieIds);
 
-        for (final item in (qualityRows as List).whereType<Map>()) {
+      // Fetch language labels and quality sources concurrently; neither query
+      // depends on the other, and serial waits slow down the first Home load.
+      final responses = await Future.wait<List<Map<String, dynamic>>>([
+        loadRows(
+          client.from('movie_languages')
+              .select('movie_id, languages(name,code)')
+              .inFilter('movie_id', movieIds),
+          'Could not load movie audio languages',
+        ),
+        loadRows(
+          client
+              .from('movie_video_qualities')
+              .select('movie_id, quality, video_url')
+              .inFilter('movie_id', movieIds),
+          'Could not resolve Admin video qualities',
+        ),
+      ]);
+
+      for (final item in responses[0]) {
+        final row = Map<String, dynamic>.from(item);
+        final movieId = _toInt(row['movie_id']);
+        final rawLanguage = row['languages'];
+        if (movieId <= 0 || rawLanguage is! Map) continue;
+        final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
+        if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+      }
+
+      final qualityRows = responses[1];
+      try {
+        for (final item in qualityRows) {
           final row = Map<String, dynamic>.from(item);
           final movieId = _toInt(row['movie_id']);
           final quality = (row['quality'] ?? '').toString().trim();
@@ -2780,7 +2800,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (downloaded != null) {
       _recordWatch(selectedMovie);
-      Navigator.push<void>(context, MaterialPageRoute<void>(
+      unawaited(Navigator.push<void>(context, MaterialPageRoute<void>(
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
@@ -2791,7 +2811,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
-      ));
+      )));
       return;
     }
 
@@ -2802,7 +2822,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
     _recordWatch(selectedMovie);
-    Navigator.push<void>(context, MaterialPageRoute<void>(
+    unawaited(Navigator.push<void>(context, MaterialPageRoute<void>(
       builder: (_) => MoviePlayerScreen(
         movie: selectedMovie,
         recommendedMovies: _allMovies(),
@@ -2812,7 +2832,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
-    ));
+    )));
   }
 
   void _openRanking([String category = 'Cinema', bool tv = false]) {
