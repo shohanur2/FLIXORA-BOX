@@ -1423,8 +1423,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (admin.tmdbId > 0 && item.tmdbId > 0) {
           return admin.tmdbId == item.tmdbId;
         }
-        return admin.year != 'N/A' &&
-            admin.year == item.year &&
+        final yearMatches = admin.year == item.year ||
+            admin.year == 'N/A' ||
+            item.year == 'N/A';
+        return yearMatches &&
             _normalizedMovieTitle(admin.title) ==
                 _normalizedMovieTitle(item.title);
       });
@@ -2758,8 +2760,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       final sameTitle = _normalizedMovieTitle(candidate.title) ==
           _normalizedMovieTitle(movie.title);
-      final sameYear = candidate.year == movie.year &&
-          candidate.year != 'N/A';
+      final sameYear = candidate.year == movie.year ||
+          candidate.year == 'N/A' ||
+          movie.year == 'N/A';
       if (sameTitle && sameYear) return candidate;
     }
     return null;
@@ -2808,7 +2811,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final rowDate = (row['release_date'] ?? '').toString();
           final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
           return rowTitle == wantedTitle &&
-              (requested.year == 'N/A' || rowYear == requested.year);
+              (requested.year == 'N/A' ||
+               rowYear == 'N/A' ||
+               rowYear == requested.year);
         }).toList();
         response = matching.isEmpty ? <dynamic>[] : [matching.first];
       }
