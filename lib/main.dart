@@ -3593,12 +3593,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _searchForTitle(String title) {
+    if (!_searchOpen) _openSearch();
     _searchController.text = title;
     _searchController.selection = TextSelection.collapsed(
       offset: title.length,
     );
     _onSearchChanged(title);
-    if (!_searchOpen) _openSearch();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocusNode.requestFocus();
     });
@@ -3865,6 +3865,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _searchContent() {
     final filters = _availableSearchFilters(searchResults);
+    final selected = filters.contains(_searchCategory)
+        ? _searchCategory
+        : 'All';
+    final filtered = _filterSearchMovies(searchResults, selected);
     return Column(
       children: [
         _searchFilterBar(searchResults),
@@ -3884,25 +3888,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     )
-                  : ListView.builder(
-                      physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.only(top: 4, bottom: 18),
-                      itemCount: _filterSearchMovies(
-                        searchResults,
-                        filters.contains(_searchCategory)
-                            ? _searchCategory
-                            : 'All',
-                      ).length,
-                      itemBuilder: (context, index) {
-                        final filtered = _filterSearchMovies(
-                          searchResults,
-                          filters.contains(_searchCategory)
-                              ? _searchCategory
-                              : 'All',
-                        );
-                        return _searchResultRow(filtered[index]);
-                      },
-                    ),
+                  : filtered.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No titles in this category.',
+                            style: TextStyle(color: ink60),
+                          ),
+                        )
+                      : ListView.builder(
+                          physics: const BouncingScrollPhysics(),
+                          padding: const EdgeInsets.only(top: 4, bottom: 18),
+                          itemCount: filtered.length,
+                          itemBuilder: (context, index) =>
+                              _searchResultRow(filtered[index]),
+                        ),
         ),
       ],
     );
