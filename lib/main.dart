@@ -28,6 +28,8 @@ import 'streaming/provider_embed_player.dart';
 import 'streaming/media3_player_view.dart';
 import 'streaming/ott_catalog_service.dart';
 import 'streaming/external_catalog_service.dart';
+import 'streaming/peertube_source_service.dart';
+import 'streaming/public_domain_movie_source_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -5471,6 +5473,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String? _tvImdbId;
   bool _loadingTvEpisodes = false;
   int _tvSeasonRequestToken = 0;
+  int _publicSourceRequestToken = 0;
   String? _tvEpisodeError;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
@@ -5575,7 +5578,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<Map<String, dynamic>> _loadPlayerMovieDetails() async {
     final id = widget.movie.tmdbId;
-    if (id <= 0) return {};
+    if (id <= 0) {
+      await _discoverAndMergePublicSources(
+        baseSources: _providerSources,
+        isTv: widget.movie.mediaType == 'tv',
+        season: _selectedSeasonNumber,
+        episode: _selectedEpisodeNumber,
+      );
+      return {};
+    }
     try {
       final isTv = widget.movie.mediaType == 'tv';
       final details = await TmdbService.details(
@@ -5656,11 +5667,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               adminVideoUrl: widget.movie.videoUrl,
             );
           });
+          await _discoverAndMergePublicSources(
+            baseSources: _providerSources,
+            isTv: false,
+            season: 1,
+            episode: 1,
+          );
         }
       }
       return details;
     } catch (e) {
       debugPrint('Could not load player title metadata: $e');
+      if (mounted && !_isDisposed) {
+        await _discoverAndMergePublicSources(
+          baseSources: _providerSources,
+          isTv: widget.movie.mediaType == 'tv',
+          season: _selectedSeasonNumber,
+          episode: _selectedEpisodeNumber,
+        );
+      }
       return {};
     }
   }
@@ -5696,12 +5721,125 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
       });
     }
-    if (selectProvider && mounted && !_isDisposed && sources.isNotEmpty) {
-      final firstAvailable = sources.firstWhere(
-        (source) => source.isAvailable,
-        orElse: () => sources.first,
-      );
-      unawaited(_selectProviderSource(firstAvailable));
+    await _discoverAndMergePublicSources(
+      baseSources: sources,
+      isTv: true,
+      season: season,
+      episode: episode,
+      selectProvider: selectProvider,
+    );
+  }
+
+  List<ProviderEmbedSource> _mergePublicSources(
+    List<ProviderEmbedSource> baseSources,
+    List<ProviderEmbedSource> publicSources,
+  ) {
+    // An Admin-curated embed stays first. Verified public-domain discoveries
+    // are inserted before the built-in fallback routes.
+    final adminSourceId = ProviderCatalog.fromAdminUrl(
+      widget.movie.videoUrl,
+    )?.id;
+    final ordered = <ProviderEmbedSource>[
+      ...baseSources.where((source) => source.id == adminSourceId),
+      ...publicSources,
+      ...baseSources.where((source) => source.id != adminSourceId),
+    ];
+    final seenIds = <String>{};
+    final seenUrls = <String>{};
+    final merged = <ProviderEmbedSource>[];
+    for (final source in ordered) {
+      if (!seenIds.add(source.id)) continue;
+      if (source.isAvailable && !seenUrls.add(source.url)) continue;
+      merged.add(source);
+    }
+    return merged;
+  }
+
+  Future<void> _discoverAndMergePublicSources({
+    required List<ProviderEmbedSource> baseSources,
+    required bool isTv,
+    required int season,
+    required int episode,
+    bool selectProvider = false,
+  }) async {
+    final requestToken = ++_publicSourceRequestToken;
+    final peerTubeFuture = PeerTubeSourceService.discover(
+      widget.movie.title,
+      year: widget.movie.year,
+      isTv: isTv,
+      season: season,
+      episode: episode,
+    );
+    final archiveFuture = isTv
+        ? Future<List<ProviderEmbedSource>>.value(
+            const <ProviderEmbedSource>[],
+          )
+        : PublicDomainMovieSourceService.discover(
+            widget.movie.title,
+            year: widget.movie.year,
+            isTv: false,
+          );
+
+    var discoveryFinished = false;
+    var discoveryResult = const <ProviderEmbedSource>[];
+    final discoveryFuture =
+        Future.wait<List<ProviderEmbedSource>>([
+      peerTubeFuture,
+      archiveFuture,
+    ]).then((groups) {
+      discoveryResult = groups.expand((items) => items).toList();
+      discoveryFinished = true;
+      return discoveryResult;
+    });
+
+    void applySources(List<ProviderEmbedSource> discovered) {
+      if (!mounted ||
+          _isDisposed ||
+          requestToken != _publicSourceRequestToken) {
+        return;
+      }
+      final merged = _mergePublicSources(baseSources, discovered);
+      setState(() => _providerSources = merged);
+
+      if (selectProvider && _selectedProviderSource == null) {
+        ProviderEmbedSource? firstAvailable;
+        for (final source in merged) {
+          if (source.isAvailable) {
+            firstAvailable = source;
+            break;
+          }
+        }
+        if (firstAvailable != null) {
+          unawaited(_selectProviderSource(firstAvailable));
+        }
+      }
+    }
+
+    List<ProviderEmbedSource> quickSources;
+    try {
+      // Keep first playback responsive. If public discovery takes longer,
+      // its verified results are appended in the background for later fallback.
+      quickSources = await Future.any<List<ProviderEmbedSource>>([
+        discoveryFuture,
+        Future.delayed(
+          const Duration(seconds: 2),
+          () => const <ProviderEmbedSource>[],
+        ),
+      ]);
+    } catch (error) {
+      debugPrint('Public source discovery failed: $error');
+      quickSources = const <ProviderEmbedSource>[];
+    }
+
+    applySources(quickSources);
+    if (!discoveryFinished) {
+      unawaited(discoveryFuture.then<void>((lateSources) {
+        if (lateSources.isNotEmpty) applySources(lateSources);
+      }).catchError((Object error) {
+        debugPrint('Late public source discovery failed: $error');
+      }));
+    } else if (quickSources.isEmpty && discoveryResult.isNotEmpty) {
+      applySources(discoveryResult);
     }
   }
 
