@@ -2832,6 +2832,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  Future<List<dynamic>> _findAdminRowsByTitleYear(
+    dynamic client,
+    Movie requested,
+  ) async {
+    if (client == null || requested.title.trim().isEmpty) return <dynamic>[];
+    final candidates = await client
+        .from('movies')
+        .select()
+        .ilike('title', requested.title.trim())
+        .eq('media_type', requested.mediaType)
+        .order('created_at', ascending: false)
+        .limit(10);
+    final rows = (candidates as List).whereType<Map>();
+    final wantedTitle = _normalizedMovieTitle(requested.title);
+    final matching = rows.where((row) {
+      final rowTitle = _normalizedMovieTitle((row['title'] ?? '').toString());
+      final rowDate = (row['release_date'] ?? '').toString();
+      final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
+      return rowTitle == wantedTitle &&
+          (requested.year == 'N/A' ||
+           rowYear == 'N/A' ||
+           rowYear == requested.year);
+    }).toList();
+    return matching.isEmpty ? <dynamic>[] : [matching.first];
+  }
+
   /// Resolve every entry point to the same Admin-managed movie record.
   /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
@@ -2840,7 +2866,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!_online || client == null) {
       return requested.isFlixora
           ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+          : (_cachedFlixoraMatch(requested) ??
+              _cachedMovieBoxMatch(requested) ??
+              requested);
     }
 
     try {
@@ -2860,26 +2888,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .eq('media_type', requested.mediaType)
             .order('created_at', ascending: false)
             .limit(1);
-      } else if (requested.isMovieBox && requested.title.trim().isNotEmpty) {
-        final candidates = await client
-            .from('movies')
-            .select()
-            .ilike('title', requested.title.trim())
-            .eq('media_type', requested.mediaType)
-            .order('created_at', ascending: false)
-            .limit(10);
-        final rows = (candidates as List).whereType<Map>();
-        final wantedTitle = _normalizedMovieTitle(requested.title);
-        final matching = rows.where((row) {
-          final rowTitle = _normalizedMovieTitle((row['title'] ?? '').toString());
-          final rowDate = (row['release_date'] ?? '').toString();
-          final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
-          return rowTitle == wantedTitle &&
-              (requested.year == 'N/A' ||
-               rowYear == 'N/A' ||
-               rowYear == requested.year);
-        }).toList();
-        response = matching.isEmpty ? <dynamic>[] : [matching.first];
+        if (response is! List || response.isEmpty) {
+          response = await _findAdminRowsByTitleYear(client, requested);
+        }
+      } else if (requested.title.trim().isNotEmpty &&
+          (requested.mediaType == 'movie' || requested.mediaType == 'tv')) {
+        response = await _findAdminRowsByTitleYear(client, requested);
       }
 
       if (response is List && response.isNotEmpty) {
