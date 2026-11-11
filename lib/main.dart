@@ -3969,8 +3969,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return _deduplicateMovies(_allMovies().where((title) =>
             title.genres.any((genre) =>
                 genre.toLowerCase().contains('drama'))).toList());
-      case 'Flixora Originals':
-        return flixoraMovies;
       default:
         return [];
     }
@@ -4533,7 +4531,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _homeTopCategories() {
     const categories = [
       'Trending', 'Movies', 'TV Series', 'Anime', 'Drama',
-      'Bengali', 'Bengali Movies', 'Korean Drama', 'Flixora Originals',
+      'Bengali', 'Bengali Movies', 'Korean Drama',
     ];
     final available = categories.where(
       (category) => _moviesForHomeCategory(category).isNotEmpty,
@@ -4746,7 +4744,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
           _ottHomeSection(),
-          if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _homeTrendingMovies()),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._movieBoxSections.expand((section) => section.items)
