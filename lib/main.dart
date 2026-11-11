@@ -8842,32 +8842,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  String _originalAudioLanguageLabel() {
-    final code = widget.movie.originalLanguage
-        .trim()
-        .toLowerCase()
-        .split('-')
-        .first;
-    const names = <String, String>{
-      'en': 'English',
-      'hi': 'Hindi',
-      'bn': 'Bangla',
-      'ta': 'Tamil',
-      'te': 'Telugu',
-      'ml': 'Malayalam',
-      'kn': 'Kannada',
-      'ja': 'Japanese',
-      'ko': 'Korean',
-      'zh': 'Chinese',
-      'es': 'Spanish',
-      'fr': 'French',
-      'de': 'German',
-      'ur': 'Urdu',
-      'ar': 'Arabic',
-    };
-    return names[code] ?? (code.isEmpty ? 'Not listed' : code.toUpperCase());
-  }
-
   void _showAudioTracks() {
     final audioTracks = _tracks.audio;
     final selectedIndex = audioTracks.isEmpty
