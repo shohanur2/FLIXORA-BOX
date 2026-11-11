@@ -181,10 +181,179 @@ class ResumableDownloadService {
             if (offset > 0) 'Range': 'bytes=${offset}-',
           },
           validateStatus: (status) =>
-              status != null && status >= 200 && status < 300,
+              status != null &&
+              ((status >= 200 && status < 300) || status == 416),
         ),
         cancelToken: token,
       );
+
+      if (response.statusCode == 416) {
+        final rangeHeader =
+            response.headers.value('content-range')?.trim() ?? '';
+        final totalMatch =
+            RegExp(r'^bytes \\*/(\\d+)
+          .split(';')
+          .first
+          .trim()
+          .toLowerCase();
+      if (contentType == 'text/html' ||
+          contentType == 'application/json' ||
+          contentType.startsWith('text/')) {
+        throw StateError(
+          'This link opened a web page, not a direct video file. Ask Admin to attach a direct video source.',
+        );
+      }
+      if (contentType.contains('mpegurl') ||
+          contentType.contains('dash+xml')) {
+        throw StateError(
+          'This is an adaptive HLS/DASH stream. Choose a direct downloadable video file.',
+        );
+      }
+
+      final contentRange =
+          response.headers.value('content-range')?.trim() ?? '';
+      final rangeMatch =
+          RegExp(r'^bytes (\d+)-(\d+)/(\d+|\*)$').firstMatch(contentRange);
+
+      if (offset > 0 && response.statusCode == 206) {
+        final rangeStart = int.tryParse(rangeMatch?.group(1) ?? '');
+        if (rangeStart != offset) {
+          throw StateError('The server returned an invalid resume range.');
+        }
+        total = int.tryParse(rangeMatch?.group(3) ?? '') ?? 0;
+      } else if (offset > 0 && response.statusCode == 200) {
+        // The server ignored Range. Restart from byte zero to avoid corruption.
+        offset = 0;
+        received = 0;
+      } else if (response.statusCode != 200 &&
+          response.statusCode != 206) {
+        throw StateError('The server returned HTTP ${response.statusCode}.');
+      }
+
+      final contentLength = int.tryParse(
+            response.headers.value('content-length') ?? '',
+          ) ??
+          0;
+      if (total <= 0) total = offset + contentLength;
+
+      sink = partFile.openWrite(
+        mode: offset > 0 ? FileMode.append : FileMode.write,
+      );
+
+      final body = response.data;
+      if (body == null) throw StateError('The server returned an empty body.');
+
+      await for (final chunk in body.stream) {
+        if (token.isCancelled) break;
+        sink.add(chunk);
+        received += chunk.length;
+        onProgress(received, total);
+      }
+
+      await sink.flush();
+      await sink.close();
+      sink = null;
+
+      if (token.isCancelled) {
+        if ((_cancelReasons[uniqueId] ?? '') == 'pause') {
+          onPaused(partPath, received, total);
+        } else {
+          onError('Download cancelled.');
+        }
+        return;
+      }
+
+      if (total > 0 && received < total) {
+        throw StateError('The download ended before the file was complete.');
+      }
+
+      if (await File(finalPath).exists()) await File(finalPath).delete();
+      final completedFile = await partFile.rename(finalPath);
+      await onComplete(completedFile.path);
+    } on DioException catch (error) {
+      if (sink != null) {
+        await sink.flush();
+        await sink.close();
+        sink = null;
+      }
+      if (token.isCancelled && (_cancelReasons[uniqueId] ?? '') == 'pause') {
+        final size = await _existingLength(partPath);
+        onPaused(partPath, size, total);
+      } else {
+        final status = error.response?.statusCode;
+        final message = switch (status) {
+          401 || 403 =>
+            'The video host denied access. The download link may have expired.',
+          404 => 'The video file was not found on the host.',
+          416 =>
+            'The host rejected the resume range. Retry to restart this download.',
+          429 => 'The video host is busy. Try downloading again later.',
+          final code when code != null && code >= 500 =>
+            'The video host is temporarily unavailable. Try again later.',
+          _ when error.type == DioExceptionType.connectionTimeout =>
+            'Connection timed out. You can retry this download.',
+          _ when error.type == DioExceptionType.receiveTimeout =>
+            'The server stopped sending data. You can resume the download.',
+          _ => 'Download failed. Check the connection and retry.',
+        };
+        onError(message);
+      }
+    } catch (error) {
+      if (sink != null) {
+        await sink.flush();
+        await sink.close();
+      }
+      onError(error is StateError
+          ? error.message
+          : 'Download failed. You can retry from the saved partial file.');
+    } finally {
+      if (hasSlot) _releaseSlot();
+      _active.remove(uniqueId);
+      _cancelReasons.remove(uniqueId);
+    }
+  }
+
+  static Future<int> _existingLength(String path) async {
+    try {
+      final file = File(path);
+      return await file.exists() ? file.length() : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static void pause(int uniqueId) {
+    final token = _active[uniqueId];
+    if (token == null) return;
+    _cancelReasons[uniqueId] = 'pause';
+    token.cancel('pause');
+  }
+
+  static void cancel(int uniqueId) {
+    final token = _active[uniqueId];
+    if (token == null) return;
+    _cancelReasons[uniqueId] = 'cancel';
+    token.cancel('cancel');
+  }
+}
+
+
+class _DownloadQueueTicket {
+  final Completer<void> ready = Completer<void>();
+  bool cancelled = false;
+}
+).firstMatch(rangeHeader);
+        final remoteTotal = int.tryParse(totalMatch?.group(1) ?? '');
+        if (offset > 0 && remoteTotal == offset) {
+          if (await File(finalPath).exists()) await File(finalPath).delete();
+          final completedFile = await partFile.rename(finalPath);
+          await onComplete(completedFile.path);
+          return;
+        }
+        throw StateError(
+          'The host rejected the resume range. Retry to restart this download.',
+        );
+      }
 
       final contentType = (response.headers.value('content-type') ?? '')
           .split(';')
