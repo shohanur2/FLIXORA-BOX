@@ -2287,7 +2287,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     int seasonNumber,
     int episodeNumber,
     String episodeTitle, {
-    String? providerId,
+    ProviderEmbedSource? providerSource,
   }) async {
     InternetService.invalidate();
     final hasInternet = await InternetService.isOnline();
@@ -2316,14 +2316,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final rawOptions = await FlixoraMovieService.getEpisodeDownloadQualities(
+    var rawOptions = await FlixoraMovieService.getEpisodeDownloadQualities(
       movie,
       seasonNumber,
       episodeNumber,
     );
+    if (rawOptions.isEmpty) {
+      rawOptions = await ProviderDownloadAdapter.inspectDirectSource(providerSource);
+    }
     if (!mounted) return;
     if (rawOptions.isEmpty) {
-      _showMessage(ProviderDownloadAdapter.unavailableReason(providerId) ??
+      _showMessage(ProviderDownloadAdapter.unavailableReason(providerSource?.id) ??
           'No official downloadable source is available for this episode.');
       return;
     }
@@ -2906,13 +2909,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
-        onDownloadEpisode: (season, episode, title, providerId) =>
+        onDownloadEpisode: (season, episode, title, providerSource) =>
             addDownloadEpisode(
           selectedMovie,
           season,
           episode,
           title,
-          providerId: providerId,
+          providerSource: providerSource,
         ),
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
@@ -6954,7 +6957,7 @@ class MoviePlayerScreen extends StatefulWidget {
     int seasonNumber,
     int episodeNumber,
     String episodeTitle,
-    String? providerId,
+    ProviderEmbedSource? providerSource,
   )? onDownloadEpisode;
   final VoidCallback? onViewDownloads;
   final bool isOnline;
@@ -7698,7 +7701,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           safeSeason,
                           safeEpisode,
                           selectedEpisodeName,
-                          _selectedProviderSource?.id,
+                          _selectedProviderSource,
                         ),
                 icon: const Icon(
                   Icons.download_for_offline_rounded,
