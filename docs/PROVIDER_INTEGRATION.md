@@ -1,40 +1,43 @@
-# FLIXORA Authorized Provider Integration
+# FLIXORA Provider, Player and Frontend Integration
 
-FLIXORA keeps its existing playback priority:
+FLIXORA keeps catalogue information, provider availability and playable media sources separate.
 
-1. Admin-managed direct MP4/HLS sources and recognized Admin embeds
-2. Authorized provider results discovered for the selected title and (for TV) exact season/episode
-3. Existing built-in provider routes as fallbacks
+## Playback source order
 
-## Integrated provider discovery
+1. Admin-managed direct MP4/HLS/DASH source, or an Admin-curated official embed.
+2. Verified Public Domain / CC0 discoveries from PeerTube and Internet Archive.
+3. The existing configured fallback embed routes.
 
-The visitor player can query these sources in parallel:
+The Player keeps its existing native media_kit engine, Android Media3 fallback and WebView embed surface. Direct media continues through the native player; official provider embeds open in the in-app WebView. A source failure can move playback to the next available configured source.
 
-- **Dramachi** — public JSON catalogue/title/episode interfaces and the CDN URL returned by its normal API response.
-- **CircleFTP (BDIX)** — post search/details API; a direct media URL is accepted only from the configured CircleFTP host.
-- **PeerTube / Sepia Search** — federated search is used only for exact title/year matches (and exact season/episode tokens for TV) that are explicitly marked Public Domain or CC0 and publicly visible. The official PeerTube embed player is opened inside FLIXORA; PeerTube is creator-hosted, so it is not a complete commercial movie catalogue.
-- **4KHDHub** — public search/detail pages plus the supported HubCloud/HubDrive public resolver flow. Resolver output is restricted to HTTPS media URLs and known direct-file CDN endpoints; local/private IPs, login/logout pages, archives, and unknown redirect pages are rejected.
+## Public-domain discovery
 
-Provider results are title/year matched, deduplicated, and added after a recognized Admin embed source. PeerTube is stricter: only public Public Domain/CC0 items are accepted, and TV results must contain the exact selected SxxExx token. TV results must match the selected season and episode. Direct media links play through FLIXORA's native `media_kit` player; playback errors move to the next provider. Existing embedded players continue to use the WebView player.
+- **PeerTube / Sepia Search** — searches public PeerTube instances. FLIXORA accepts only public videos explicitly labelled Public Domain or CC0. Movie title/year matching is applied; TV results must match the selected season and episode token exactly. Results use the publishing instance's official PeerTube embed player.
+- **Internet Archive** — movie-only discovery. FLIXORA checks the Archive item's rights metadata and requires a public supported video file before adding its official Archive embed. Unknown, restricted, or copyrighted uploads are not automatically treated as public-domain content. TV episodes are not searched by this integration.
 
-## Build-time endpoint configuration
+Discovery runs in the background with a short initial wait so a slow public catalogue does not hold up normal playback. Late verified results are added to the fallback list without interrupting a stream that is already playing. Discovery is skipped while the device is offline.
 
-The following GitHub Actions secrets can override the defaults at build time:
+## Official embeds
 
-| Secret | Default |
-| --- | --- |
-| `FLIXORA_DRAMACHI_API_BASE_URL` | `https://api.nodeobjects.com/` |
-| `FLIXORA_CIRCLEFTP_API_BASE_URL` | `http://new.circleftp.net:5000/api` |
-| `FLIXORA_4KHDHUB_BASE_URL` | `https://4khdhub.one/` |
+- **YouTube** — Admin-provided YouTube watch, short, or embed URLs are normalized to YouTube's official privacy-enhanced embed player.
+- **Vimeo** — Admin-provided Vimeo video URLs are normalized to the official Vimeo player.
+- **Internet Archive** — Admin-curated Archive embed URLs are supported; discovered Archive results additionally pass the public-domain rights and file checks above.
 
-If a custom BDIX host is used, its exact hostname must also be added to the Android network-security allowlist in `android/app/src/main/res/xml/network_security_config.xml`.
+FLIXORA does not scrape YouTube/Vimeo pages or extract protected media URLs. Add only official embeds that the uploader or rights holder has authorized for use.
 
-CircleFTP currently uses HTTP. Android cleartext traffic is restricted to `new.circleftp.net` in `network_security_config.xml`; other hosts remain blocked by default. If an authorized BDIX operator provides a different server hostname, update that hostname in the network security allowlist before building.
+## Metadata and availability
+
+- **TMDB / AniList** — catalogue metadata, title IDs, season/episode information and anime matching.
+- **OMDb** — ratings, Metascore, runtime, content rating and other title metadata.
+- **Watchmode** — country-specific streaming availability, format and provider links. Its results are informational and do not provide playback streams; provider links open the provider's website.
+- **Trakt** — community ratings and ranking information. Use only when FLIXORA's content and playback integrations comply with Trakt's API policy.
+
+The optional OMDb, Watchmode and Trakt credentials are stored as Supabase Edge Function secrets, not inside the APK. See [OPTIONAL_API_SETUP.md](OPTIONAL_API_SETUP.md).
 
 ## Limits and verification
 
-- Discovery is best-effort and times out; a provider can return no result when unavailable or when a title/episode is not in its catalogue.
-- A URL being discovered does not prove that it will play on every device or network. Test actual playback on-device.
-- This integration does not bypass login, subscription/VIP controls, DRM, or other access controls.
-- 4KHDHub mirror support is best-effort. Some hosts may expire links, require unsupported headers, or reject in-app playback; those sources are skipped or moved to the next provider.
-- Provider access permission and rights to stream or redistribute the underlying media are separate matters; use only sources cleared for FLIXORA playback.
+- A catalogue match or provider availability result is not proof that a video is playable.
+- Public-domain filtering is intentionally conservative. A title may have no result even when a copy exists, because the licence or exact episode cannot be verified.
+- Embed providers may block in-app playback, require user interaction, or be region-restricted.
+- Existing Admin source priority, selected TV season/episode, offline Home cache and no-internet screen must remain unchanged.
+- Do not bypass login, subscription/VIP controls, DRM, or other access restrictions. Provider access and rights to stream or redistribute the underlying media are separate matters.
