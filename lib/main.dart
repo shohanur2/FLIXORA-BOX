@@ -5656,6 +5656,47 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     subtitle: [SubtitleTrack.auto()],
   );
 
+  static const MethodChannel _pictureInPictureChannel =
+      MethodChannel('com.flixora.flixora/pip');
+
+  Future<void> _enterPictureInPicture() async {
+    if (_selectedProviderSource != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Picture-in-picture is available for FLIXORA direct video playback.'),
+        ),
+      );
+      return;
+    }
+    if (!_initialized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Start video playback before entering picture-in-picture.')),
+      );
+      return;
+    }
+    try {
+      final entered = await _pictureInPictureChannel.invokeMethod<bool>(
+        'enterPictureInPicture',
+        const <String, int>{'width': 16, 'height': 9},
+      );
+      if (entered != true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Picture-in-picture is not available on this device.')),
+        );
+      }
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? 'Could not enter picture-in-picture.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not enter picture-in-picture.')),
+      );
+    }
+  }
+
   String get _resumeKey {
     final id = widget.movie.tmdbId > 0
         ? widget.movie.tmdbId
@@ -8120,6 +8161,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               tooltip: 'Video quality',
               enabled: _availableQualities.isNotEmpty,
               onPressed: _showQualitySelector,
+            ),
+          ],
+          if (_selectedProviderSource == null) ...[
+            const SizedBox(width: 3),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Picture-in-picture',
+                onPressed: _enterPictureInPicture,
+                icon: const Icon(
+                  Icons.picture_in_picture_alt_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
+              ),
             ),
           ],
           if (_selectedProviderSource != null || _tracks.audio.isNotEmpty) ...[
