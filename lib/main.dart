@@ -2739,9 +2739,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _sectionBlock(String title, List<Movie> movies) {
-    final filters = _sectionFilterOptions(title);
-    final selected = _sectionFilters[title] ?? (filters.isNotEmpty ? filters.first : '');
-    final visibleMovies = filters.isEmpty ? movies : _filterSectionMovies(title, movies, selected);
+    final allFilters = _sectionFilterOptions(title);
+    final filters = allFilters.where((filter) =>
+        _filterSectionMovies(title, movies, filter).isNotEmpty).toList();
+    final selected = filters.contains(_sectionFilters[title])
+        ? _sectionFilters[title]!
+        : (filters.isNotEmpty ? filters.first : '');
+    final visibleMovies = filters.isEmpty
+        ? _deduplicateMovies(movies)
+        : _filterSectionMovies(title, movies, selected);
+
+    // A category with no matching catalogue items is omitted instead of
+    // leaving an empty strip on the Home page.
+    if (visibleMovies.isEmpty) return const SizedBox.shrink();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2749,7 +2760,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.fromLTRB(16, 21, 12, 7),
           child: Row(
             children: [
-              Expanded(child: Text(title, style: const TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.bold))),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
               TextButton(
                 onPressed: () {
                   final isTvSection = title.contains('TV') ||
@@ -2760,27 +2780,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     isTvSection,
                   );
                 },
-                style: TextButton.styleFrom(foregroundColor: gold, padding: const EdgeInsets.symmetric(horizontal: 8), minimumSize: const Size(36, 28), tapTargetSize: MaterialTapTargetSize.shrinkWrap, visualDensity: VisualDensity.compact),
-                child: const Text('All', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                style: TextButton.styleFrom(
+                  foregroundColor: gold,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(36, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text(
+                  'All',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
               ),
             ],
           ),
         ),
         if (filters.isNotEmpty)
           SizedBox(
-            height: 30,
+            height: 34,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: filters.length,
               separatorBuilder: (_, __) => const SizedBox(width: 18),
               itemBuilder: (context, index) {
                 final value = filters[index];
                 final active = selected == value;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
+                return InkWell(
+                  borderRadius: BorderRadius.circular(8),
                   onTap: () => setState(() => _sectionFilters[title] = value),
-                  child: Center(child: Text(value, style: TextStyle(color: active ? gold : ink60, fontSize: 12, fontWeight: active ? FontWeight.w800 : FontWeight.w500))),
+                  child: Center(
+                    child: Text(
+                      value,
+                      style: TextStyle(
+                        color: active ? gold : ink60,
+                        fontSize: 12,
+                        fontWeight: active ? FontWeight.w800 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
                 );
               },
             ),
@@ -2790,73 +2829,111 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-    Widget _movieRow(List<Movie> movies) {
-    if (movies.isEmpty) return const SizedBox(height: 8);
+  Widget _movieRow(List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
       height: 205,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
-          return GestureDetector(
-            onTap: _isOpeningTitle ? null : () => _playMovie(movie),
-            child: Container(
-              width: 110,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(9),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: movie.posterUrl.isEmpty
-                            ? Container(
-                                color: panel,
-                                child: const Icon(Icons.movie, color: gold, size: 32),
-                              )
-                            : FlixoraCachedImage(
-                                imageUrl: movie.posterUrl,
-                                isOnline: _online,
-                                fit: BoxFit.cover,
-                                placeholder: Container(
-                                  color: panel,
-                                  child: const Center(
-                                    child: CircularProgressIndicator(color: gold, strokeWidth: 2),
+          final hasHindi = _hasHindiAudio(movie);
+          return Container(
+            width: 110,
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xFF17181C),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFF292B31), width: 0.8),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(7),
+                        ),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            movie.posterUrl.isEmpty
+                                ? Container(
+                                    color: panel,
+                                    child: const Icon(Icons.movie, color: gold, size: 32),
+                                  )
+                                : FlixoraCachedImage(
+                                    imageUrl: movie.posterUrl,
+                                    isOnline: _online,
+                                    fit: BoxFit.cover,
+                                    memCacheWidth: 330,
+                                    memCacheHeight: 450,
+                                    placeholder: Container(color: panel),
+                                    fallback: Container(
+                                      color: panel,
+                                      child: const Icon(Icons.movie, color: gold),
+                                    ),
+                                  ),
+                            if (hasHindi)
+                              Positioned(
+                                top: 5,
+                                right: 5,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xDD111216),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'Hindi',
+                                    style: TextStyle(
+                                      color: white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
-                                fallback: Container(
-                                  color: panel,
-                                  child: const Icon(Icons.movie, color: gold),
-                                ),
                               ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    movie.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      const Icon(Icons.star, color: premiumGold, size: 12),
-                      const SizedBox(width: 3),
-                      Text(movie.rating.toStringAsFixed(1),
-                          style: const TextStyle(color: ink60, fontSize: 10)),
-                      const SizedBox(width: 6),
-                      Text(movie.year,
-                          style: const TextStyle(color: ink54, fontSize: 10)),
-                    ],
-                  ),
-                ],
+                    Container(
+                      height: 39,
+                      alignment: Alignment.centerLeft,
+                      padding: const EdgeInsets.symmetric(horizontal: 7),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF202126),
+                        borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(7),
+                        ),
+                      ),
+                      child: Text(
+                        _displayTitle(movie),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           );
