@@ -84,17 +84,13 @@ class ManifestDownloadManager {
         final plans = _parseDashPlans(text, uri);
         return plans.isEmpty
             ? const []
-            : const [
+            : [
                 ManifestDownloadOption(
-                  url: '',
+                  url: uri.toString(),
                   type: 'dash',
                   quality: 'DASH · Adaptive',
                 ),
-              ].map((option) => ManifestDownloadOption(
-                  url: uri.toString(),
-                  type: option.type,
-                  quality: option.quality,
-                )).toList();
+              ];
       }
     } catch (_) {
       return const [];
@@ -295,6 +291,11 @@ class ManifestDownloadManager {
     final videoUri = safeManifestUri(task.videoUrl);
     if (videoUri == null) throw StateError('Invalid HLS playlist URL.');
 
+    var effectiveVideoUrl = task.videoUrl;
+    var effectiveAudioUrl = task.audioUrl;
+    var effectiveAudioName = task.audioName;
+    var effectiveBandwidth = task.manifestBandwidth;
+    var effectiveResolution = task.manifestResolution;
     var videoText = await _readText(videoUri);
     if (videoText.contains('#EXT-X-STREAM-INF:')) {
       final variants = parseHlsOptions(videoUri, videoText);
@@ -302,25 +303,26 @@ class ManifestDownloadManager {
         throw StateError('The HLS master playlist has no downloadable variant.');
       }
       final selected = variants.first;
-      task
-        ..videoUrl = selected.url
-        ..audioUrl = selected.audioUrl
-        ..audioName = selected.audioName
-        ..manifestBandwidth = selected.bandwidth
-        ..manifestResolution = selected.resolution;
-      final selectedUri = safeManifestUri(task.videoUrl);
+      effectiveVideoUrl = selected.url;
+      effectiveAudioUrl = selected.audioUrl;
+      effectiveAudioName = selected.audioName;
+      effectiveBandwidth = selected.bandwidth;
+      effectiveResolution = selected.resolution;
+      final selectedUri = safeManifestUri(effectiveVideoUrl);
       if (selectedUri == null) throw StateError('Invalid HLS variant URL.');
       videoText = await _readText(selectedUri);
     }
 
+    final effectiveVideoUri = safeManifestUri(effectiveVideoUrl);
+    if (effectiveVideoUri == null) throw StateError('Invalid HLS variant URL.');
     final videoPlan = _prepareHlsMediaPlaylist(
-      safeManifestUri(task.videoUrl)!,
+      effectiveVideoUri,
       videoText,
       'video',
     );
     _HlsPlaylistPlan? audioPlan;
-    if (task.audioUrl != null && task.audioUrl!.isNotEmpty) {
-      final audioUri = safeManifestUri(task.audioUrl!);
+    if (effectiveAudioUrl != null && effectiveAudioUrl.isNotEmpty) {
+      final audioUri = safeManifestUri(effectiveAudioUrl);
       if (audioUri == null) throw StateError('Invalid HLS audio playlist URL.');
       final audioText = await _readText(audioUri);
       audioPlan = _prepareHlsMediaPlaylist(audioUri, audioText, 'audio');
@@ -377,11 +379,9 @@ class ManifestDownloadManager {
         _renderHlsPlaylist(audioPlan),
         flush: true,
       );
-      final audioName = _hlsQuote(task.audioName ?? 'Audio');
-      final resolution = task.manifestResolution;
-      final bandwidth = task.manifestBandwidth > 0
-          ? task.manifestBandwidth
-          : 1;
+      final audioName = _hlsQuote(effectiveAudioName ?? 'Audio');
+      final resolution = effectiveResolution;
+      final bandwidth = effectiveBandwidth > 0 ? effectiveBandwidth : 1;
       final master = StringBuffer()
         ..writeln('#EXTM3U')
         ..writeln('#EXT-X-VERSION:3')
@@ -909,7 +909,7 @@ class ManifestDownloadManager {
     XmlElement root,
     List<_DashPlan> plans,
   ) {
-    final namespace = root.name.namespaceUri;
+    final namespace = root.name.namespaceUri ?? '';
     final rootAttributes = <String, String>{
       'xmlns': namespace.isEmpty
           ? 'urn:mpeg:dash:schema:mpd:2011'
@@ -961,7 +961,7 @@ class ManifestDownloadManager {
       final prefix = plan.kind == 'video' ? 'video' : 'audio';
       for (var segment = 0; segment < plan.segmentUris.length; segment++) {
         buffer.write(
-          '<SegmentURL media="$prefix_segment_PLACEHOLDER"/>',
+          '<SegmentURL media="${prefix}_segment_PLACEHOLDER"/>',
         );
         buffer.write('\n');
       }
@@ -977,7 +977,7 @@ class ManifestDownloadManager {
     for (final plan in plans) {
       final prefix = plan.kind == 'video' ? 'video' : 'audio';
       for (var index = 0; index < plan.segmentUris.length; index++) {
-        final placeholder = '$prefix_segment_PLACEHOLDER';
+        final placeholder = '${prefix}_segment_PLACEHOLDER';
         final fileName =
             '${prefix}_segment_${index.toString().padLeft(5, '0')}.bin';
         rendered = rendered.replaceFirst(
