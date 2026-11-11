@@ -66,6 +66,15 @@ void main() {
       expect(restored.isBanner, isTrue);
     });
 
+    test('identifies the FLIXORA Original home section for exclusion', () {
+      final section = MovieBoxHomeSection.fromApi({
+        'title': 'FLIXORA Original',
+        'items': [rawItem],
+      });
+
+      expect(section.isFlixoraOriginal, isTrue);
+    });
+
     test('persists direct-download headers and episode identity', () {
       final task = DownloadTask(
         movieId: -9001,
