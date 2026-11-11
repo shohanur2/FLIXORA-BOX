@@ -1196,7 +1196,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
-  bool _downloadInBackground = false;
   bool _autoMiniPlayer = true;
   String _appLanguage = 'English';
   String _preferredQuality = 'Auto';
@@ -1417,7 +1416,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _notificationsEnabled = prefs.getBool('flixora_notifications') ?? true;
         _familyMode = prefs.getBool('flixora_family_mode') ?? false;
-        _downloadInBackground = prefs.getBool('flixora_download_background') ?? false;
         _autoMiniPlayer = prefs.getBool('flixora_auto_miniplayer') ?? true;
         _appLanguage = prefs.getString('flixora_language') ?? 'English';
         _preferredQuality = prefs.getString('flixora_preferred_quality') ?? 'Auto';
@@ -5037,7 +5035,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.language, 'Language', _showLanguagePicker, trailingText: _appLanguage),
           _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
           _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
-          _settingSwitch(title: 'Continue downloads while browsing', subtitle: 'Downloads continue while FLIXORA stays open. Force-closing the app may pause them.', value: _downloadInBackground, onChanged: (v) => _saveBoolSetting('flixora_download_background', v, (x) => _downloadInBackground = x)),
+          _profileTile(Icons.download_for_offline_outlined, 'Download behavior', () => _showSettingsInfo('Download behavior', 'Downloads continue while you browse FLIXORA. If Android closes the app, incomplete downloads can be resumed from Downloads after reopening.')),
           _settingSwitch(title: 'Auto activate Miniplayer', subtitle: 'Miniplayer behavior will be connected when the player feature is extended.', value: _autoMiniPlayer, onChanged: (v) => _saveBoolSetting('flixora_auto_miniplayer', v, (x) => _autoMiniPlayer = x)),
           _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
         ]),
