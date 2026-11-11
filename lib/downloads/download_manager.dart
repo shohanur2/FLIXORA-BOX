@@ -241,6 +241,7 @@ class DownloadManager {
           'This source is not a direct video file. HLS, DASH and embed links cannot be saved as a video file.',
         );
       }
+      if (info.sizeBytes != null) task.totalBytes = info.sizeBytes!;
 
       final directory = await getApplicationDocumentsDirectory();
       final safeName = task.displayTitle
