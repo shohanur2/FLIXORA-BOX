@@ -9,7 +9,11 @@ void main() {
         viewportWidth: 393,
         maxScrollExtent: 900,
       );
-      expect(offset, closeTo(187.5, 0.001));
+      expect(offset, closeTo(163.5, 0.001));
+      expect(FeaturedCarouselLayout.cardWidth, 228);
+      expect(FeaturedCarouselLayout.cardHeight, 54);
+      expect(FeaturedCarouselLayout.posterWidth, 36);
+      expect(FeaturedCarouselLayout.posterHeight, 48);
       expect(
         FeaturedCarouselLayout.indexForScrollOffset(
           pixels: offset,
