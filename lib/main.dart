@@ -1438,10 +1438,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   bool _isAnimeTitle(Movie title) {
     final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
+    final country = title.originCountry.toLowerCase();
     return genres.contains('anime') ||
         (genres.contains('animation') &&
             (title.originalLanguage.toLowerCase() == 'ja' ||
-                title.originCountry.toUpperCase() == 'JP'));
+                country == 'jp' ||
+                country.contains('japan')));
   }
 
   /// TMDB does not define "Web Series" as a TV genre. Prefer titles explicitly
@@ -2020,6 +2022,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _allMovies() {
     final combined = <Movie>[
       ...flixoraMovies,
+      ..._movieBoxSections.expand((section) => section.items),
       ...trending,
       ...popular,
       ...latest,
@@ -3500,44 +3503,64 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (category) {
       case 'Trending':
         return _deduplicateMovies([
-          ...flixoraMovies, ...trending, ...trendingTv,
+          ...flixoraMovies,
+          ..._movieBoxSections.expand((section) => section.items),
+          ...trending,
+          ...trendingTv,
         ]);
       case 'Movies':
         return _deduplicateMovies([
-          ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
+          ...flixoraMovies,
+          ..._movieBoxSections.expand((section) => section.items),
+          ...trending, ...popular, ...latest, ...topRated,
         ].where((movie) => movie.mediaType == 'movie').toList());
       case 'TV Series':
         return _deduplicateMovies([
-          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
           ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ..._movieBoxSections.expand((section) => section.items)
+              .where((title) => title.mediaType == 'tv'),
+          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
         ]);
       case 'Anime':
         return _deduplicateMovies([
-          ...anime,
           ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
               _isAnimeTitle(title)),
+          ..._movieBoxSections.expand((section) => section.items)
+              .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+          ...anime,
         ]);
       case 'Korean Drama':
         return _deduplicateMovies([
-          ...koreanDrama,
           ...flixoraMovies.where((title) =>
               title.mediaType == 'tv' &&
               title.originalLanguage.toLowerCase() == 'ko'),
+          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+              title.mediaType == 'tv' &&
+              (title.originCountry.toLowerCase().contains('korea') ||
+               title.originCountry.toUpperCase().contains('KR'))),
+          ...koreanDrama,
         ]);
       case 'Bengali':
         return _deduplicateMovies([
-          ...bengaliMovies, ...bengaliTv,
           ...flixoraMovies.where((title) =>
               title.originalLanguage.toLowerCase() == 'bn' ||
               title.originCountry.toUpperCase().contains('BD')),
+          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+              title.originCountry.toUpperCase().contains('BD') ||
+              title.originCountry.toLowerCase().contains('bangladesh')),
+          ...bengaliMovies, ...bengaliTv,
         ]);
       case 'Bengali Movies':
         return _deduplicateMovies([
-          ...bengaliMovies,
           ...flixoraMovies.where((title) =>
               title.mediaType == 'movie' &&
               (title.originalLanguage.toLowerCase() == 'bn' ||
                title.originCountry.toUpperCase().contains('BD'))),
+          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originCountry.toUpperCase().contains('BD') ||
+               title.originCountry.toLowerCase().contains('bangladesh'))),
+          ...bengaliMovies,
         ]);
       case 'Drama':
         return _deduplicateMovies(_allMovies().where((title) =>
