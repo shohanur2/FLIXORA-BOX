@@ -136,7 +136,7 @@ class DownloadManager {
 
   static int? _rangeTotal(Headers headers) {
     final raw = headers.value('content-range') ?? '';
-    final match = RegExp(r'bytes\\s+\\d+-\\d+/(\\d+)', caseSensitive: false)
+    final match = RegExp(r'bytes\s+\d+-\d+/(\d+)', caseSensitive: false)
         .firstMatch(raw);
     final value = int.tryParse(match?.group(1) ?? '');
     return value != null && value > 0 ? value : null;
@@ -303,7 +303,7 @@ class DownloadManager {
 
       var append = offset > 0 && statusCode == 206;
       if (append) {
-        final rangeStart = RegExp(r'bytes\\s+(\\d+)-', caseSensitive: false)
+        final rangeStart = RegExp(r'bytes\s+(\d+)-', caseSensitive: false)
             .firstMatch(response.headers.value('content-range') ?? '');
         final serverOffset = int.tryParse(rangeStart?.group(1) ?? '');
         if (serverOffset != null && serverOffset != offset) {
