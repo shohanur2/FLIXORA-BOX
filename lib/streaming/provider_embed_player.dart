@@ -35,6 +35,8 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   bool _failureReported = false;
   bool _disposed = false;
   Timer? _loadTimeout;
+  Timer? _playbackStartupTimeout;
+  bool _playbackStarted = false;
   String? _errorMessage;
 
   void _startLoadTimeout() {
@@ -52,6 +54,64 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
     _loadTimeout = null;
   }
 
+  void _cancelPlaybackStartupTimeout() {
+    _playbackStartupTimeout?.cancel();
+    _playbackStartupTimeout = null;
+  }
+
+  /// Play4U can finish loading its page while its video player remains stuck.
+  /// Give it a short startup window, then automatically try the next provider.
+  /// A real HTML5 video "playing"/timeupdate event cancels this watchdog.
+  void _startPlaybackStartupTimeout() {
+    if (!widget.source.id.startsWith('play4u')) return;
+    _cancelPlaybackStartupTimeout();
+    _playbackStarted = false;
+    _playbackStartupTimeout = Timer(const Duration(seconds: 40), () {
+      if (!mounted || _disposed || _failureReported || _playbackStarted) return;
+      _reportProviderFailure(
+        'Play4U did not start playback. Automatically trying the next available stream.',
+      );
+    });
+  }
+
+  Future<void> _installPlaybackObserver() async {
+    if (!widget.source.id.startsWith('play4u') ||
+        !mounted ||
+        _disposed ||
+        _failureReported) {
+      return;
+    }
+    try {
+      await _controller.runJavaScript(r'''
+(function () {
+  if (window.__flixoraPlaybackObserverInstalled) return;
+  window.__flixoraPlaybackObserverInstalled = true;
+  const notify = (message) => {
+    try { FlixoraBridge.postMessage(message); } catch (_) {}
+  };
+  const bindVideo = (video) => {
+    if (video.__flixoraPlaybackObserved) return;
+    video.__flixoraPlaybackObserved = true;
+    video.addEventListener('playing', () => notify('playback-started'));
+    video.addEventListener('timeupdate', () => {
+      if (!video.paused && video.currentTime > 0.25) {
+        notify('playback-started');
+      }
+    });
+    video.addEventListener('error', () => notify('playback-error'));
+  };
+  const scan = () => document.querySelectorAll('video').forEach(bindVideo);
+  scan();
+  const observer = new MutationObserver(scan);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
+''');
+    } catch (_) {
+      // Some provider pages block script injection. The startup watchdog still
+      // provides a best-effort fallback when no playback signal is available.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -62,27 +122,32 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
   Future<void> _configureAndLoad() async {
     try {
       await _controller.setJavaScriptMode(JavaScriptMode.unrestricted);
-      if (widget.source.loadInIframe) {
-        await _controller.addJavaScriptChannel(
-          'FlixoraBridge',
-          onMessageReceived: (message) {
-            if (!mounted || _disposed || _failureReported) return;
-            if (message.message == 'exit') {
-              widget.onClose();
-            } else if (message.message == 'iframe-loaded') {
-              _cancelLoadTimeout();
-              setState(() {
-                _isLoading = false;
-                _progress = 100;
-              });
-            } else if (message.message == 'iframe-error') {
-              _reportProviderFailure(
-                'The embedded player could not load. Trying another available stream.',
-              );
-            }
-          },
-        );
-      }
+      await _controller.addJavaScriptChannel(
+        'FlixoraBridge',
+        onMessageReceived: (message) {
+          if (!mounted || _disposed || _failureReported) return;
+          if (message.message == 'exit') {
+            widget.onClose();
+          } else if (message.message == 'iframe-loaded') {
+            _cancelLoadTimeout();
+            setState(() {
+              _isLoading = false;
+              _progress = 100;
+            });
+          } else if (message.message == 'iframe-error') {
+            _reportProviderFailure(
+              'The embedded player could not load. Trying another available stream.',
+            );
+          } else if (message.message == 'playback-started') {
+            _playbackStarted = true;
+            _cancelPlaybackStartupTimeout();
+          } else if (message.message == 'playback-error') {
+            _reportProviderFailure(
+              'Play4U reported a playback error. Automatically trying the next available stream.',
+            );
+          }
+        },
+      );
       await _controller.setBackgroundColor(Colors.black);
       await _controller.enableZoom(false);
       await _controller.setNavigationDelegate(
@@ -93,6 +158,7 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
           },
           onPageStarted: (_) {
             if (!mounted) return;
+            _cancelPlaybackStartupTimeout();
             setState(() {
               _isLoading = true;
               _errorMessage = null;
@@ -112,6 +178,10 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
               _isLoading = false;
               _progress = 100;
             });
+            if (widget.source.id.startsWith('play4u')) {
+              _startPlaybackStartupTimeout();
+              unawaited(_installPlaybackObserver());
+            }
           },
           onWebResourceError: (error) {
             if (!mounted || _disposed) return;
@@ -269,6 +339,7 @@ window.addEventListener('message', function(event) {
   void _reportProviderFailure(String message) {
     if (!mounted || _disposed || _failureReported) return;
     _cancelLoadTimeout();
+    _cancelPlaybackStartupTimeout();
     setState(() {
       _isLoading = false;
       _errorMessage = message;
@@ -279,6 +350,8 @@ window.addEventListener('message', function(event) {
 
   Future<void> _retry() async {
     if (!mounted) return;
+    _cancelPlaybackStartupTimeout();
+    _playbackStarted = false;
     setState(() {
       _isLoading = true;
       _progress = 0;
@@ -301,6 +374,7 @@ window.addEventListener('message', function(event) {
   void dispose() {
     _disposed = true;
     _cancelLoadTimeout();
+    _cancelPlaybackStartupTimeout();
     super.dispose();
   }
 
