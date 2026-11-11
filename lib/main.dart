@@ -2974,6 +2974,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
+          onDownloadEpisode: (season, episode) => addDownload(
+            selectedMovie,
+            seasonNumber: season,
+            episodeNumber: episode,
+          ),
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
           enablePip: _autoMiniPlayer,
@@ -3007,6 +3012,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
+        onDownloadEpisode: (season, episode) => addDownload(
+          selectedMovie,
+          seasonNumber: season,
+          episodeNumber: episode,
+        ),
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
           enablePip: _autoMiniPlayer,
@@ -6788,6 +6798,7 @@ class MoviePlayerScreen extends StatefulWidget {
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
   final VoidCallback? onDownload;
+  final void Function(int seasonNumber, int episodeNumber)? onDownloadEpisode;
   final VoidCallback? onViewDownloads;
   final bool isOnline;
   final bool enablePip;
@@ -6800,6 +6811,7 @@ class MoviePlayerScreen extends StatefulWidget {
     this.onMovieSelected,
     this.onSave,
     this.onDownload,
+    this.onDownloadEpisode,
     this.onViewDownloads,
     this.isOnline = true,
     this.enablePip = true,
@@ -11014,7 +11026,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
                       ),
                     ),
-                    _detailAction(Icons.download_outlined, 'Download', widget.onDownload),
+                    _detailAction(
+                      Icons.download_outlined,
+                      'Download',
+                      widget.movie.isMovieBox && widget.movie.movieBoxIsSeries
+                          ? () => widget.onDownloadEpisode?.call(
+                                _selectedSeasonNumber,
+                                _selectedEpisodeNumber,
+                              )
+                          : widget.onDownload,
+                    ),
                     _detailAction(
                       Icons.video_library_outlined,
                       'View downloads',
