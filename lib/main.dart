@@ -80,6 +80,16 @@ const Color playerGold = Color(0xFFD6AD45);
 const Color playerGoldLight = Color(0xFFF2CF75);
 const Color playerWhite = Colors.white;
 
+// Keep loaded posters/backdrops available for offline browsing for longer
+// than the package's small default cache.
+final CacheManager flixoraImageCacheManager = CacheManager(
+  Config(
+    'flixoraImageCache',
+    stalePeriod: const Duration(days: 90),
+    maxNrOfCacheObjects: 600,
+  ),
+);
+
 const String imageBase = 'https://image.tmdb.org/t/p/';
 const String apiKey = String.fromEnvironment('TMDB_API_KEY');
 
@@ -353,7 +363,7 @@ class FlixoraCachedImage extends StatelessWidget {
     if (isOnline) {
       return CachedNetworkImage(
         imageUrl: imageUrl,
-        cacheManager: DefaultCacheManager(),
+        cacheManager: flixoraImageCacheManager,
         fit: fit,
         memCacheWidth: memCacheWidth,
         memCacheHeight: memCacheHeight,
@@ -364,7 +374,7 @@ class FlixoraCachedImage extends StatelessWidget {
     }
 
     return FutureBuilder<FileInfo?>(
-      future: DefaultCacheManager().getFileFromCache(imageUrl),
+      future: flixoraImageCacheManager.getFileFromCache(imageUrl),
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
         if (file != null && file.existsSync()) {
@@ -5677,7 +5687,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: CircularProgressIndicator(color: gold),
             )
           : (_tab == 0 && !_online && _allMovies().isEmpty)
-              ? NoInternetScreen(onRetry: _retryInternetConnection)
+              ? NoInternetScreen(
+                  onRetry: _retryInternetConnection,
+                  showAppBar: false,
+                )
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
@@ -5710,11 +5723,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 class NoInternetScreen extends StatefulWidget {
   final String backdropUrl;
   final Future<bool> Function()? onRetry;
+  final bool showAppBar;
 
   const NoInternetScreen({
     super.key,
     this.backdropUrl = '',
     this.onRetry,
+    this.showAppBar = true,
   });
 
   @override
@@ -5812,25 +5827,27 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bg,
-      appBar: AppBar(
-        backgroundColor: bg,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        centerTitle: true,
-        leading: IconButton(
-          tooltip: 'Back',
-          onPressed: () => Navigator.of(context).maybePop(),
-          icon: const Icon(Icons.arrow_back_rounded, color: white, size: 28),
-        ),
-        title: const Text(
-          'No Internet',
-          style: TextStyle(
-            color: white,
-            fontSize: 19,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
+      appBar: widget.showAppBar
+          ? AppBar(
+              backgroundColor: bg,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              centerTitle: true,
+              leading: IconButton(
+                tooltip: 'Back',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.arrow_back_rounded, color: white, size: 28),
+              ),
+              title: const Text(
+                'No Internet',
+                style: TextStyle(
+                  color: white,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            )
+          : null,
       body: SafeArea(
         top: false,
         child: LayoutBuilder(
