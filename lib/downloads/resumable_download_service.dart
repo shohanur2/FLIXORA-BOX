@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -24,6 +26,52 @@ class ResumableDownloadService {
 
   static final Map<int, CancelToken> _active = <int, CancelToken>{};
   static final Map<int, String> _cancelReasons = <int, String>{};
+  static const int maxConcurrentDownloads = 2;
+  static int _runningDownloads = 0;
+  static final Queue<_DownloadQueueTicket> _waiting =
+      Queue<_DownloadQueueTicket>();
+
+  static Future<bool> _acquireSlot(
+    CancelToken token,
+    void Function() onQueued,
+  ) async {
+    if (_runningDownloads < maxConcurrentDownloads) {
+      _runningDownloads++;
+      return true;
+    }
+
+    final ticket = _DownloadQueueTicket();
+    _waiting.addLast(ticket);
+    onQueued();
+
+    token.whenCancel.then((_) {
+      if (!ticket.ready.isCompleted) {
+        ticket.cancelled = true;
+        _waiting.remove(ticket);
+        ticket.ready.complete();
+      }
+    });
+
+    await ticket.ready.future;
+    if (ticket.cancelled) return false;
+    if (token.isCancelled) {
+      _releaseSlot();
+      return false;
+    }
+    return true;
+  }
+
+  static void _releaseSlot() {
+    while (_waiting.isNotEmpty) {
+      final next = _waiting.removeFirst();
+      if (next.cancelled) continue;
+      if (!next.ready.isCompleted) {
+        next.ready.complete();
+        return;
+      }
+    }
+    if (_runningDownloads > 0) _runningDownloads--;
+  }
 
   static String _safeName(String value) =>
       value.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
@@ -66,6 +114,7 @@ class ResumableDownloadService {
     required int uniqueId,
     String? existingPartialPath,
     required DownloadProgressCallback onProgress,
+    required void Function(String path, int offset) onQueued,
     required void Function(String path, int offset) onStarted,
     required void Function(String path, int received, int total) onPaused,
     required Future<void> Function(String path) onComplete,
@@ -102,13 +151,27 @@ class ResumableDownloadService {
     final token = CancelToken();
     _active[uniqueId] = token;
     _cancelReasons.remove(uniqueId);
-    onStarted(partPath, offset);
 
+    var hasSlot = false;
     var received = offset;
     var total = 0;
     IOSink? sink;
 
     try {
+      hasSlot = await _acquireSlot(
+        token,
+        () => onQueued(partPath, offset),
+      );
+      if (!hasSlot) {
+        if ((_cancelReasons[uniqueId] ?? '') == 'pause') {
+          onPaused(partPath, offset, 0);
+        } else {
+          onError('Download cancelled.');
+        }
+        return;
+      }
+      onStarted(partPath, offset);
+
       final response = await _dio.get<ResponseBody>(
         url,
         options: Options(
@@ -210,6 +273,7 @@ class ResumableDownloadService {
           ? error.message
           : 'Download failed. You can retry from the saved partial file.');
     } finally {
+      if (hasSlot) _releaseSlot();
       _active.remove(uniqueId);
       _cancelReasons.remove(uniqueId);
     }
@@ -237,4 +301,10 @@ class ResumableDownloadService {
     _cancelReasons[uniqueId] = 'cancel';
     token.cancel('cancel');
   }
+}
+
+
+class _DownloadQueueTicket {
+  final Completer<void> ready = Completer<void>();
+  bool cancelled = false;
 }

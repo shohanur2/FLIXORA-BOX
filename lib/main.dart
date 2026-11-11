@@ -28,6 +28,7 @@ import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
+import 'native/rust_playback_core.dart';
 import 'player/picture_in_picture_service.dart';
 
 SupabaseClient? supabaseClient;
@@ -450,8 +451,16 @@ class MovieCache {
       final valid = <DownloadTask>[];
       for (final task in tasks) {
         if (task.filePath != null && await File(task.filePath!).exists()) {
+          final partialSize = await File(task.filePath!).length();
           if (task.status == 'Downloading' || task.status == 'Waiting') {
             task.status = 'Paused';
+          }
+          if (task.status != 'Completed') {
+            task.bytesReceived = partialSize;
+            if (task.totalBytes > 0) {
+              task.progress =
+                  (partialSize / task.totalBytes).clamp(0.0, 1.0);
+            }
           }
           valid.add(task);
         }
@@ -1030,6 +1039,7 @@ class DownloadManager {
     required int uniqueId,
     String? existingPartialPath,
     required void Function(int received, int total) onProgress,
+    required void Function(String path, int offset) onQueued,
     required void Function(String path, int offset) onStarted,
     required void Function(String path, int received, int total) onPaused,
     required Future<void> Function(String path) onComplete,
@@ -1041,6 +1051,7 @@ class DownloadManager {
         uniqueId: uniqueId,
         existingPartialPath: existingPartialPath,
         onProgress: onProgress,
+        onQueued: onQueued,
         onStarted: onStarted,
         onPaused: onPaused,
         onComplete: onComplete,
@@ -1917,11 +1928,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (mounted && !_online) setState(() => _online = true);
 
     final existing = _downloads.where((item) => item.movieId == movie.id).toList();
+    if (existing.any((item) => item.status == 'Completed')) {
+      _showMessage('This movie is already downloaded.');
+      return;
+    }
+    final resumable = existing.where((item) =>
+        item.status == 'Paused' || item.status == 'Failed').toList();
+    if (resumable.isNotEmpty) {
+      await _pauseResumeDownload(resumable.first);
+      return;
+    }
     if (existing.any((item) =>
-        item.status == 'Downloading' || item.status == 'Completed')) {
-      _showMessage(existing.any((item) => item.status == 'Completed')
-          ? 'This movie is already downloaded.'
-          : 'This movie is already downloading.');
+        item.status == 'Downloading' || item.status == 'Waiting')) {
+      _showMessage('This movie is already in the download queue.');
       return;
     }
 
@@ -2074,6 +2093,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       fileName: '${task.title}_${task.quality}',
       uniqueId: downloadId,
       existingPartialPath: resume ? task.filePath : null,
+      onQueued: (path, offset) {
+        if (!mounted) return;
+        setState(() {
+          task
+            ..filePath = path
+            ..bytesReceived = offset
+            ..status = 'Waiting'
+            ..errorMessage = null;
+        });
+        unawaited(MovieCache.saveDownloads(_downloads));
+      },
       onStarted: (path, offset) {
         if (!mounted) return;
         setState(() {
@@ -2104,6 +2134,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..filePath = path
             ..bytesReceived = received
             ..totalBytes = total > 0 ? total : task.totalBytes
+            ..progress = task.totalBytes > 0
+                ? (received / task.totalBytes).clamp(0.0, 1.0)
+                : task.progress
             ..status = 'Paused'
             ..errorMessage = null;
         });
@@ -2140,13 +2173,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _pauseResumeDownload(DownloadTask task) async {
     final downloadId = task.downloadId > 0 ? task.downloadId : task.movieId;
-    if (task.status == 'Downloading') {
+    if (task.status == 'Downloading' || task.status == 'Waiting') {
       DownloadManager.pause(downloadId);
       return;
     }
-    if (task.status == 'Paused' ||
-        task.status == 'Failed' ||
-        task.status == 'Waiting') {
+    if (task.status == 'Paused' || task.status == 'Failed') {
       if (task.videoUrl.trim().isEmpty) {
         _showMessage('The original download URL is no longer available.');
         return;
@@ -5006,10 +5037,11 @@ class DownloadsScreen extends StatelessWidget {
                             tooltip: downloading ? 'Pause download' : 'Resume download',
                             onPressed: () => onPauseResume(task),
                             icon: Icon(
-                              downloading
+                              (downloading || task.status == 'Waiting')
                                   ? Icons.pause_circle_filled_rounded
                                   : Icons.play_circle_fill_rounded,
-                              color: downloading || paused || failed
+                              color: downloading || task.status == 'Waiting' ||
+                                      paused || failed
                                   ? goldLight
                                   : ink24,
                             ),
@@ -5526,7 +5558,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             adminVideoUrl: widget.movie.videoUrl,
           );
     _movieDetailsFuture = _loadPlayerMovieDetails();
-    _player = Player();
+    _player = Player(
+      configuration: PlayerConfiguration(
+        title: 'FLIXORA',
+        bufferSize: 48 * 1024 * 1024,
+        libass: true,
+      ),
+    );
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
@@ -6442,6 +6480,35 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  String _friendlyPlaybackError(String raw) {
+    final message = raw.toLowerCase();
+    final int code;
+    if (message.contains('401') ||
+        message.contains('403') ||
+        message.contains('forbidden')) {
+      code = 6;
+    } else if (message.contains('timeout') || message.contains('timed out')) {
+      code = 3;
+    } else if (message.contains('subtitle')) {
+      code = 7;
+    } else if (message.contains('404') || message.contains('not found')) {
+      code = 2;
+    } else if (message.contains('unsupported') ||
+        message.contains('demuxer') ||
+        message.contains('format')) {
+      code = 1;
+    } else if (message.contains('decode') || message.contains('codec')) {
+      code = 5;
+    } else if (message.contains('network') ||
+        message.contains('connection') ||
+        message.contains('broken pipe')) {
+      code = 4;
+    } else {
+      code = 0;
+    }
+    return RustPlaybackCore.playbackError(code);
+  }
+
   // Listeners are attached once. Retrying playback will not create
   // duplicate stream subscriptions.
   void _attachPlayerListeners() {
@@ -6482,7 +6549,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() => _errorMessage = value);
+      debugPrint('FLIXORA playback error: $value');
+      setState(() => _errorMessage = _friendlyPlaybackError(value));
       if (value.trim().isNotEmpty &&
           !_isOpening &&
           widget.localFilePath == null &&
