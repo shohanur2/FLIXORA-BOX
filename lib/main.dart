@@ -1832,7 +1832,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
       ]);
 
-      // Secondary catalogs now fill their sections without delaying first paint.
+      // Keep the secondary catalogue broad without launching fifteen
+      // simultaneous TMDB requests. TMDB accepts comma-separated OR language
+      // filters, so related language groups can share one request.
       final secondaryResults = await Future.wait<List<Movie>>([
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16', 'with_origin_country': 'JP',
@@ -1848,43 +1850,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_original_language': 'bn', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
+          'with_original_language': 'hi', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'en', 'with_origin_country': 'US',
           'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ta', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'te', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ml', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'kn', 'with_origin_country': 'IN',
+          'with_original_language': 'ta,te,ml,kn',
+          'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
         TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ja', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'zh', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'th', 'sort_by': 'popularity.desc',
-        }, pages: 1).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'sort_by': 'popularity.desc',
+          'with_original_language': 'ja,zh,th', 'sort_by': 'popularity.desc',
         }, pages: 1).catchError((_) => <Movie>[]),
       ]);
 
@@ -1895,24 +1876,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (secondaryResults[2].isNotEmpty) bengaliMovies = secondaryResults[2];
         if (secondaryResults[3].isNotEmpty) bengaliTv = secondaryResults[3];
 
-        final refreshedBollywood = [...secondaryResults[4], ...secondaryResults[14]];
-        if (refreshedBollywood.isNotEmpty) {
-          bollywoodMovies = _deduplicateMovies(refreshedBollywood);
+        if (secondaryResults[4].isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies(secondaryResults[4]);
         }
         if (secondaryResults[5].isNotEmpty) hollywoodMovies = secondaryResults[5];
 
-        final refreshedSouthIndian = [
-          ...secondaryResults[6], ...secondaryResults[7],
-          ...secondaryResults[8], ...secondaryResults[9],
-        ];
+        final refreshedSouthIndian = secondaryResults[6]
+            .where((movie) => const {'ta', 'te', 'ml', 'kn'}
+                .contains(movie.originalLanguage.toLowerCase()))
+            .toList();
         if (refreshedSouthIndian.isNotEmpty) {
           southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
         }
 
-        if (secondaryResults[10].isNotEmpty) indianDramaTv = secondaryResults[10];
+        if (secondaryResults[7].isNotEmpty) indianDramaTv = secondaryResults[7];
         final refreshedKoreanDrama = [
-          ...secondaryResults[1], ...secondaryResults[11],
-          ...secondaryResults[12], ...secondaryResults[13],
+          ...secondaryResults[1], ...secondaryResults[8],
         ];
         if (refreshedKoreanDrama.isNotEmpty) {
           koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
