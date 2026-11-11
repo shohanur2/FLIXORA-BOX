@@ -3192,8 +3192,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies([
             ...anime,
             ..._movieBoxSections.expand((section) => section.items)
-                .where(_isAnimeTitle),
-            ...flixoraMovies.where(_isAnimeTitle),
+                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+            ...flixoraMovies.where((title) =>
+                title.mediaType == 'tv' && _isAnimeTitle(title)),
           ]);
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
@@ -5917,8 +5918,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies([
             ...anime,
             ..._movieBoxSections.expand((section) => section.items)
-                .where(_isAnimeTitle),
-            ...flixoraMovies.where(_isAnimeTitle),
+                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+            ...flixoraMovies.where((title) =>
+                title.mediaType == 'tv' && _isAnimeTitle(title)),
           ]);
         case 'Drama': {
           return _deduplicateMovies([
