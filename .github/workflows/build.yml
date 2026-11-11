@@ -10,11 +10,13 @@ on:
       - feature/flixora-home-search-redesign
       - feature/flixora-performance-smoothness
       - feat/player-first-after-performance
+      - feature/flixora-download-manager
   pull_request:
     branches:
       - main
       - feature/play4u-tv-series-provider
       - feature/flixora-home-search-redesign
+      - feat/player-first-after-performance
 
 permissions:
   contents: read

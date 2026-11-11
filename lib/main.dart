@@ -6,8 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
-import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
@@ -17,6 +15,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'downloads/download_task.dart';
+import 'downloads/download_manager.dart';
+import 'downloads/provider_download_adapter.dart';
 import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
 import 'streaming/episode_number_mapper.dart';
@@ -524,7 +525,7 @@ class MovieCache {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         downloadsKey,
-        jsonEncode(tasks.where((task) => task.status == 'Completed' && task.filePath != null).map((task) => task.toJson()).toList()),
+        jsonEncode(tasks.take(100).map((task) => task.toJson()).toList()),
       );
     } catch (_) {}
   }
@@ -545,13 +546,50 @@ class MovieCache {
           .toList();
       final valid = <DownloadTask>[];
       for (final task in tasks) {
-        if (task.status == 'Completed' &&
-            task.filePath != null &&
-            await File(task.filePath!).exists()) {
-          valid.add(task);
+        if (task.status == 'Completed') {
+          final path = task.filePath;
+          if (path != null && await File(path).exists()) {
+            valid.add(task);
+          }
+          continue;
         }
+
+        final partialPath = task.partialPath;
+        final hasPartialFile = partialPath != null &&
+            await File(partialPath).exists();
+        final hasPartialDirectory = partialPath != null &&
+            await Directory(partialPath).exists();
+        if (hasPartialDirectory) {
+          task.bytesReceived = await DownloadManager.getTaskStorageBytes(task);
+          if (task.totalSegments > 0) {
+            task.progress = (task.completedSegments / task.totalSegments)
+                .clamp(0.0, 1.0)
+                .toDouble();
+          }
+          if (task.status == 'Downloading' || task.status == 'Waiting') {
+            task.status = 'Paused';
+          }
+        } else if (hasPartialFile) {
+          task.bytesReceived = await File(partialPath!).length();
+          if (task.totalBytes > 0) {
+            task.progress =
+                (task.bytesReceived / task.totalBytes).clamp(0.0, 1.0).toDouble();
+          }
+          if (task.status == 'Downloading' || task.status == 'Waiting') {
+            task.status = 'Paused';
+          }
+        } else if (task.status == 'Downloading' ||
+            task.status == 'Waiting' ||
+            task.status == 'Paused') {
+          task
+            ..status = 'Failed'
+            ..errorMessage =
+                'The partial file is missing. Start this download again.';
+        }
+        valid.add(task);
       }
-      // Remove stale records whose local video file no longer exists.
+
+      // Interrupted downloads are restored as Paused and can be resumed.
       await prefs.setString(
         downloadsKey,
         jsonEncode(valid.map((task) => task.toJson()).toList()),
@@ -936,6 +974,7 @@ class FlixoraMovieService {
   ) async {
     final client = supabaseClient;
     final options = <Map<String, String>>[];
+    final seenUrls = <String>{};
 
     if (client != null && movie.sourceId > 0) {
       try {
@@ -943,26 +982,46 @@ class FlixoraMovieService {
             .from('movie_video_qualities')
             .select('quality, video_url')
             .eq('movie_id', movie.sourceId);
-        for (final item in (rows as List).whereType<Map>()) {
-          final quality = (item['quality'] ?? '').toString().trim();
-          final url = (item['video_url'] ?? '').toString().trim();
-          if (quality.isEmpty || !_isHttpUrl(url)) continue;
-          final path = Uri.parse(url).path.toLowerCase();
-          if (path.endsWith('.m3u8') || path.endsWith('.mpd')) continue;
-          options.add({'quality': quality, 'video_url': url});
-        }
+        final candidates = (rows as List)
+            .whereType<Map>()
+            .map((item) => {
+                  'quality': (item['quality'] ?? '').toString().trim(),
+                  'video_url': (item['video_url'] ?? '').toString().trim(),
+                })
+            .where((item) =>
+                item['quality']!.isNotEmpty &&
+                item['video_url']!.isNotEmpty)
+            .toList();
+
+        final inspected = await Future.wait<List<Map<String, String>>>(
+          candidates.map((item) async {
+            final url = item['video_url']!;
+            if (!seenUrls.add(url)) return const <Map<String, String>>[];
+            return DownloadManager.inspectDownloadSources(
+              url,
+              qualityLabel: item['quality'],
+            );
+          }),
+        );
+        options.addAll(inspected.expand((items) => items));
       } catch (e) {
-        debugPrint('Could not load download quality sources: $e');
+        debugPrint('Could not load Admin download qualities: $e');
       }
     }
 
-    if (options.isEmpty && _isHttpUrl(movie.downloadUrl)) {
-      final path = Uri.parse(movie.downloadUrl).path.toLowerCase();
-      if (!path.endsWith('.m3u8') && !path.endsWith('.mpd')) {
-        options.add({
-          'quality': 'Original',
-          'video_url': movie.downloadUrl.trim(),
-        });
+    if (options.isEmpty) {
+      final fallbacks = <Map<String, String>>[
+        {'quality': 'Download', 'video_url': movie.downloadUrl.trim()},
+        {'quality': 'Original', 'video_url': movie.videoUrl.trim()},
+      ];
+      for (final item in fallbacks) {
+        final url = item['video_url']!;
+        if (url.isEmpty || !seenUrls.add(url)) continue;
+        final inspected = await DownloadManager.inspectDownloadSources(
+          url,
+          qualityLabel: item['quality'],
+        );
+        options.addAll(inspected);
       }
     }
 
@@ -970,6 +1029,47 @@ class FlixoraMovieService {
       options,
       (item) => item['quality'] ?? 'Original',
     );
+  }
+
+  /// Episode sources are stored separately from title-level video qualities.
+  /// This optional query stays harmless until the Admin episode-source editor
+  /// and its additive Supabase migration are enabled.
+  static Future<List<Map<String, String>>> getEpisodeDownloadQualities(
+    Movie movie,
+    int seasonNumber,
+    int episodeNumber,
+  ) async {
+    final client = supabaseClient;
+    if (client == null || movie.sourceId <= 0) return const [];
+    try {
+      final rows = await client
+          .from('movie_episode_video_qualities')
+          .select('quality, video_url')
+          .eq('movie_id', movie.sourceId)
+          .eq('season_number', seasonNumber)
+          .eq('episode_number', episodeNumber);
+      final candidates = (rows as List)
+          .whereType<Map>()
+          .map((item) => {
+                'quality': (item['quality'] ?? 'Original').toString().trim(),
+                'video_url': (item['video_url'] ?? '').toString().trim(),
+              })
+          .where((item) => item['video_url']!.isNotEmpty)
+          .toList();
+      final inspected = await Future.wait<List<Map<String, String>>>(
+        candidates.map((item) => DownloadManager.inspectDownloadSources(
+          item['video_url']!,
+          qualityLabel: item['quality'],
+        )),
+      );
+      return VideoQualityService.sort(
+        inspected.expand((items) => items).toList(),
+        (item) => item['quality'] ?? 'Original',
+      );
+    } catch (error) {
+      debugPrint('Episode-specific download sources are not configured: $error');
+      return const [];
+    }
   }
 
   static Future<List<Movie>> getPublishedMovies() async {
@@ -1018,170 +1118,6 @@ class FlixoraMovieService {
   }
 }
 
-class DownloadTask {
-  final int movieId;
-  final String title;
-  final String poster;
-  final String videoUrl;
-  final String quality;
-  double progress;
-  int bytesReceived;
-  int totalBytes;
-  String status;
-  String? filePath;
-  String? errorMessage;
-
-  DownloadTask({
-    required this.movieId,
-    required this.title,
-    required this.poster,
-    this.videoUrl = '',
-    this.quality = 'Original',
-    this.progress = 0,
-    this.bytesReceived = 0,
-    this.totalBytes = 0,
-    this.status = 'Waiting',
-    this.filePath,
-    this.errorMessage,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'movieId': movieId,
-        'title': title,
-        'poster': poster,
-        'videoUrl': videoUrl,
-        'quality': quality,
-        'progress': progress,
-        'bytesReceived': bytesReceived,
-        'totalBytes': totalBytes,
-        'status': status,
-        'filePath': filePath,
-        'errorMessage': errorMessage,
-      };
-
-  factory DownloadTask.fromJson(Map<String, dynamic> json) => DownloadTask(
-        movieId: _toInt(json['movieId']),
-        title: (json['title'] ?? 'Downloaded Movie').toString(),
-        poster: (json['poster'] ?? '').toString(),
-        videoUrl: (json['videoUrl'] ?? '').toString(),
-        quality: (json['quality'] ?? 'Original').toString(),
-        progress: (json['progress'] as num?)?.toDouble() ?? 1,
-        bytesReceived: _toInt(json['bytesReceived']),
-        totalBytes: _toInt(json['totalBytes']),
-        status: (json['status'] ?? 'Completed').toString(),
-        filePath: json['filePath']?.toString(),
-        errorMessage: json['errorMessage']?.toString(),
-      );
-}
-
-class DownloadManager {
-  static final Dio _dio = Dio();
-
-  static String formatBytes(int bytes) {
-    if (bytes <= 0) return 'Size unavailable';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    var size = bytes.toDouble();
-    var unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size /= 1024;
-      unit++;
-    }
-    return '${size.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
-  }
-
-  static Future<int?> getRemoteFileSize(String url) async {
-    try {
-      final response = await _dio.head(
-        url,
-        options: Options(headers: {'Accept-Encoding': 'identity'}),
-      ).timeout(const Duration(seconds: 10));
-      final length = int.tryParse(
-        response.headers.value('content-length') ?? '',
-      );
-      if (length != null && length > 0) return length;
-    } catch (_) {
-      // Some file hosts block HEAD requests; try a one-byte range request.
-    }
-
-    final token = CancelToken();
-    try {
-      final response = await _dio.get<ResponseBody>(
-        url,
-        options: Options(
-          responseType: ResponseType.stream,
-          headers: {
-            'Range': 'bytes=0-0',
-            'Accept-Encoding': 'identity',
-          },
-        ),
-        cancelToken: token,
-      ).timeout(const Duration(seconds: 10));
-      final contentRange = response.headers.value('content-range') ?? '';
-      final totalMatch = RegExp(r'/([0-9]+)$').firstMatch(contentRange);
-      final total = int.tryParse(totalMatch?.group(1) ?? '');
-      if (total != null && total > 0) return total;
-      final length = int.tryParse(
-        response.headers.value('content-length') ?? '',
-      );
-      if (response.statusCode == 200 && length != null && length > 0) {
-        return length;
-      }
-    } catch (_) {
-      // The size is unavailable when the host hides its content length.
-    } finally {
-      token.cancel('File size check complete');
-    }
-    return null;
-  }
-
-  static Future<void> download({
-    required String url,
-    required String fileName,
-    required int uniqueId,
-    required void Function(int received, int total) onProgress,
-    required Future<void> Function(String path) onComplete,
-    required void Function(String message) onError,
-  }) async {
-    try {
-      final uri = Uri.tryParse(url);
-      if (uri == null ||
-          (uri.scheme != 'https' && uri.scheme != 'http') ||
-          uri.host.isEmpty) {
-        onError('Invalid download URL.');
-        return;
-      }
-
-      final directory = await getApplicationDocumentsDirectory();
-      final safeName = fileName.replaceAll(
-        RegExp(r'[^a-zA-Z0-9_-]'),
-        '_',
-      );
-      final extensionMatch = RegExp(
-        r'\.(mp4|mkv|webm|mov|avi|m4v)$',
-        caseSensitive: false,
-      ).firstMatch(uri.path);
-      final extension = extensionMatch?.group(0) ?? '.mp4';
-      final path = '${directory.path}/${safeName}_$uniqueId$extension';
-
-      await _dio.download(
-        url,
-        path,
-        onReceiveProgress: (received, total) {
-          onProgress(received, total);
-        },
-      );
-      await onComplete(path);
-    } on DioException catch (e) {
-      onError(
-        e.type == DioExceptionType.cancel
-            ? 'Download cancelled'
-            : 'Download failed. Please try again.',
-      );
-    } catch (_) {
-      onError('Download failed. Please try again.');
-    }
-  }
-}
 class FlixoraApp extends StatelessWidget {
   const FlixoraApp({super.key});
 
@@ -1308,11 +1244,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final Set<int> _saved = {};
   final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
+  DateTime _lastDownloadPersistAt = DateTime.fromMillisecondsSinceEpoch(0);
   String? _profileSection;
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
-  bool _downloadInBackground = false;
   bool _autoMiniPlayer = true;
   String _appLanguage = 'English';
   String _preferredQuality = 'Auto';
@@ -1533,7 +1469,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _notificationsEnabled = prefs.getBool('flixora_notifications') ?? true;
         _familyMode = prefs.getBool('flixora_family_mode') ?? false;
-        _downloadInBackground = prefs.getBool('flixora_download_background') ?? false;
         _autoMiniPlayer = prefs.getBool('flixora_auto_miniplayer') ?? true;
         _appLanguage = prefs.getString('flixora_language') ?? 'English';
         _preferredQuality = prefs.getString('flixora_preferred_quality') ?? 'Auto';
@@ -2192,12 +2127,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (mounted && !_online) setState(() => _online = true);
 
-    final existing = _downloads.where((item) => item.movieId == movie.id).toList();
+    final existing = _downloads.where((item) => item.movieId == movie.id);
     if (existing.any((item) =>
-        item.status == 'Downloading' || item.status == 'Completed')) {
-      _showMessage(existing.any((item) => item.status == 'Completed')
-          ? 'This movie is already downloaded.'
-          : 'This movie is already downloading.');
+        item.status == 'Downloading' ||
+        item.status == 'Waiting' ||
+        item.status == 'Paused' ||
+        item.status == 'Completed')) {
+      final completed = _downloads.any((item) =>
+          item.movieId == movie.id && item.status == 'Completed');
+      _showMessage(completed
+          ? 'This video is already downloaded.'
+          : 'This video is already in the download list.');
       return;
     }
 
@@ -2205,21 +2145,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     if (rawOptions.isEmpty) {
       _showMessage(
-        'Download source is not available for this movie. Ask Admin to add a direct video file.',
+        'No downloadable source is available. Add a direct video file or a clear HLS/DASH VOD manifest in Admin. Embed-only provider pages cannot be saved.',
       );
       return;
     }
 
-    final options = await Future.wait(rawOptions.map((item) async {
-      final size = await DownloadManager.getRemoteFileSize(item['video_url']!);
+    final options = rawOptions.map((item) {
+      final size = int.tryParse(item['size_bytes'] ?? '') ?? 0;
       return <String, String>{
         ...item,
-        'size_bytes': size?.toString() ?? '',
-        'size_label': size == null
-            ? 'File size unavailable'
-            : DownloadManager.formatBytes(size),
+        'size_label': size > 0
+            ? DownloadManager.formatBytes(size)
+            : 'File size unavailable',
       };
-    }));
+    }).toList();
 
     if (!mounted) return;
     final selected = await showModalBottomSheet<Map<String, String>>(
@@ -2321,36 +2260,207 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final expectedBytes = int.tryParse(selected['size_bytes'] ?? '') ?? 0;
-    final quality = selected['quality'] ?? 'Original';
     final task = DownloadTask(
       movieId: movie.id,
+      tmdbId: movie.tmdbId,
       title: movie.title,
       poster: movie.posterUrl,
       videoUrl: selectedUrl,
-      quality: quality,
+      quality: selected['quality'] ?? 'Original',
+      mediaType: movie.mediaType,
+      downloadType: selected['download_type'] ?? 'direct',
+      audioUrl: selected['audio_url'],
+      audioName: selected['audio_name'],
+      manifestBandwidth: int.tryParse(selected['manifest_bandwidth'] ?? '') ?? 0,
+      manifestResolution: selected['manifest_resolution'],
       totalBytes: expectedBytes,
-      status: 'Downloading',
+      status: 'Waiting',
     );
 
     setState(() => _downloads.insert(0, task));
+    await MovieCache.saveDownloads(_downloads);
+    _startDownloadTask(task);
+  }
 
-    await DownloadManager.download(
-      url: selectedUrl,
-      fileName: '${movie.title}_$quality',
-      uniqueId: DateTime.now().millisecondsSinceEpoch,
+  Future<void> addDownloadEpisode(
+    Movie movie,
+    int seasonNumber,
+    int episodeNumber,
+    String episodeTitle, {
+    ProviderEmbedSource? providerSource,
+  }) async {
+    InternetService.invalidate();
+    final hasInternet = await InternetService.isOnline();
+    if (!hasInternet) {
+      if (mounted) {
+        setState(() {
+          _online = false;
+          _connectionKnown = true;
+        });
+        _showMessage('Check your internet connection');
+      }
+      return;
+    }
+    if (mounted && !_online) setState(() => _online = true);
+
+    final alreadyAdded = _downloads.any((task) =>
+        task.movieId == movie.id &&
+        task.seasonNumber == seasonNumber &&
+        task.episodeNumber == episodeNumber &&
+        (task.status == 'Downloading' ||
+            task.status == 'Waiting' ||
+            task.status == 'Paused' ||
+            task.status == 'Completed'));
+    if (alreadyAdded) {
+      _showMessage('This episode is already in your Downloads.');
+      return;
+    }
+
+    var rawOptions = await FlixoraMovieService.getEpisodeDownloadQualities(
+      movie,
+      seasonNumber,
+      episodeNumber,
+    );
+    if (rawOptions.isEmpty) {
+      rawOptions = await ProviderDownloadAdapter.inspectDirectSource(providerSource);
+    }
+    if (!mounted) return;
+    if (rawOptions.isEmpty) {
+      _showMessage(ProviderDownloadAdapter.unavailableReason(providerSource?.id) ??
+          'No official downloadable source is available for this episode.');
+      return;
+    }
+
+    final options = rawOptions.map((item) {
+      final size = int.tryParse(item['size_bytes'] ?? '') ?? 0;
+      return <String, String>{
+        ...item,
+        'size_label': size > 0
+            ? DownloadManager.formatBytes(size)
+            : 'File size unavailable',
+      };
+    }).toList();
+
+    final selected = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(sheetContext).size.height * 0.72,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Choose Episode Download Quality',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '${movie.title} · S${seasonNumber.toString().padLeft(2, '0')} E${episodeNumber.toString().padLeft(2, '0')}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: ink70, fontSize: 12),
+                ),
+                const SizedBox(height: 14),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = options[index];
+                      return ListTile(
+                        tileColor: bg,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: const BorderSide(color: ink12),
+                        ),
+                        leading: const Icon(
+                          Icons.download_for_offline_rounded,
+                          color: goldLight,
+                        ),
+                        title: Text(
+                          item['quality'] ?? 'Original',
+                          style: const TextStyle(
+                            color: white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'File size: ${item['size_label']}',
+                          style: const TextStyle(color: ink70, fontSize: 11),
+                        ),
+                        onTap: () => Navigator.pop(sheetContext, item),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || selected == null) return;
+
+    final url = selected['video_url'] ?? '';
+    if (url.isEmpty) {
+      _showMessage('This episode download source is invalid.');
+      return;
+    }
+    final task = DownloadTask(
+      movieId: movie.id,
+      tmdbId: movie.tmdbId,
+      title: movie.title,
+      poster: movie.posterUrl,
+      videoUrl: url,
+      quality: selected['quality'] ?? 'Original',
+      mediaType: movie.mediaType,
+      downloadType: selected['download_type'] ?? 'direct',
+      audioUrl: selected['audio_url'],
+      audioName: selected['audio_name'],
+      manifestBandwidth: int.tryParse(selected['manifest_bandwidth'] ?? '') ?? 0,
+      manifestResolution: selected['manifest_resolution'],
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      episodeTitle: episodeTitle,
+      totalBytes: int.tryParse(selected['size_bytes'] ?? '') ?? 0,
+      status: 'Waiting',
+    );
+    setState(() => _downloads.insert(0, task));
+    await MovieCache.saveDownloads(_downloads);
+    _startDownloadTask(task);
+  }
+
+  void _startDownloadTask(DownloadTask task) {
+    unawaited(DownloadManager.download(
+      task: task,
       onProgress: (received, total) {
         if (!mounted) return;
-        setState(() {
-          task.bytesReceived = received;
-          if (total > 0) task.totalBytes = total;
-          if (task.totalBytes > 0) {
-            task.progress = (received / task.totalBytes).clamp(0.0, 1.0);
-          }
-        });
+        setState(() {});
+        final now = DateTime.now();
+        if (now.difference(_lastDownloadPersistAt) >=
+            const Duration(seconds: 2)) {
+          _lastDownloadPersistAt = now;
+          unawaited(MovieCache.saveDownloads(_downloads));
+        }
       },
       onComplete: (path) async {
-        final fileSize = await File(path).length();
         if (!mounted) return;
+        final fileSize = await DownloadManager.getTaskStorageBytes(task);
         setState(() {
           task
             ..progress = 1
@@ -2358,10 +2468,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..totalBytes = fileSize
             ..status = 'Completed'
             ..filePath = path
+            ..partialPath = null
             ..errorMessage = null;
         });
         await MovieCache.saveDownloads(_downloads);
-        _showMessage('Successfully downloaded ${movie.title}.');
+        _showMessage('Successfully downloaded ${task.displayTitle}.');
       },
       onError: (message) {
         if (!mounted) return;
@@ -2370,9 +2481,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..status = 'Failed'
             ..errorMessage = message;
         });
+        unawaited(MovieCache.saveDownloads(_downloads));
         _showMessage(message);
       },
-    );
+      onStateChanged: () {
+        if (!mounted) return;
+        setState(() {});
+        unawaited(MovieCache.saveDownloads(_downloads));
+      },
+    ));
+  }
+
+  void _pauseDownload(DownloadTask task) {
+    DownloadManager.pause(task);
+  }
+
+  void _resumeDownload(DownloadTask task) {
+    if (task.status != 'Paused' && task.status != 'Failed') return;
+    setState(() {
+      task
+        ..status = 'Waiting'
+        ..errorMessage = null;
+    });
+    unawaited(MovieCache.saveDownloads(_downloads));
+    _startDownloadTask(task);
+  }
+
+  Future<void> _cancelDownload(DownloadTask task) async {
+    await DownloadManager.cancel(task);
+    if (!mounted) return;
+    setState(() {});
+    await MovieCache.saveDownloads(_downloads);
   }
 
   Future<void> _deleteDownload(DownloadTask task) async {
@@ -2381,23 +2520,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: panel,
         title: const Text('Delete Download?', style: TextStyle(color: white)),
-        content: const Text('Are you sure you want to delete this movie?', style: TextStyle(color: ink70)),
+        content: const Text(
+          'Remove this video and its saved file from this device?',
+          style: TextStyle(color: ink70),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Delete', style: TextStyle(color: Colors.redAccent))),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
         ],
       ),
     );
     if (confirmed != true) return;
-    if (task.filePath != null) {
-      try {
-        final file = File(task.filePath!);
-        if (await file.exists()) await file.delete();
-      } catch (_) {
-        _showMessage('Could not delete downloaded file.');
-        return;
-      }
+    if (task.status == 'Downloading') {
+      _showMessage('Pause or cancel the download before deleting it.');
+      return;
     }
+    await DownloadManager.deleteTaskFiles(task);
     if (!mounted) return;
     setState(() => _downloads.remove(task));
     await MovieCache.saveDownloads(_downloads);
@@ -2762,6 +2909,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
+        onDownloadEpisode: (season, episode, title, providerSource) =>
+            addDownloadEpisode(
+          selectedMovie,
+          season,
+          episode,
+          title,
+          providerSource: providerSource,
+        ),
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
@@ -4235,10 +4390,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       tasks: _downloads,
       isOnline: _online,
       onDelete: _deleteDownload,
+      onPause: _pauseDownload,
+      onResume: _resumeDownload,
+      onCancel: _cancelDownload,
       onPlay: (task) {
         if (task.filePath == null) return;
         final movie = Movie(
           id: task.movieId,
+          tmdbId: task.tmdbId,
           title: task.title,
           year: 'N/A',
           overview: '',
@@ -4247,18 +4406,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           rating: 0,
           releaseDate: '',
           videoUrl: task.filePath!,
+          mediaType: task.mediaType,
         );
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(
-            movie: movie,
-            localFilePath: task.filePath,
-            recommendedMovies: _allMovies(),
-            onMovieSelected: _playMovieFromPlayer,
-            isOnline: _online,
-          )));
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MoviePlayerScreen(
+              movie: movie,
+              localFilePath: task.filePath,
+              recommendedMovies: _allMovies(),
+              onMovieSelected: _playMovieFromPlayer,
+              isOnline: _online,
+            ),
+          ),
+        );
       },
     );
   }
-
 
   Future<void> _loadOttProviders() async {
     if (apiKey.isEmpty || !_online) return;
@@ -5100,7 +5264,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.language, 'Language', _showLanguagePicker, trailingText: _appLanguage),
           _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
           _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
-          _settingSwitch(title: 'Download in background', subtitle: 'Keep download tasks active while you use other screens.', value: _downloadInBackground, onChanged: (v) => _saveBoolSetting('flixora_download_background', v, (x) => _downloadInBackground = x)),
+          _profileTile(Icons.download_for_offline_outlined, 'Download behavior', () => _showSettingsInfo('Download behavior', 'Downloads continue while you browse FLIXORA. If Android closes the app, incomplete downloads can be resumed from Downloads after reopening.')),
           _settingSwitch(title: 'Auto activate Miniplayer', subtitle: 'Miniplayer behavior will be connected when the player feature is extended.', value: _autoMiniPlayer, onChanged: (v) => _saveBoolSetting('flixora_auto_miniplayer', v, (x) => _autoMiniPlayer = x)),
           _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
         ]),
@@ -6135,6 +6299,9 @@ class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> tasks;
   final bool isOnline;
   final Future<void> Function(DownloadTask) onDelete;
+  final ValueChanged<DownloadTask> onPause;
+  final ValueChanged<DownloadTask> onResume;
+  final ValueChanged<DownloadTask> onCancel;
   final ValueChanged<DownloadTask> onPlay;
 
   const DownloadsScreen({
@@ -6142,11 +6309,21 @@ class DownloadsScreen extends StatelessWidget {
     required this.tasks,
     required this.isOnline,
     required this.onDelete,
+    required this.onPause,
+    required this.onResume,
+    required this.onCancel,
     required this.onPlay,
   });
 
   @override
   Widget build(BuildContext context) {
+    final completedTasks =
+        tasks.where((task) => task.status == 'Completed').toList();
+    final storageUsed = completedTasks.fold<int>(
+      0,
+      (total, task) => total + task.bytesReceived,
+    );
+
     if (tasks.isEmpty) {
       return Center(
         child: Padding(
@@ -6166,7 +6343,7 @@ class DownloadsScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Your saved videos will appear here.',
+                'Your downloaded movies and episodes will appear here.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: ink70,
@@ -6183,15 +6360,31 @@ class DownloadsScreen extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-          child: Text(
-            'Saved Videos',
-            style: TextStyle(
-              color: white,
-              fontSize: 19,
-              fontWeight: FontWeight.w800,
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Downloads',
+                  style: TextStyle(
+                    color: white,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Text(
+                completedTasks.length.toString() +
+                    ' saved • ' +
+                    DownloadManager.formatBytes(storageUsed),
+                style: const TextStyle(
+                  color: ink70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
         ),
         Expanded(
@@ -6203,12 +6396,36 @@ class DownloadsScreen extends StatelessWidget {
               final task = tasks[index];
               final completed = task.status == 'Completed';
               final failed = task.status == 'Failed';
+              final paused = task.status == 'Paused';
+              final cancelled = task.status == 'Cancelled';
+              final downloading = task.status == 'Downloading';
               final statusColor = completed
                   ? const Color(0xFF39E69B)
-                  : failed
+                  : failed || cancelled
                       ? Colors.redAccent
                       : goldLight;
               final percent = (task.progress * 100).round().clamp(0, 100);
+              final manifestTypeLabel = task.downloadType == 'hls'
+                  ? 'HLS'
+                  : task.downloadType == 'dash'
+                      ? 'DASH'
+                      : 'File';
+              final downloadSizeLabel = task.totalBytes > 0
+                  ? DownloadManager.formatBytes(task.totalBytes)
+                  : task.totalSegments > 0
+                      ? '$manifestTypeLabel · ${task.totalSegments} segments'
+                      : 'Size unavailable';
+              final statusLabel = completed
+                  ? 'Downloaded • Ready offline'
+                  : paused
+                      ? 'Paused • Resume anytime'
+                      : failed
+                          ? (task.errorMessage ?? 'Download failed')
+                          : cancelled
+                              ? 'Cancelled'
+                              : downloading
+                                  ? 'Downloading'
+                                  : 'Waiting';
 
               return Container(
                 padding: const EdgeInsets.all(12),
@@ -6257,7 +6474,7 @@ class DownloadsScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            task.title,
+                            task.displayTitle,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -6268,7 +6485,7 @@ class DownloadsScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '${VideoQualityService.displayName(task.quality)}  •  ${task.totalBytes > 0 ? DownloadManager.formatBytes(task.totalBytes) : 'Size unavailable'}',
+                            '${VideoQualityService.displayName(task.quality)}  •  $downloadSizeLabel',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -6279,12 +6496,8 @@ class DownloadsScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 7),
                           Text(
-                            completed
-                                ? 'Successfully Downloaded'
-                                : failed
-                                    ? (task.errorMessage ?? 'Download failed')
-                                    : 'Downloading',
-                            maxLines: 1,
+                            statusLabel,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: statusColor,
@@ -6299,7 +6512,7 @@ class DownloadsScreen extends StatelessWidget {
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(5),
                                   child: LinearProgressIndicator(
-                                    value: task.totalBytes > 0
+                                    value: task.totalSegments > 0 || task.totalBytes > 0
                                         ? task.progress
                                         : (completed ? 1 : null),
                                     minHeight: 6,
@@ -6312,9 +6525,11 @@ class DownloadsScreen extends StatelessWidget {
                               Text(
                                 completed
                                     ? '100%'
-                                    : task.totalBytes > 0
-                                        ? '$percent%'
-                                        : DownloadManager.formatBytes(task.bytesReceived),
+                                    : task.totalSegments > 0
+                                        ? '$percent% · ${task.completedSegments}/${task.totalSegments}'
+                                        : task.totalBytes > 0
+                                            ? '$percent%'
+                                            : DownloadManager.formatBytes(task.bytesReceived),
                                 style: TextStyle(
                                   color: statusColor,
                                   fontSize: 12,
@@ -6323,7 +6538,7 @@ class DownloadsScreen extends StatelessWidget {
                               ),
                             ],
                           ),
-                          if (!completed && task.bytesReceived > 0) ...[
+                          if (task.bytesReceived > 0) ...[
                             const SizedBox(height: 4),
                             Text(
                               'Downloaded: ${DownloadManager.formatBytes(task.bytesReceived)}',
@@ -6341,26 +6556,62 @@ class DownloadsScreen extends StatelessWidget {
                     Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          tooltip: 'Play downloaded movie',
-                          onPressed: completed && task.filePath != null
-                              ? () => onPlay(task)
-                              : null,
-                          icon: Icon(
-                            Icons.play_circle_fill,
-                            color: completed ? const Color(0xFF39E69B) : ink24,
+                        if (completed)
+                          IconButton(
+                            tooltip: 'Play downloaded video',
+                            onPressed: task.filePath != null
+                                ? () => onPlay(task)
+                                : null,
+                            icon: const Icon(
+                              Icons.play_circle_fill,
+                              color: Color(0xFF39E69B),
+                            ),
+                          )
+                        else if (downloading)
+                          IconButton(
+                            tooltip: 'Pause download',
+                            onPressed: () => onPause(task),
+                            icon: const Icon(
+                              Icons.pause_circle_outline,
+                              color: goldLight,
+                            ),
+                          )
+                        else if (paused || failed)
+                          IconButton(
+                            tooltip: 'Resume download',
+                            onPressed: () => onResume(task),
+                            icon: const Icon(
+                              Icons.play_circle_outline,
+                              color: goldLight,
+                            ),
+                          )
+                        else
+                          IconButton(
+                            tooltip: 'Cancel download',
+                            onPressed: () => onCancel(task),
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              color: Colors.redAccent,
+                            ),
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Delete download',
-                          onPressed: completed || failed
-                              ? () => onDelete(task)
-                              : null,
-                          icon: const Icon(
-                            Icons.delete_outline,
-                            color: Colors.redAccent,
+                        if (completed || failed || paused || cancelled)
+                          IconButton(
+                            tooltip: 'Delete download',
+                            onPressed: () => onDelete(task),
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.redAccent,
+                            ),
+                          )
+                        else if (downloading)
+                          IconButton(
+                            tooltip: 'Cancel download',
+                            onPressed: () => onCancel(task),
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              color: Colors.redAccent,
+                            ),
                           ),
-                        ),
                       ],
                     ),
                   ],
@@ -6671,21 +6922,20 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  if (movie.downloadUrl.trim().isNotEmpty)
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: onDownload,
-                        icon: const Icon(
-                          Icons.download,
-                          color: gold,
-                        ),
-                        label: const Text(
-                          'Download Movie',
-                          style: TextStyle(color: white),
-                        ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: onDownload,
+                      icon: const Icon(
+                        Icons.download,
+                        color: gold,
+                      ),
+                      label: const Text(
+                        'Download',
+                        style: TextStyle(color: white),
                       ),
                     ),
+                  ),
                 ],
               ),
             ),
@@ -6703,6 +6953,12 @@ class MoviePlayerScreen extends StatefulWidget {
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
   final VoidCallback? onDownload;
+  final Future<void> Function(
+    int seasonNumber,
+    int episodeNumber,
+    String episodeTitle,
+    ProviderEmbedSource? providerSource,
+  )? onDownloadEpisode;
   final VoidCallback? onViewDownloads;
   final bool isOnline;
 
@@ -6714,6 +6970,7 @@ class MoviePlayerScreen extends StatefulWidget {
     this.onMovieSelected,
     this.onSave,
     this.onDownload,
+    this.onDownloadEpisode,
     this.onViewDownloads,
     this.isOnline = true,
   });
@@ -7430,6 +7687,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               style: const TextStyle(
                 color: Color(0x99FFFFFF),
                 fontSize: 10,
+              ),
+            ),
+          ],
+          if (widget.onDownloadEpisode != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _loadingTvEpisodes
+                    ? null
+                    : () => widget.onDownloadEpisode?.call(
+                          safeSeason,
+                          safeEpisode,
+                          selectedEpisodeName,
+                          _selectedProviderSource,
+                        ),
+                icon: const Icon(
+                  Icons.download_for_offline_rounded,
+                  color: playerGoldLight,
+                  size: 18,
+                ),
+                label: const Text(
+                  'Download Episode',
+                  style: TextStyle(
+                    color: playerWhite,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ),
           ],
