@@ -4415,21 +4415,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _libraryContent() {
-    const sections = ['Downloads', 'My List', 'Favourites', 'History'];
+    const sections = ['My List', 'Favourites', 'History'];
     Widget content;
     switch (_librarySection) {
-      case 'My List':
-        content = _collectionContent('My List', _moviesForIds(_saved));
-        break;
       case 'Favourites':
         content = _collectionContent('Favourites', _moviesForIds(_favourites));
         break;
       case 'History':
         content = _watchHistoryPage();
         break;
-      case 'Downloads':
+      case 'My List':
       default:
-        content = _downloadsContent();
+        content = _collectionContent('My List', _moviesForIds(_saved));
         break;
     }
 
@@ -5219,7 +5216,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final selected = _tab == index;
     return Expanded(
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        splashColor: gold.withValues(alpha: 0.12),
+        highlightColor: gold.withValues(alpha: 0.05),
         onTap: () {
+          _searchTimer?.cancel();
           FocusScope.of(context).unfocus();
           setState(() {
             _search = '';
@@ -5227,20 +5228,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _searchCategory = 'All';
             _showRanking = false;
             _searchController.clear();
+            searchResults = [];
+            _searchError = null;
             _searchLoading = false;
             _profileSection = null;
             _tab = index;
           });
         },
         child: SizedBox(
-          height: 56,
+          height: 60,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 22, color: selected ? gold : ink60),
-              const SizedBox(height: 2),
-              Text(label, style: TextStyle(color: selected ? gold : ink60, fontSize: 11, height: 1.0, fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
-            ],          ),
+              AnimatedScale(
+                scale: selected ? 1.08 : 1,
+                duration: const Duration(milliseconds: 170),
+                curve: Curves.easeOut,
+                child: Icon(
+                  selected ? activeIcon : icon,
+                  size: 23,
+                  color: selected ? gold : ink60,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? gold : ink60,
+                  fontSize: 10,
+                  height: 1,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -5346,7 +5369,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
+      extendBodyBehindAppBar: _tab == 0 && !_searchOpen && _search.isEmpty && !_showRanking,
       appBar: AppBar(
         backgroundColor: _tab == 0 && !_searchOpen && _search.isEmpty && !_showRanking
             ? Colors.transparent
