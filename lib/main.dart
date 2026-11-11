@@ -3004,6 +3004,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           PageView.builder(
             controller: _sliderController,
+            physics: const BouncingScrollPhysics(),
             itemCount: slides.length,
             onPageChanged: (index) {
               if (_slide != index && mounted) {
@@ -3086,6 +3087,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
         child: ListView.builder(
           controller: _featuredCardsController,
+          physics: const BouncingScrollPhysics(),
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(
             horizontal: FeaturedCarouselLayout.horizontalPadding,
@@ -5297,6 +5299,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onTap: _openSearch,
               onChanged: _onSearchChanged,
               onSubmitted: (value) {
+                _searchTimer?.cancel();
                 FocusScope.of(context).unfocus();
                 searchMovies(value);
               },
@@ -5347,6 +5350,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _openSearch();
               return;
             }
+            _searchTimer?.cancel();
             FocusScope.of(context).unfocus();
             _onSearchChanged(_searchController.text);
           },
@@ -5369,11 +5373,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBodyBehindAppBar: _tab == 0 && !_searchOpen && _search.isEmpty && !_showRanking,
+      extendBodyBehindAppBar: false,
       appBar: AppBar(
-        backgroundColor: _tab == 0 && !_searchOpen && _search.isEmpty && !_showRanking
-            ? Colors.transparent
-            : bg,
+        backgroundColor: bg,
         systemOverlayStyle: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
