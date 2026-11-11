@@ -3308,11 +3308,149 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title.originalLanguage.toLowerCase() == 'bn' ||
               title.originCountry.toUpperCase().contains('BD')),
         ]);
+      case 'Bengali Movies':
+        return _deduplicateMovies([
+          ...bengaliMovies,
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originalLanguage.toLowerCase() == 'bn' ||
+               title.originCountry.toUpperCase().contains('BD'))),
+        ]);
+      case 'Drama':
+        return _deduplicateMovies(_allMovies().where((title) =>
+            title.genres.any((genre) =>
+                genre.toLowerCase().contains('drama'))).toList());
       case 'Flixora Originals':
         return flixoraMovies;
       default:
         return [];
     }
+  }
+
+  List<Movie> _gemsForYou() {
+    final titles = _deduplicateMovies([
+      ...flixoraMovies,
+      ...trending,
+      ...popular,
+      ...topRated,
+      ...trendingTv,
+      ...popularTv,
+      ...anime,
+      ...koreanDrama,
+    ]);
+    titles.sort((a, b) => b.rating.compareTo(a.rating));
+    return titles.take(14).toList();
+  }
+
+  Widget _homeCategoryCards() {
+    const routes = <String, String>{
+      'All': 'Trending',
+      'All Movies': 'Movies',
+      'All Dramas': 'Drama',
+      'Bengali Movies': 'Bengali Movies',
+      'Anime': 'Anime',
+    };
+    final available = routes.entries.where(
+      (entry) => _moviesForHomeCategory(entry.value).isNotEmpty,
+    ).toList();
+    if (available.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 22, 16, 10),
+          child: Text(
+            'Categories',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 76,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            itemCount: available.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final entry = available[index];
+              final titles = _moviesForHomeCategory(entry.value);
+              final image = titles.firstWhere(
+                (movie) => movie.backdropUrl.isNotEmpty ||
+                    movie.posterUrl.isNotEmpty,
+                orElse: () => titles.first,
+              );
+              final imageUrl = image.backdropUrl.isNotEmpty
+                  ? image.backdropUrl
+                  : image.posterUrl;
+              return Material(
+                color: panel,
+                borderRadius: BorderRadius.circular(8),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => setState(() => _homeCategory = entry.value),
+                  child: SizedBox(
+                    width: 145,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (imageUrl.isNotEmpty)
+                            FlixoraCachedImage(
+                              imageUrl: imageUrl,
+                              isOnline: _online,
+                              fit: BoxFit.cover,
+                              memCacheWidth: 435,
+                              memCacheHeight: 228,
+                              fallback: const ColoredBox(color: panel),
+                            )
+                          else
+                            const ColoredBox(color: panel),
+                          const DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  Color(0xAA080808),
+                                  Color(0x33080808),
+                                ],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              child: Text(
+                                entry.key,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _homeTopCategories() {
@@ -3399,6 +3537,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
+          _homeCategoryCards(),
+          _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
