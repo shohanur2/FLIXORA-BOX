@@ -3,43 +3,27 @@ import 'package:flixora/streaming/provider_catalog.dart';
 
 void main() {
   group('ProviderCatalog.forMovie', () {
-    test('builds the nine existing providers plus VidRift for a TMDB movie', () {
+    test('builds only Play4U and VidRift for a TMDB movie', () {
       final sources = ProviderCatalog.forMovie(
         tmdbId: 157336,
         imdbId: 'tt0816692',
       );
 
-      expect(sources, hasLength(10));
+      expect(sources, hasLength(2));
       expect(sources.map((source) => source.id).toList(), [
         'play4u',
-        'yapgrid',
-        'pvrplay',
-        'cinesrc',
-        'framex',
-        'streamrip',
-        'filmu',
-        'multiembed',
-        'nexstream',
         'vidrift-movie',
       ]);
-      expect(sources.first.id, 'play4u');
       expect(sources.first.isAvailable, isTrue);
       expect(
         sources.first.url,
         'https://play4u.org/watch/tt0816692?embed=1',
       );
       expect(sources.first.loadInIframe, isFalse);
-      expect(sources.first.unavailableReason, isNull);
-      expect(
-        sources[1].url,
-        'https://yapgrid.com/embed/movie/157336?autoplay=1',
-      );
-      expect(sources[2].url, contains('/watch/movie/157336'));
-      expect(sources[9].url,
+      expect(sources[1].url,
           'https://embed.vidrift.net/embed/movie/157336?brand=FLIXORA&brandColor=%23E50914&showTitle=1&exit=1');
-      expect(sources.first.isAvailable, isTrue);
-      expect(sources.skip(1).every((source) => source.isAvailable), isTrue);
-      expect(sources.last.loadInIframe, isTrue);
+      expect(sources[1].loadInIframe, isTrue);
+      expect(sources.every((source) => source.isAvailable), isTrue);
     });
 
     test('requires a valid IMDb ID for the Play4U movie route', () {
@@ -78,17 +62,7 @@ void main() {
       expect(ProviderCatalog.forMovie(tmdbId: 0), isEmpty);
     });
 
-    test('creates a NexStream URL with a dynamic demo key', () {
-      final source = ProviderCatalog.forMovie(tmdbId: 157336)
-          .singleWhere((item) => item.id == 'nexstream');
 
-      expect(
-        source.url,
-        matches(RegExp(
-          r'^https://api\.codespecters\.com/embed/movie/157336\?apikey=DEMO_[0-9a-f]{8}$',
-        )),
-      );
-    });
   });
 
   group('ProviderCatalog IMDb metadata', () {
@@ -120,20 +94,12 @@ void main() {
   });
 
   group('ProviderCatalog TV and anime', () {
-    test('builds ten TV provider candidates and requires an IMDb ID for Play4U', () {
+    test('builds only Play4U and VidRift TV candidates', () {
       final sources = ProviderCatalog.forTv(tmdbId: 1399);
 
-      expect(sources, hasLength(10));
+      expect(sources, hasLength(2));
       expect(sources.map((source) => source.id).toList(), [
         'play4u-tv',
-        'yapgrid-tv',
-        'pvrplay-tv',
-        'cinesrc-tv',
-        'framex-tv',
-        'streamrip-tv',
-        'filmu-tv',
-        'multiembed-tv',
-        'nexstream-tv',
         'vidrift-tv',
       ]);
       expect(sources.first.isAvailable, isFalse);
@@ -234,7 +200,7 @@ void main() {
       expect(sources[0].id, 'play4u-tv');
       expect(sources[1].url, contains('/embed/anilist/16498/1'));
       expect(sources[2].url, contains('&dub=1'));
-      expect(sources.length, 12);
+      expect(sources.length, 4);
       expect(
         sources.firstWhere((source) => source.id == 'vidrift-tv').url,
         contains('/embed/tv/1429/1/1'),
@@ -250,7 +216,7 @@ void main() {
         aniListEpisodeNumber: 17,
       );
 
-      expect(sources, hasLength(10));
+      expect(sources, hasLength(2));
       expect(
         sources.firstWhere((source) => source.id == 'vidrift-tv').url,
         contains('/embed/tv/1429/2/4?'),
@@ -263,21 +229,17 @@ void main() {
   });
 
   group('ProviderCatalog fallback', () {
-    test('tries the next available provider and skips already failed providers', () {
+    test('falls back from Play4U to VidRift', () {
       final sources = ProviderCatalog.forMovie(
         tmdbId: 157336,
         imdbId: 'tt0816692',
       );
-      final next = ProviderCatalog.nextAvailableAfter(
-        sources,
-        'play4u',
-        excludedIds: const <String>{'yapgrid'},
-      );
+      final next = ProviderCatalog.nextAvailableAfter(sources, 'play4u');
 
-      expect(next?.id, 'pvrplay');
+      expect(next?.id, 'vidrift-movie');
     });
 
-    test('wraps to earlier providers after the last source fails', () {
+    test('does not retry a provider that has already failed', () {
       final sources = ProviderCatalog.forMovie(
         tmdbId: 157336,
         imdbId: 'tt0816692',
@@ -290,7 +252,16 @@ void main() {
         )?.id,
         'play4u',
       );
+      expect(
+        ProviderCatalog.nextAvailableAfter(
+          sources,
+          'play4u',
+          excludedIds: const <String>{'play4u', 'vidrift-movie'},
+        ),
+        isNull,
+      );
     });
+
   });
 
   group('ProviderCatalog.allowsNavigation', () {
@@ -316,12 +287,12 @@ void main() {
       );
     });
 
-    test('allows the reference PVRPlay long subdomain', () {
-      final pvr = ProviderCatalog.forMovie(tmdbId: 157336)[2];
-      final uri = Uri.parse(pvr.url);
+    test('allows the VidRift embed host', () {
+      final vidrift = ProviderCatalog.forMovie(tmdbId: 157336)[1];
+      final uri = Uri.parse(vidrift.url);
 
-      expect(uri.host.endsWith('.pvrplay.fun'), isTrue);
-      expect(ProviderCatalog.allowsNavigation(pvr, uri), isTrue);
+      expect(uri.host, 'embed.vidrift.net');
+      expect(ProviderCatalog.allowsNavigation(vidrift, uri), isTrue);
     });
 
     test('allows Play4U secure nested player hosts without allowing local targets', () {
@@ -376,19 +347,26 @@ void main() {
       );
     });
 
-    test('keeps non-Play4U provider subframes on the strict host allowlist', () {
-      final yapgrid = ProviderCatalog.forMovie(tmdbId: 157336)[1];
+    test('allows VidRift secure player subframes but blocks private targets', () {
+      final vidrift = ProviderCatalog.forMovie(tmdbId: 157336)[1];
       expect(
         ProviderCatalog.allowsSubframeNavigation(
-          yapgrid,
-          Uri.parse('https://yapgrid.com/player/frame'),
+          vidrift,
+          Uri.parse('https://video-cdn.example/player/frame'),
         ),
         isTrue,
       );
       expect(
         ProviderCatalog.allowsSubframeNavigation(
-          yapgrid,
-          Uri.parse('https://unknown-player.example/embed'),
+          vidrift,
+          Uri.parse('https://192.168.1.10/player/frame'),
+        ),
+        isFalse,
+      );
+      expect(
+        ProviderCatalog.allowsSubframeNavigation(
+          vidrift,
+          Uri.parse('http://video-cdn.example/player/frame'),
         ),
         isFalse,
       );
