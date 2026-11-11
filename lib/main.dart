@@ -7777,6 +7777,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         }
       }
 
+      _movieBoxAllLinks = links;
       final selectedLanguage = _selectedMovieBoxLanguage != null &&
               languages.contains(_selectedMovieBoxLanguage)
           ? _selectedMovieBoxLanguage!
