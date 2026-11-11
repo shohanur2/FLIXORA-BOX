@@ -2885,14 +2885,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
-          onDownloadEpisode: (season, episode, title, providerId) =>
-              addDownloadEpisode(
-            selectedMovie,
-            season,
-            episode,
-            title,
-            providerId: providerId,
-          ),
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
