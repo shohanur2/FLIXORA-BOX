@@ -3191,8 +3191,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+            ..._movieBoxSections.expand((section) => section.items)
+                .where(_isAnimeTitle),
+            ...flixoraMovies.where(_isAnimeTitle),
           ]);
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
@@ -3795,10 +3796,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ]);
       case 'Anime':
         return _deduplicateMovies([
-          ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-              _isAnimeTitle(title)),
+          ...flixoraMovies.where(_isAnimeTitle),
           ..._movieBoxSections.expand((section) => section.items)
-              .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+              .where(_isAnimeTitle),
           ...anime,
         ]);
       case 'Korean Drama':
@@ -4626,16 +4626,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
             ..._movieBoxSections.expand((section) => section.items),
-          ]).where((title) => title.mediaType == 'tv' && title.genres.any(
+          ]).where((title) => title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
           _sectionBlock('Web Series', _webSeriesTitles()),
           _sectionBlock('Anime', _deduplicateMovies([
             ...anime,
             ..._movieBoxSections.expand((section) => section.items)
-                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+                .where(_isAnimeTitle),
+            ...flixoraMovies.where(_isAnimeTitle),
           ])),
           _sectionBlock('Korean & Asian Drama', koreanDrama),
           _sectionBlock('Bengali Movies', bengaliMovies),
@@ -5917,8 +5916,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+            ..._movieBoxSections.expand((section) => section.items)
+                .where(_isAnimeTitle),
+            ...flixoraMovies.where(_isAnimeTitle),
           ]);
         case 'Drama': {
           return _deduplicateMovies([
