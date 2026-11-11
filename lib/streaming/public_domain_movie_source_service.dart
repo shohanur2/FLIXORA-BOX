@@ -27,17 +27,17 @@ class PublicDomainMovieSourceService {
       final query = 'mediatype:movies AND title:"' +
           requestedTitle.replaceAll('"', ' ') +
           '"';
-      final searchUri = Uri.https(
-        'archive.org',
-        '/advancedsearch.php',
-      ).replace(
-        queryParametersAll: <String, List<String>>{
-          'q': <String>[query],
-          'fl[]': <String>['identifier', 'title', 'year'],
-          'rows': <String>['8'],
-          'page': <String>['1'],
-          'output': <String>['json'],
-        },
+      final searchUri = Uri.parse(
+        'https://archive.org/advancedsearch.php?' +
+            <String>[
+              'q=' + Uri.encodeQueryComponent(query),
+              'fl%5B%5D=identifier',
+              'fl%5B%5D=title',
+              'fl%5B%5D=year',
+              'rows=8',
+              'page=1',
+              'output=json',
+            ].join('&'),
       );
 
       final searchResponse = await _client
