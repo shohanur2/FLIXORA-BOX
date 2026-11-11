@@ -30,6 +30,7 @@ import 'archive_service.dart';
 import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
+import 'streaming/moviebox_service.dart';
 import 'player/picture_in_picture_service.dart';
 
 SupabaseClient? supabaseClient;
@@ -130,6 +131,10 @@ class Movie {
   final String originalLanguage;
   final String originCountry;
   final List<String> audioLanguages;
+  final String movieBoxId;
+  final String movieBoxDetailPath;
+  final bool movieBoxIsSeries;
+  final int movieBoxSubjectType;
 
   const Movie({
     required this.id,
@@ -151,9 +156,14 @@ class Movie {
     this.originalLanguage = '',
     this.originCountry = '',
     this.audioLanguages = const [],
+    this.movieBoxId = '',
+    this.movieBoxDetailPath = '',
+    this.movieBoxIsSeries = false,
+    this.movieBoxSubjectType = 1,
   });
 
   bool get isFlixora => source == 'flixora';
+  bool get isMovieBox => source == 'moviebox' && movieBoxId.isNotEmpty;
 
   bool get hasPlayableVideoUrl {
     final uri = Uri.tryParse(videoUrl.trim());
@@ -166,6 +176,7 @@ class Movie {
   /// Admin-managed direct MP4/HLS source is attached.
   bool get canAttemptPlayback =>
       hasPlayableVideoUrl ||
+      isMovieBox ||
       ((mediaType == 'movie' || mediaType == 'tv') && tmdbId > 0);
 
   Movie withFallbackMetadata(Movie fallback) => Movie(
@@ -193,7 +204,68 @@ class Movie {
         originalLanguage: originalLanguage.isNotEmpty ? originalLanguage : fallback.originalLanguage,
         originCountry: originCountry.isNotEmpty ? originCountry : fallback.originCountry,
         audioLanguages: audioLanguages.isNotEmpty ? audioLanguages : fallback.audioLanguages,
+        movieBoxId: movieBoxId.isNotEmpty ? movieBoxId : fallback.movieBoxId,
+        movieBoxDetailPath: movieBoxDetailPath.isNotEmpty ? movieBoxDetailPath : fallback.movieBoxDetailPath,
+        movieBoxIsSeries: movieBoxId.isNotEmpty ? movieBoxIsSeries : fallback.movieBoxIsSeries,
+        movieBoxSubjectType: movieBoxId.isNotEmpty ? movieBoxSubjectType : fallback.movieBoxSubjectType,
       );
+
+  factory Movie.fromMovieBox(Map<String, dynamic> json) {
+    final subjectId = (json['id'] ?? '').toString().trim();
+    var stableId = 0;
+    for (final unit in subjectId.codeUnits) {
+      stableId = ((stableId * 31) + unit) & 0x7fffffff;
+    }
+    if (stableId == 0) stableId = 1;
+
+    final subjectType = _toInt(json['subjectType']);
+    final isSeries = json['isSeries'] == true || subjectType == 2;
+    final rawYear = (json['year'] ?? '').toString().trim();
+    final genreText = (json['genre'] ?? '').toString();
+    final genres = genreText
+        .split(',')
+        .map((genre) => genre.trim())
+        .where((genre) => genre.isNotEmpty)
+        .toList(growable: false);
+
+    return Movie(
+      id: -stableId,
+      source: 'moviebox',
+      title: (json['title'] ?? 'Unknown Title').toString(),
+      year: rawYear.length >= 4 ? rawYear.substring(0, 4) : 'N/A',
+      overview: (json['description'] ?? 'No description available.').toString(),
+      poster: (json['cover'] ?? '').toString(),
+      backdrop: (json['backdrop'] ?? '').toString(),
+      rating: double.tryParse((json['rating'] ?? '').toString()) ?? 0,
+      releaseDate: '',
+      genres: genres,
+      runtime: _toInt(json['durationMin']) > 0
+          ? _toInt(json['durationMin']).toDouble()
+          : null,
+      mediaType: isSeries ? 'tv' : 'movie',
+      originCountry: (json['country'] ?? '').toString(),
+      movieBoxId: subjectId,
+      movieBoxDetailPath: (json['detailPath'] ?? '').toString(),
+      movieBoxIsSeries: isSeries,
+      movieBoxSubjectType: subjectType > 0 ? subjectType : (isSeries ? 2 : 1),
+    );
+  }
+
+  Map<String, dynamic> toMovieBoxMap() => {
+        'id': movieBoxId,
+        'title': title,
+        'isSeries': movieBoxIsSeries,
+        'detailPath': movieBoxDetailPath,
+        'cover': poster,
+        'backdrop': backdrop,
+        'rating': rating.toString(),
+        'year': year,
+        'genre': genres.join(', '),
+        'country': originCountry,
+        'description': overview,
+        'durationMin': runtime?.round() ?? 0,
+        'subjectType': movieBoxSubjectType,
+      };
 
   factory Movie.fromJson(Map<String, dynamic> json, {String? mediaType}) {
     final date = (json['release_date'] ?? json['first_air_date'] ?? '').toString();
@@ -280,6 +352,12 @@ class Movie {
       originalLanguage: (json['originalLanguage'] ?? '').toString(),
       originCountry: (json['originCountry'] ?? '').toString(),
       audioLanguages: (json['audioLanguages'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      movieBoxId: (json['movieBoxId'] ?? '').toString(),
+      movieBoxDetailPath: (json['movieBoxDetailPath'] ?? '').toString(),
+      movieBoxIsSeries: json['movieBoxIsSeries'] == true,
+      movieBoxSubjectType: _toInt(json['movieBoxSubjectType']) > 0
+          ? _toInt(json['movieBoxSubjectType'])
+          : 1,
     );
   }
 
@@ -303,6 +381,10 @@ class Movie {
         'originalLanguage': originalLanguage,
         'originCountry': originCountry,
         'audioLanguages': audioLanguages,
+        'movieBoxId': movieBoxId,
+        'movieBoxDetailPath': movieBoxDetailPath,
+        'movieBoxIsSeries': movieBoxIsSeries,
+        'movieBoxSubjectType': movieBoxSubjectType,
       };
 
   bool _isFullUrl(String value) {
@@ -323,6 +405,54 @@ class Movie {
     if (_isFullUrl(backdrop)) return backdrop;
     return '${imageBase}w1280$backdrop';
   }
+}
+
+class MovieBoxHomeSection {
+  final String title;
+  final List<Movie> items;
+  final bool ranked;
+  final bool isBanner;
+
+  const MovieBoxHomeSection({
+    required this.title,
+    required this.items,
+    this.ranked = false,
+    this.isBanner = false,
+  });
+
+  factory MovieBoxHomeSection.fromApi(Map<String, dynamic> json) {
+    final rawItems = json['items'] as List? ?? const [];
+    return MovieBoxHomeSection(
+      title: (json['title'] ?? 'MovieBox').toString(),
+      items: rawItems
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((movie) => movie.movieBoxId.isNotEmpty)
+          .toList(growable: false),
+      ranked: json['ranked'] == true,
+      isBanner: json['isBanner'] == true,
+    );
+  }
+
+  factory MovieBoxHomeSection.fromCache(Map<String, dynamic> json) {
+    final rawItems = json['items'] as List? ?? const [];
+    return MovieBoxHomeSection(
+      title: (json['title'] ?? 'MovieBox').toString(),
+      items: rawItems
+          .whereType<Map>()
+          .map((item) => Movie.fromCache(Map<String, dynamic>.from(item)))
+          .toList(growable: false),
+      ranked: json['ranked'] == true,
+      isBanner: json['isBanner'] == true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'ranked': ranked,
+        'isBanner': isBanner,
+        'items': items.map((movie) => movie.toJson()).toList(),
+      };
 }
 
 /// Displays network images online, but reads disk cache only while offline.
@@ -430,6 +560,7 @@ class MovieCache {
   static const String hollywoodMoviesKey = 'flixora_hollywood_movies';
   static const String southIndianMoviesKey = 'flixora_south_indian_movies';
   static const String indianDramaTvKey = 'flixora_indian_drama_tv';
+  static const String movieBoxSectionsKey = 'flixora_moviebox_sections';
 
   static Future<void> saveDownloads(List<DownloadTask> tasks) async {
     try {
@@ -510,6 +641,35 @@ class MovieCache {
             ),
           )
           .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> saveMovieBoxSections(
+    List<MovieBoxHomeSection> sections,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        movieBoxSectionsKey,
+        jsonEncode(sections.map((section) => section.toJson()).toList()),
+      );
+    } catch (_) {}
+  }
+
+  static Future<List<MovieBoxHomeSection>> getMovieBoxSections() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(movieBoxSectionsKey);
+      if (raw == null || raw.isEmpty) return [];
+      final decoded = jsonDecode(raw) as List;
+      return decoded
+          .whereType<Map>()
+          .map((item) => MovieBoxHomeSection.fromCache(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(growable: false);
     } catch (_) {
       return [];
     }
@@ -1181,6 +1341,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> indianDramaTv = [];
   List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
+  List<MovieBoxHomeSection> _movieBoxSections = [];
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -1210,17 +1371,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).toList();
   }
 
+  String _normalizedMovieTitle(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .trim();
+
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
+    final seenTitleYears = <String>{};
     final seenFallbackIds = <String>{};
 
     return movies.where((movie) {
-      if (movie.tmdbId > 0) {
-        return seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}');
+      if (movie.tmdbId > 0 &&
+          !seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}')) {
+        return false;
       }
 
-      final fallbackKey = '${movie.mediaType}:${movie.source}:${movie.id}';
-      return seenFallbackIds.add(fallbackKey);
+      final normalizedTitle = _normalizedMovieTitle(movie.title);
+      final year = movie.year.trim().length >= 4
+          ? movie.year.trim().substring(0, 4)
+          : '';
+      if (normalizedTitle.isNotEmpty && year.isNotEmpty && year != 'N/A') {
+        final titleYearKey = '${movie.mediaType}:$normalizedTitle:$year';
+        if (!seenTitleYears.add(titleYearKey)) return false;
+      }
+
+      if (movie.tmdbId <= 0) {
+        final fallbackKey = '${movie.mediaType}:${movie.source}:${movie.id}';
+        return seenFallbackIds.add(fallbackKey);
+      }
+      return true;
     }).toList();
   }
 
@@ -1231,8 +1411,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final primary = _withoutFlixoraDuplicates(trending)
         .where((title) => title.mediaType == 'movie')
         .toList();
+    final movieBoxBanners = _movieBoxSections
+        .where((section) =>
+            section.isBanner ||
+            section.title.toLowerCase().contains('trending'))
+        .expand((section) => section.items)
+        .where((title) => title.mediaType == 'movie')
+        .toList();
     final candidates = <Movie>[
       ...flixoraMovies.where((title) => title.mediaType == 'movie'),
+      ...movieBoxBanners,
       ...primary,
     ];
 
@@ -1268,6 +1456,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...koreanDrama,
       ...bengaliTv,
       ...indianDramaTv,
+      ..._movieBoxSections.expand((section) => section.items),
     ].where((title) => title.mediaType == 'tv').toList());
 
     final tagged = catalogue.where((title) => title.genres.any((genre) {
@@ -1503,9 +1692,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
+    final cachedMovieBoxSections = await MovieCache.getMovieBoxSections();
     if (!mounted) return;
 
     setState(() {
+      _movieBoxSections = cachedMovieBoxSections;
       trending = results[0];
       popular = results[1];
       latest = results[2];
@@ -1613,6 +1804,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  Future<void> _refreshMovieBoxHome() async {
+    if (!_online) return;
+    try {
+      try {
+        await MovieBoxService.enableSafeContentFilter();
+      } catch (error) {
+        debugPrint('MovieBox safe-content filter setup failed: $error');
+      }
+      final rawSections = await MovieBoxService.home();
+      final sections = rawSections
+          .map(MovieBoxHomeSection.fromApi)
+          .where((section) => section.items.isNotEmpty)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() => _movieBoxSections = sections);
+      await MovieCache.saveMovieBoxSections(sections);
+    } catch (error) {
+      debugPrint('MovieBox/WeFeed home feed unavailable: $error');
+    }
+  }
+
   Future<void> loadHome() async {
     if (_refreshing) return;
 
@@ -1639,6 +1851,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         loading = _allMovies().isEmpty;
         homeError = null;
       });
+
+      unawaited(_refreshMovieBoxHome());
 
       final results = await Future.wait<List<Movie>>([
         TmdbService.getMovies('trending/movie/week').catchError((_) => <Movie>[]),
@@ -1821,6 +2035,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...hollywoodMovies,
       ...southIndianMovies,
       ...indianDramaTv,
+      ..._movieBoxSections.expand((section) => section.items),
     ];
 
     return _deduplicateMovies(combined);
@@ -1867,9 +2082,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
-    final results = await Future.wait<List<Movie>>([      TmdbService.search(text).catchError((_) => <Movie>[]),
+    final movieBoxSearch = MovieBoxService.search(text).then((result) {
+      final items = result['items'] as List? ?? const [];
+      return items
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((movie) => movie.movieBoxId.isNotEmpty)
+          .toList(growable: false);
+    }).catchError((_) => <Movie>[]);
+
+    final results = await Future.wait<List<Movie>>([
+      TmdbService.search(text).catchError((_) => <Movie>[]),
       FlixoraMovieService.searchPublishedMovies(text)
           .catchError((_) => <Movie>[]),
+      movieBoxSearch,
     ]);
 
     if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
@@ -1877,8 +2103,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final combined = <Movie>[
-      ...results[1],
-      ...results[0],
+      ...results[1], // FLIXORA Admin records keep precedence.
+      ...results[2], // MovieBox/WeFeed is the central playback catalogue.
+      ...results[0], // TMDB remains the metadata/discovery fallback.
     ];
 
     final unique = _deduplicateMovies(combined);
@@ -2348,13 +2575,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Movie? _cachedFlixoraMatch(Movie movie) {
-    if (movie.tmdbId <= 0) return null;
     for (final candidate in [...flixoraMovies, ...searchResults]) {
-      if (candidate.isFlixora &&
-          candidate.tmdbId == movie.tmdbId &&
-          candidate.mediaType == movie.mediaType) {
+      if (!candidate.isFlixora || candidate.mediaType != movie.mediaType) {
+        continue;
+      }
+      if (movie.tmdbId > 0 && candidate.tmdbId == movie.tmdbId) {
         return candidate;
       }
+      final sameTitle = _normalizedMovieTitle(candidate.title) ==
+          _normalizedMovieTitle(movie.title);
+      final sameYear = candidate.year == movie.year &&
+          candidate.year != 'N/A';
+      if (sameTitle && sameYear) return candidate;
     }
     return null;
   }
@@ -2387,6 +2619,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .eq('media_type', requested.mediaType)
             .order('created_at', ascending: false)
             .limit(1);
+      } else if (requested.isMovieBox && requested.title.trim().isNotEmpty) {
+        final candidates = await client
+            .from('movies')
+            .select()
+            .ilike('title', requested.title.trim())
+            .eq('media_type', requested.mediaType)
+            .order('created_at', ascending: false)
+            .limit(10);
+        final rows = (candidates as List).whereType<Map>();
+        final wantedTitle = _normalizedMovieTitle(requested.title);
+        final matching = rows.where((row) {
+          final rowTitle = _normalizedMovieTitle((row['title'] ?? '').toString());
+          final rowDate = (row['release_date'] ?? '').toString();
+          final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
+          return rowTitle == wantedTitle &&
+              (requested.year == 'N/A' || rowYear == requested.year);
+        }).toList();
+        response = matching.isEmpty ? <dynamic>[] : [matching.first];
       }
 
       if (response is List && response.isNotEmpty) {
@@ -4016,6 +4266,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...popularTv,
       ...anime,
       ...koreanDrama,
+      ..._movieBoxSections.expand((section) => section.items),
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
     return titles.take(14).toList(growable: false);
@@ -4062,20 +4313,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _homeTrendingMovies()),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
+            ..._movieBoxSections.expand((section) => section.items)
+                .where((title) => title.mediaType == 'tv'),
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
+          ..._movieBoxSections
+              .where((section) => !section.isBanner &&
+                  !section.title.toLowerCase().contains('trending'))
+              .map((section) => _sectionBlock(section.title, section.items)),
           _homeCategoryCards(),
           _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
+            ..._movieBoxSections.expand((section) => section.items),
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
           _sectionBlock('Web Series', _webSeriesTitles()),
           _sectionBlock('Anime', _deduplicateMovies([
             ...anime,
+            ..._movieBoxSections.expand((section) => section.items)
+                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
             ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
                 title.genres.any((genre) => genre.toLowerCase() == 'anime')),
           ])),
@@ -5366,6 +5626,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
+            ..._movieBoxSections.expand((section) => section.items),
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList();
