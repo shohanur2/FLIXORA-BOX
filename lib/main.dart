@@ -2768,6 +2768,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  Movie? _cachedMovieBoxMatch(Movie movie) {
+    if (movie.isMovieBox) return movie;
+    for (final candidate in _movieBoxSections.expand((section) => section.items)) {
+      if (candidate.mediaType != movie.mediaType) continue;
+      final sameTitle = _normalizedMovieTitle(candidate.title) ==
+          _normalizedMovieTitle(movie.title);
+      final sameYear = candidate.year == movie.year ||
+          candidate.year == 'N/A' ||
+          movie.year == 'N/A';
+      if (sameTitle && sameYear) {
+        return candidate.withFallbackMetadata(movie);
+      }
+    }
+    return null;
+  }
+
+  Future<Movie?> _searchMovieBoxMatch(Movie movie) async {
+    if (movie.title.trim().isEmpty ||
+        (movie.mediaType != 'movie' && movie.mediaType != 'tv')) {
+      return null;
+    }
+    try {
+      final result = await MovieBoxService.search(movie.title, perPage: 20);
+      final items = (result['items'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((item) => item.movieBoxId.isNotEmpty &&
+              item.mediaType == movie.mediaType)
+          .toList(growable: false);
+      final wantedTitle = _normalizedMovieTitle(movie.title);
+      for (final candidate in items) {
+        final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
+        final sameYear = candidate.year == movie.year ||
+            candidate.year == 'N/A' ||
+            movie.year == 'N/A';
+        if (sameTitle && sameYear) {
+          return candidate.withFallbackMetadata(movie);
+        }
+      }
+    } catch (error) {
+      debugPrint('MovieBox title lookup failed: $error');
+    }
+    return null;
+  }
+
   /// Resolve every entry point to the same Admin-managed movie record.
   /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
@@ -2836,14 +2881,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (requested.isFlixora) return null;
-      return _cachedFlixoraMatch(requested) ?? requested;
+      final adminMatch = _cachedFlixoraMatch(requested);
+      if (adminMatch != null) return adminMatch;
+      final cachedMovieBox = _cachedMovieBoxMatch(requested);
+      if (cachedMovieBox != null) return cachedMovieBox;
+      return await _searchMovieBoxMatch(requested) ?? requested;
     } catch (e) {
       debugPrint('Could not resolve Admin movie record: $e');
-      // Keep the already-loaded published Admin entry usable if the network
-      // lookup fails; otherwise fall back to the requested TMDB catalogue item.
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+      if (requested.isFlixora) return requested;
+      final adminMatch = _cachedFlixoraMatch(requested);
+      if (adminMatch != null) return adminMatch;
+      return _cachedMovieBoxMatch(requested) ??
+          await _searchMovieBoxMatch(requested) ??
+          requested;
     }
   }
 
