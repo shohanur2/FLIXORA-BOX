@@ -30,6 +30,7 @@ import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
 import 'player/picture_in_picture_service.dart';
+import 'player/admin_subtitle_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -5498,6 +5499,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     subtitle: [SubtitleTrack.auto()],
   );
 
+  List<AdminSubtitleTrack> _adminSubtitles = <AdminSubtitleTrack>[];
+  bool _loadingAdminSubtitles = false;
+
   String get _resumeKey {
     final id = widget.movie.tmdbId > 0
         ? widget.movie.tmdbId
@@ -5570,6 +5574,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _attachPlayerListeners();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
+    unawaited(_loadAdminSubtitles());
     _prepareAndInitializePlayer();
   }
 
@@ -6966,11 +6971,63 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    await _player.setSubtitleTrack(track);
+  Future<void> _loadAdminSubtitles() async {
+    final client = supabaseClient;
+    final movieId = widget.movie.sourceId;
+    if (client == null || movieId <= 0 || widget.localFilePath != null) {
+      return;
+    }
+    if (mounted) setState(() => _loadingAdminSubtitles = true);
+    try {
+      final tracks = await AdminSubtitleService.forMovie(
+        client: client,
+        movieId: movieId,
+      );
+      if (!mounted || _isDisposed) return;
+      setState(() => _adminSubtitles = tracks);
+    } catch (error) {
+      debugPrint('Could not load Admin subtitles: $error');
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingAdminSubtitles = false);
+      }
+    }
+  }
 
-    if (mounted) Navigator.pop(context);
-    _startHideTimer();
+  Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
+    try {
+      await _player.setSubtitleTrack(track);
+      if (mounted) Navigator.pop(context);
+      _startHideTimer();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load this subtitle: $error')),
+      );
+    }
+  }
+
+  Future<void> _selectAdminSubtitle(AdminSubtitleTrack track) async {
+    try {
+      await _player.setSubtitleTrack(
+        SubtitleTrack.uri(
+          track.url,
+          title: track.label,
+          language: track.language,
+        ),
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Subtitle selected: ${track.label}')),
+      );
+      _startHideTimer();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not load the selected subtitle.')),
+      );
+    }
   }
 
   Future<void> _addExternalSubtitle() async {
@@ -7426,6 +7483,39 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     onTap: () => _selectSubtitleTrack(track),
                   );
                 }),
+                if (_loadingAdminSubtitles)
+                  const ListTile(
+                    leading: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    title: Text(
+                      'Loading FLIXORA subtitles...',
+                      style: TextStyle(color: playerWhite70),
+                    ),
+                  ),
+                ..._adminSubtitles.map((track) => ListTile(
+                      leading: const Icon(
+                        Icons.subtitles_rounded,
+                        color: Color(0xFF39E69B),
+                      ),
+                      title: Text(
+                        track.label,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      subtitle: Text(
+                        track.language,
+                        style: const TextStyle(
+                          color: Color(0x99FFFFFF),
+                          fontSize: 11,
+                        ),
+                      ),
+                      onTap: () => _selectAdminSubtitle(track),
+                    )),
                 ListTile(
                   leading: const Icon(Icons.add, color: playerGold),
                   title: const Text(
