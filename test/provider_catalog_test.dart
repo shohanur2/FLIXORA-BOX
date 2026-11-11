@@ -203,8 +203,9 @@ void main() {
         'vidrift-anime-sub',
         'vidrift-anime-dub',
       ]);
-      expect(sources[0].url, contains('/embed/anilist/16498/1'));
-      expect(sources[1].url, contains('&dub=1'));
+      expect(sources[0].id, 'play4u-tv');
+      expect(sources[1].url, contains('/embed/anilist/16498/1'));
+      expect(sources[2].url, contains('&dub=1'));
       expect(sources.length, 12);
       expect(
         sources.firstWhere((source) => source.id == 'vidrift-tv').url,
