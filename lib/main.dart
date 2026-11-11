@@ -1068,6 +1068,9 @@ class DownloadTask {
   final String poster;
   final String videoUrl;
   final String quality;
+  final Map<String, String> headers;
+  final int? seasonNumber;
+  final int? episodeNumber;
   double progress;
   int bytesReceived;
   int totalBytes;
@@ -1082,6 +1085,9 @@ class DownloadTask {
     required this.poster,
     this.videoUrl = '',
     this.quality = 'Original',
+    this.headers = const <String, String>{},
+    this.seasonNumber,
+    this.episodeNumber,
     this.progress = 0,
     this.bytesReceived = 0,
     this.totalBytes = 0,
@@ -1090,6 +1096,13 @@ class DownloadTask {
     this.errorMessage,
   });
 
+  String get displayTitle {
+    if (seasonNumber == null || episodeNumber == null) return title;
+    final season = seasonNumber!.toString().padLeft(2, '0');
+    final episode = episodeNumber!.toString().padLeft(2, '0');
+    return '$title • S$season E$episode';
+  }
+
   Map<String, dynamic> toJson() => {
         'movieId': movieId,
         'downloadId': downloadId,
@@ -1097,6 +1110,9 @@ class DownloadTask {
         'poster': poster,
         'videoUrl': videoUrl,
         'quality': quality,
+        'headers': headers,
+        'seasonNumber': seasonNumber,
+        'episodeNumber': episodeNumber,
         'progress': progress,
         'bytesReceived': bytesReceived,
         'totalBytes': totalBytes,
@@ -1114,6 +1130,19 @@ class DownloadTask {
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
         quality: (json['quality'] ?? 'Original').toString(),
+        headers: json['headers'] is Map
+            ? Map<String, String>.from(
+                (json['headers'] as Map).map(
+                  (key, value) => MapEntry(key.toString(), value.toString()),
+                ),
+              )
+            : const <String, String>{},
+        seasonNumber: _toInt(json['seasonNumber']) > 0
+            ? _toInt(json['seasonNumber'])
+            : null,
+        episodeNumber: _toInt(json['episodeNumber']) > 0
+            ? _toInt(json['episodeNumber'])
+            : null,
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
         bytesReceived: _toInt(json['bytesReceived']),
         totalBytes: _toInt(json['totalBytes']),
@@ -1138,11 +1167,17 @@ class DownloadManager {
     return '${size.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
   }
 
-  static Future<int?> getRemoteFileSize(String url) async {
+  static Future<int?> getRemoteFileSize(
+    String url, {
+    Map<String, String> headers = const <String, String>{},
+  }) async {
     try {
       final response = await _dio.head(
         url,
-        options: Options(headers: {'Accept-Encoding': 'identity'}),
+        options: Options(headers: {
+          ...headers,
+          'Accept-Encoding': 'identity',
+        }),
       ).timeout(const Duration(seconds: 10));
       final length = int.tryParse(
         response.headers.value('content-length') ?? '',
@@ -1159,6 +1194,7 @@ class DownloadManager {
         options: Options(
           responseType: ResponseType.stream,
           headers: {
+            ...headers,
             'Range': 'bytes=0-0',
             'Accept-Encoding': 'identity',
           },
@@ -1204,6 +1240,7 @@ class DownloadManager {
     required String url,
     required String fileName,
     required int uniqueId,
+    Map<String, String> headers = const <String, String>{},
     String? existingPartialPath,
     required void Function(int received, int total) onProgress,
     required void Function(String path, int offset) onQueued,
@@ -1216,6 +1253,7 @@ class DownloadManager {
         url: url,
         fileName: fileName,
         uniqueId: uniqueId,
+        headers: headers,
         existingPartialPath: existingPartialPath,
         onProgress: onProgress,
         onQueued: onQueued,
@@ -2174,7 +2212,69 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await MovieCache.saveSaved(_saved);
   }
 
-  Future<void> addDownload(Movie movie) async {
+  Map<String, String> _decodeDownloadHeaders(String? raw) {
+    try {
+      final decoded = jsonDecode(raw ?? '{}');
+      if (decoded is Map) {
+        return Map<String, String>.from(
+          decoded.map((key, value) => MapEntry(key.toString(), value.toString())),
+        );
+      }
+    } catch (_) {}
+    return const <String, String>{};
+  }
+
+  Future<List<Map<String, String>>> _movieBoxDirectDownloadOptions(
+    Movie movie, {
+    required int season,
+    required int episode,
+  }) async {
+    final rawItem = movie.toMovieBoxMap();
+    Map<String, dynamic> playItem = rawItem;
+    try {
+      final rich = await MovieBoxService.detail(rawItem);
+      if (rich['item'] is Map) {
+        playItem = Map<String, dynamic>.from(rich['item'] as Map);
+      }
+    } catch (error) {
+      debugPrint('MovieBox download details unavailable; using catalogue item: $error');
+    }
+
+    final detail = await MovieBoxService.playDetail(playItem);
+    final response = await MovieBoxService.streams(
+      detail,
+      season: season,
+      episode: episode,
+      isSeries: movie.movieBoxIsSeries,
+    );
+    final links = response['links'] as List? ?? const [];
+    return links.whereType<Map>().map((link) {
+      final url = (link['url'] ?? '').toString();
+      final kind = (link['kind'] ?? '').toString().toLowerCase();
+      final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+      final isDirectMp4 = kind == 'mp4' || path.endsWith('.mp4');
+      if (!isDirectMp4) return <String, String>{};
+      final rawHeaders = link['headers'];
+      final headers = rawHeaders is Map
+          ? Map<String, String>.from(
+              rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : const <String, String>{};
+      return <String, String>{
+        'quality': (link['label'] ?? 'Original MP4').toString(),
+        'video_url': url,
+        'headers': jsonEncode(headers),
+      };
+    }).where((item) => item['video_url']?.isNotEmpty == true).toList();
+  }
+
+  Future<void> addDownload(
+    Movie movie, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
     final hasInternet = await InternetService.isOnline();
     if (!hasInternet) {
       if (mounted) {
@@ -2189,7 +2289,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (mounted && !_online) setState(() => _online = true);
 
-    final existing = _downloads.where((item) => item.movieId == movie.id).toList();
+    var resolvedSeason = seasonNumber ?? 0;
+    var resolvedEpisode = episodeNumber ?? 0;
+    if (movie.isMovieBox && movie.movieBoxIsSeries) {
+      final seasons = await MovieBoxService.seasons(movie.movieBoxId);
+      if (seasons.isEmpty) {
+        _showMessage('No seasons are available to download for this series.');
+        return;
+      }
+      final season = seasons.firstWhere(
+        (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
+        orElse: () => seasons.first,
+      );
+      resolvedSeason = _toInt(season['se']);
+      final episodes = (season['episodes'] as List? ?? const [])
+          .map(_toInt)
+          .where((number) => number > 0)
+          .toList(growable: false);
+      if (resolvedEpisode <= 0 ||
+          (episodes.isNotEmpty && !episodes.contains(resolvedEpisode))) {
+        resolvedEpisode = episodes.isNotEmpty ? episodes.first : 1;
+      }
+    }
+
+    final existing = _downloads.where((item) =>
+        item.movieId == movie.id &&
+        (item.seasonNumber ?? 0) == resolvedSeason &&
+        (item.episodeNumber ?? 0) == resolvedEpisode).toList();
     if (existing.any((item) => item.status == 'Completed')) {
       _showMessage('This movie is already downloaded.');
       return;
@@ -2206,17 +2332,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final rawOptions = await FlixoraMovieService.getDownloadQualities(movie);
+    final rawOptions = movie.isMovieBox
+        ? await _movieBoxDirectDownloadOptions(
+            movie,
+            season: resolvedSeason,
+            episode: resolvedEpisode,
+          )
+        : await FlixoraMovieService.getDownloadQualities(movie);
     if (!mounted) return;
     if (rawOptions.isEmpty) {
       _showMessage(
-        'Download source is not available for this movie. Ask Admin to add a direct video file.',
+        movie.isMovieBox
+            ? 'Only HLS/DASH adaptive streams are available. Direct MP4 download is not available for this episode yet.'
+            : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
       );
       return;
     }
 
     final options = await Future.wait(rawOptions.map((item) async {
-      final size = await DownloadManager.getRemoteFileSize(item['video_url']!);
+      final size = await DownloadManager.getRemoteFileSize(
+        item['video_url']!,
+        headers: _decodeDownloadHeaders(item['headers']),
+      );
       return <String, String>{
         ...item,
         'size_bytes': size?.toString() ?? '',
@@ -2335,6 +2472,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       poster: movie.posterUrl,
       videoUrl: selectedUrl,
       quality: quality,
+      headers: _decodeDownloadHeaders(selected['headers']),
+      seasonNumber: resolvedSeason > 0 ? resolvedSeason : null,
+      episodeNumber: resolvedEpisode > 0 ? resolvedEpisode : null,
       totalBytes: expectedBytes,
       status: 'Waiting',
     );
@@ -2352,8 +2492,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     await DownloadManager.download(
       url: task.videoUrl,
-      fileName: '${task.title}_${task.quality}',
+      fileName: '${task.displayTitle}_${task.quality}',
       uniqueId: downloadId,
+      headers: task.headers,
       existingPartialPath: resume ? task.filePath : null,
       onQueued: (path, offset) {
         if (!mounted) return;
@@ -2418,7 +2559,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..errorMessage = null;
         });
         await MovieCache.saveDownloads(_downloads);
-        _showMessage('Successfully downloaded ${task.title}.');
+        _showMessage('Successfully downloaded ${task.displayTitle}.');
       },
       onError: (message) {
         if (!mounted) return;
@@ -4556,7 +4697,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (task.filePath == null) return;
         final movie = Movie(
           id: task.movieId,
-          title: task.title,
+          title: task.displayTitle,
           year: 'N/A',
           overview: '',
           poster: task.poster,
@@ -6184,7 +6325,7 @@ class DownloadsScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            task.title,
+                            task.displayTitle,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
