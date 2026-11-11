@@ -159,6 +159,11 @@ class PublicDomainMovieSourceService {
     final rights = _text(metadata['rights'])
         .replaceAll(RegExp(r'<[^>]*>'), ' ')
         .toLowerCase();
+    final restrictiveRights = rights.contains('not public domain') ||
+        rights.contains('all rights reserved') ||
+        rights.contains('copyright') ||
+        rights.contains('permission required');
+    if (restrictiveRights) return false;
     return license.contains('publicdomain/mark/1.0') ||
         license.contains('publicdomain/zero/1.0') ||
         license.contains('cc0') ||
