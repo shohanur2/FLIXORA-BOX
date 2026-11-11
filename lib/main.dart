@@ -2885,6 +2885,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
+          onDownloadEpisode: (season, episode, title, providerId) =>
+              addDownloadEpisode(
+            selectedMovie,
+            season,
+            episode,
+            title,
+            providerId: providerId,
+          ),
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
         ),
@@ -2906,6 +2914,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
+        onDownloadEpisode: (season, episode, title, providerId) =>
+            addDownloadEpisode(
+          selectedMovie,
+          season,
+          episode,
+          title,
+          providerId: providerId,
+        ),
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
       ),
@@ -6930,6 +6946,12 @@ class MoviePlayerScreen extends StatefulWidget {
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
   final VoidCallback? onDownload;
+  final Future<void> Function(
+    int seasonNumber,
+    int episodeNumber,
+    String episodeTitle,
+    String? providerId,
+  )? onDownloadEpisode;
   final VoidCallback? onViewDownloads;
   final bool isOnline;
 
@@ -6941,6 +6963,7 @@ class MoviePlayerScreen extends StatefulWidget {
     this.onMovieSelected,
     this.onSave,
     this.onDownload,
+    this.onDownloadEpisode,
     this.onViewDownloads,
     this.isOnline = true,
   });
@@ -7657,6 +7680,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               style: const TextStyle(
                 color: Color(0x99FFFFFF),
                 fontSize: 10,
+              ),
+            ),
+          ],
+          if (widget.onDownloadEpisode != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _loadingTvEpisodes
+                    ? null
+                    : () => widget.onDownloadEpisode?.call(
+                          safeSeason,
+                          safeEpisode,
+                          selectedEpisodeName,
+                          _selectedProviderSource?.id,
+                        ),
+                icon: const Icon(
+                  Icons.download_for_offline_rounded,
+                  color: playerGoldLight,
+                  size: 18,
+                ),
+                label: const Text(
+                  'Download Episode',
+                  style: TextStyle(
+                    color: playerWhite,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ),
           ],
