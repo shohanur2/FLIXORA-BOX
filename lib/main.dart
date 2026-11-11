@@ -5692,76 +5692,314 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-class NoInternetScreen extends StatelessWidget {
-  const NoInternetScreen({super.key});
+class NoInternetScreen extends StatefulWidget {
+  final String backdropUrl;
+  final Future<bool> Function()? onRetry;
 
-  Future<void> _openWifiSettings(BuildContext context) async {
+  const NoInternetScreen({
+    super.key,
+    this.backdropUrl = '',
+    this.onRetry,
+  });
+
+  @override
+  State<NoInternetScreen> createState() => _NoInternetScreenState();
+}
+
+class _NoInternetScreenState extends State<NoInternetScreen> {
+  bool _checking = false;
+
+  Future<void> _openWifiSettings() async {
     try {
-      await AppSettings.openAppSettings(
-        type: AppSettingsType.wifi,
-      );
+      await AppSettings.openAppSettings(type: AppSettingsType.wifi);
     } catch (_) {
       try {
         await AppSettings.openAppSettings();
       } catch (_) {
-        if (context.mounted) {
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Unable to open settings.'),
-            ),
+            const SnackBar(content: Text('Unable to open settings.')),
           );
         }
       }
     }
   }
 
+  Future<void> _retry() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    var connected = false;
+    try {
+      if (widget.onRetry != null) {
+        connected = await widget.onRetry!();
+      } else {
+        InternetService.invalidate();
+        connected = await InternetService.isOnline();
+        if (connected && mounted) Navigator.of(context).maybePop();
+      }
+    } catch (error) {
+      debugPrint('Internet retry failed: $error');
+    }
+
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (!connected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Still offline. Check your internet and retry.'),
+        ),
+      );
+    }
+  }
+
+  Widget _feature(IconData icon, String label, {String? mark}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF92959D), width: 1.8),
+            ),
+            child: mark == null
+                ? Icon(icon, color: const Color(0xFF25C99A), size: 19)
+                : Text(
+                    mark,
+                    style: const TextStyle(
+                      color: Color(0xFF25C99A),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: white,
+                fontSize: 15,
+                height: 1.25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bg,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.wifi_off_rounded,
-                size: 75,
-                color: gold,
+      appBar: AppBar(
+        backgroundColor: bg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        leading: IconButton(
+          tooltip: 'Back',
+          onPressed: () => Navigator.of(context).maybePop(),
+          icon: const Icon(Icons.arrow_back_rounded, color: white, size: 28),
+        ),
+        title: const Text(
+          'No Internet',
+          style: TextStyle(
+            color: white,
+            fontSize: 19,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      body: SafeArea(
+        top: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Column(
+                children: [
+                  SizedBox(
+                    height: 190,
+                    width: double.infinity,
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (widget.backdropUrl.isNotEmpty)
+                          FlixoraCachedImage(
+                            imageUrl: widget.backdropUrl,
+                            isOnline: false,
+                            fit: BoxFit.cover,
+                            fallback: const ColoredBox(color: panel),
+                          )
+                        else
+                          const ColoredBox(color: panel),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Color(0xB908090B),
+                                Color(0xE608090B),
+                                bg,
+                              ],
+                            ),
+                          ),
+                        ),
+                        Center(
+                          child: ShaderMask(
+                            blendMode: BlendMode.srcIn,
+                            shaderCallback: (bounds) =>
+                                const LinearGradient(
+                              colors: [
+                                Color(0xFF22C7A1),
+                                Color(0xFF26E879),
+                              ],
+                            ).createShader(bounds),
+                            child: const Icon(
+                              Icons.wifi_off_rounded,
+                              size: 92,
+                              color: white,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(18, 8, 18, 22),
+                    child: Text(
+                      'Connect to the internet',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: white,
+                        fontSize: 26,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.fromLTRB(18, 17, 18, 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF25262B),
+                      borderRadius: BorderRadius.circular(17),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'When your internet connection is restored:',
+                          style: TextStyle(
+                            color: white,
+                            fontSize: 15,
+                            height: 1.3,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _feature(Icons.movie_creation_outlined,
+                            'Explore various movies, TV series and more',
+                            mark: 'FREE'),
+                        _feature(Icons.hd_outlined,
+                            'All free download with less data but good quality',
+                            mark: 'HD'),
+                        _feature(Icons.block_rounded,
+                            'Watch offline without ads',
+                            mark: 'AD'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 34),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 34),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 62,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFF1DAFEA),
+                                Color(0xFF21E99A),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(9),
+                              onTap: _checking ? null : _retry,
+                              child: Center(
+                                child: _checking
+                                    ? const SizedBox(
+                                        width: 25,
+                                        height: 25,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          color: white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Retry',
+                                        style: TextStyle(
+                                          color: white,
+                                          fontSize: 20,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 34),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 62,
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF25262B),
+                            foregroundColor: white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                          ),
+                          onPressed: _openWifiSettings,
+                          child: const Text(
+                            'Go to Settings',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                ],
               ),
-              const SizedBox(height: 20),
-              const Text(
-                'Connect to the internet',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'When your internet connection is restored: Explore various movies, TV series and more',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: ink,
-                  fontSize: 15,
-                  height: 1.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 25),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: gold,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () => _openWifiSettings(context),
-                icon: const Icon(Icons.settings),
-                label: const Text('Open Wi-Fi Settings'),
-              ),
-            ],
+            ),
           ),
         ),
       ),
