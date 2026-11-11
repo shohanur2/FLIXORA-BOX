@@ -1330,7 +1330,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     _timer = Timer.periodic(
-      const Duration(seconds: 5),
+      const Duration(seconds: 7),
       (_) {
         if (!mounted || _tab != 0) return;
 
@@ -2780,8 +2780,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return const SizedBox(height: 12);
     }
 
+    // Match the supplied mobile reference: a full-width 16:9 hero with
+    // a compact, overlapping horizontal poster-card strip at its bottom.
+    final heroHeight = (MediaQuery.of(context).size.width * 9 / 16)
+        .clamp(200.0, 360.0)
+        .toDouble();
+
     return SizedBox(
-      height: MediaQuery.of(context).size.height * 0.41,
+      height: heroHeight,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -2815,7 +2821,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         gradient: LinearGradient(
                           begin: Alignment.topCenter,
                           end: Alignment.bottomCenter,
-                          colors: [Color(0x55000000), Color(0x08000000), Colors.transparent, Color(0xFF080808)],
+                          colors: [
+                            Color(0x55000000),
+                            Color(0x08000000),
+                            Colors.transparent,
+                            Color(0xFF080808),
+                          ],
                           stops: [0, 0.28, 0.58, 1],
                         ),
                       ),
@@ -2828,26 +2839,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           Positioned(
             left: 0,
-            right: 0,            bottom: 28,
+            right: 0,
+            bottom: 6,
             child: _featuredQuickCards(slides),
-          ),
-          Positioned(
-            bottom: 8,
-            right: 18,
-            child: Row(
-              children: List.generate(
-                slides.length,
-                (index) => Container(
-                  margin: const EdgeInsets.only(left: 5),
-                  width: _slide == index ? 18 : 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: _slide == index ? gold : const Color(0x8AFFFFFF),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-              ),
-            ),
           ),
         ],
       ),
@@ -2858,7 +2852,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (movies.isEmpty) return const SizedBox.shrink();
 
     return SizedBox(
-      height: 78,
+      height: FeaturedCarouselLayout.cardHeight,
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification is ScrollEndNotification &&
@@ -2882,16 +2876,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         child: ListView.builder(
           controller: _featuredCardsController,
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(
+            horizontal: FeaturedCarouselLayout.horizontalPadding,
+          ),
           itemCount: movies.length,
           itemBuilder: (context, index) {
             final movie = movies[index];
+            final isAnime = movie.genres.any(
+                  (genre) => genre.toLowerCase().contains('animation'),
+                ) ||
+                movie.originalLanguage.toLowerCase() == 'ja';
             final typeLabel = movie.mediaType == 'tv'
-                ? 'TV Series'
-                : (movie.genres.any((g) => g.toLowerCase().contains('animation')) ||
-                        movie.originalLanguage.toLowerCase() == 'ja'
-                    ? 'Anime'
-                    : 'Movie');
+                ? 'TV'
+                : (isAnime ? 'Anime' : 'Movie');
+            final hasHindiAudio = movie.audioLanguages.any((language) {
+                  final value = language.trim().toLowerCase();
+                  return value == 'hi' || value.contains('hindi');
+                }) ||
+                movie.originalLanguage.toLowerCase() == 'hi';
+            final displayTitle = hasHindiAudio &&
+                    !movie.title.toLowerCase().contains('[hindi]')
+                ? '${movie.title} [Hindi]'
+                : movie.title;
+            final yearLabel = movie.year.isNotEmpty && movie.year != 'N/A'
+                ? movie.year
+                : (movie.releaseDate.length >= 4
+                    ? movie.releaseDate.substring(0, 4)
+                    : '');
+            final genreLabel =
+                movie.genres.isNotEmpty ? movie.genres.first : typeLabel;
+
             return GestureDetector(
               onTap: _isOpeningTitle ? null : () => _playMovie(movie),
               child: Container(
@@ -2900,20 +2914,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   horizontal: FeaturedCarouselLayout.cardMargin,
                 ),
                 child: SizedBox(
-                  height: 78,
+                  height: FeaturedCarouselLayout.cardHeight,
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
                       Positioned(
                         left: 0,
                         right: 0,
-                        top: 12,
+                        top: FeaturedCarouselLayout.cardTopInset,
                         bottom: 0,
                         child: Container(
-                          padding: const EdgeInsets.only(left: 64, right: 6),
+                          padding: const EdgeInsets.only(
+                            left: FeaturedCarouselLayout.textLeftInset,
+                            right: 6,
+                          ),
                           decoration: BoxDecoration(
-                            color: panel,
-                            borderRadius: BorderRadius.circular(9),
+                            color: const Color(0xFF25272D),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Row(
                             children: [
@@ -2923,7 +2940,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      movie.title,
+                                      displayTitle,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -2933,24 +2950,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       ),
                                     ),
                                     const SizedBox(height: 2),
-                                    Text(
-                                      '$typeLabel  •  ${movie.releaseDate.isNotEmpty ? movie.releaseDate : movie.year}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        color: ink60,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          movie.mediaType == 'tv'
+                                              ? Icons.live_tv_rounded
+                                              : Icons.movie_outlined,
+                                          color: ink60,
+                                          size: 11,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            '$yearLabel  |  $genreLabel',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: ink60,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
                               ),
                               const SizedBox(width: 5),
                               const CircleAvatar(
-                                radius: 12,
-                                backgroundColor: gold,
-                                child: Icon(Icons.play_arrow, color: Colors.white, size: 18),
+                                radius: 11,
+                                backgroundColor: Color(0xFF20E6A2),
+                                child: Icon(
+                                  Icons.play_arrow_rounded,
+                                  color: Color(0xFF06251A),
+                                  size: 17,
+                                ),
                               ),
                             ],
                           ),
@@ -2963,27 +2998,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           borderRadius: BorderRadius.circular(6),
                           child: movie.posterUrl.isEmpty
                               ? Container(
-                                  width: 52,
-                                  height: 72,
+                                  width: FeaturedCarouselLayout.posterWidth,
+                                  height: FeaturedCarouselLayout.posterHeight,
                                   color: const Color(0xFF292929),
-                                  child: const Icon(Icons.movie, color: gold, size: 18),
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: gold,
+                                    size: 18,
+                                  ),
                                 )
                               : FlixoraCachedImage(
                                   imageUrl: movie.posterUrl,
                                   isOnline: _online,
                                   fit: BoxFit.cover,
-                                   memCacheWidth: 156,
-                                   memCacheHeight: 216,
+                                  memCacheWidth:
+                                      FeaturedCarouselLayout.posterWidth * 3,
+                                  memCacheHeight:
+                                      FeaturedCarouselLayout.posterHeight * 3,
                                   placeholder: Container(
-                                    width: 52,
-                                  height: 72,
+                                    width: FeaturedCarouselLayout.posterWidth,
+                                    height: FeaturedCarouselLayout.posterHeight,
                                     color: const Color(0xFF292929),
                                   ),
                                   fallback: Container(
-                                    width: 52,
-                                  height: 72,
+                                    width: FeaturedCarouselLayout.posterWidth,
+                                    height: FeaturedCarouselLayout.posterHeight,
                                     color: const Color(0xFF292929),
-                                    child: const Icon(Icons.movie, color: gold, size: 18),
+                                    child: const Icon(
+                                      Icons.movie,
+                                      color: gold,
+                                      size: 18,
+                                    ),
                                   ),
                                 ),
                         ),
@@ -5585,11 +5630,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               adminVideoUrl: widget.movie.videoUrl,
             );
           });
-          await _appendAuthorizedProviderSources(
+          // Optional catalogue providers must not delay the reference
+          // Play4U stream. Discover them in the background as fallbacks.
+          unawaited(_appendAuthorizedProviderSources(
             isTv: false,
             season: 1,
             episode: 1,
-          );
+          ));
         }
       }
       return details;
@@ -5630,18 +5677,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
       });
     }
-    await _appendAuthorizedProviderSources(
-      isTv: true,
-      season: season,
-      episode: episode,
-    );
-    if (selectProvider && mounted && !_isDisposed && _providerSources.isNotEmpty) {
-      final firstAvailable = _providerSources.firstWhere(
+    if (selectProvider && mounted && !_isDisposed && sources.isNotEmpty) {
+      final firstAvailable = sources.firstWhere(
         (source) => source.isAvailable,
-        orElse: () => _providerSources.first,
+        orElse: () => sources.first,
       );
       unawaited(_selectProviderSource(firstAvailable));
     }
+    // Keep episode changes responsive: Play4U is selected from the core
+    // catalogue immediately; optional sources are appended asynchronously.
+    unawaited(_appendAuthorizedProviderSources(
+      isTv: true,
+      season: season,
+      episode: episode,
+    ));
   }
 
   Future<void> _appendAuthorizedProviderSources({
@@ -5676,22 +5725,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         .toList(growable: false);
     if (additions.isEmpty) return;
 
-    final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
-    var insertAt = 0;
-    if (adminSource != null) {
-      final adminIndex = _providerSources.indexWhere(
-        (source) => source.id == adminSource.id,
-      );
-      if (adminIndex >= 0) insertAt = adminIndex + 1;
-    }
-    // Keep the explicit Anime Sub/Dub choices ahead of generic catalogue
-    // sources while still placing Admin-managed sources first.
-    final animeDubIndex = _providerSources.indexWhere(
-      (source) => source.id == 'vidrift-anime-dub',
-    );
-    if (animeDubIndex >= insertAt) insertAt = animeDubIndex + 1;
+    // Preserve the declared catalogue order: Admin-managed source first,
+    // then Play4U (STREAM 1), built-in providers and Anime Sub/Dub choices.
+    // Optional discovery results remain available as later fallbacks.
     setState(() {
-      _providerSources.insertAll(insertAt, additions);
+      _providerSources = <ProviderEmbedSource>[
+        ..._providerSources,
+        ...additions,
+      ];
     });
   }
 
