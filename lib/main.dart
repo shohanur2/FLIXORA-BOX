@@ -4149,7 +4149,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _profileTile(Icons.tune, 'Watch Options', _showWatchOptions, trailingText: _preferredQuality),
           _settingSwitch(title: 'Family Mode', subtitle: 'Helps keep the catalogue suitable for family viewing.', value: _familyMode, onChanged: (v) => _saveBoolSetting('flixora_family_mode', v, (x) => _familyMode = x)),
           _settingSwitch(title: 'Download in background', subtitle: 'Keep download tasks active while you use other screens.', value: _downloadInBackground, onChanged: (v) => _saveBoolSetting('flixora_download_background', v, (x) => _downloadInBackground = x)),
-          _settingSwitch(title: 'Auto activate Miniplayer', subtitle: 'Miniplayer behavior will be connected when the player feature is extended.', value: _autoMiniPlayer, onChanged: (v) => _saveBoolSetting('flixora_auto_miniplayer', v, (x) => _autoMiniPlayer = x)),
+          _settingSwitch(title: 'Auto activate Picture-in-Picture', subtitle: 'Automatically enter Android picture-in-picture when you leave FLIXORA during video playback.', value: _autoMiniPlayer, onChanged: (v) => _saveBoolSetting('flixora_auto_miniplayer', v, (x) => _autoMiniPlayer = x)),
           _profileTile(Icons.privacy_tip_outlined, 'Privacy Settings', () => _showSettingsInfo('Privacy Settings', 'Your watch history, saved list and app preferences are currently stored on this device. Account sync and privacy controls will be expanded with the visitor account backend.')),
         ]),
         const SizedBox(height: 20),
