@@ -56,6 +56,52 @@ jobs:
           cd rust/flixora_core
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../android/app/src/main/jniLibs build --release
 
+      - name: Build SparkBoxCore MovieBox/WeFeed client
+        env:
+          SPARKBOX_CORE_REV: f4bc3c561a3eb723bf9c466159e04aae98f45d3c
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -n "$ANDROID_NDK_HOME"
+
+          git init /tmp/SparkBoxCore
+          git -C /tmp/SparkBoxCore remote add origin https://github.com/devfahim00/SparkBoxCore.git
+          git -C /tmp/SparkBoxCore fetch --depth 1 origin "$SPARKBOX_CORE_REV"
+          git -C /tmp/SparkBoxCore checkout --detach FETCH_HEAD
+
+          # Keep the upstream core's guest-client region aligned with FLIXORA's
+          # Bangladesh audience while retaining its built-in H5 fallback.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
+          content = source.read_text()
+          old_import = "use sparkbox_core::{CoreError, MediaItem, MovieBoxClient, StreamKind};"
+          new_import = "use sparkbox_core::{Config, CoreError, MediaItem, MovieBoxClient, StreamKind};"
+          old_client = "CLIENT.get_or_init(MovieBoxClient::new)"
+          new_client = """CLIENT.get_or_init(|| {
+                  let mut config = Config::default();
+                  config.region = "BD".to_string();
+                  config.timezone = "Asia/Dhaka".to_string();
+                  MovieBoxClient::with_config(config)
+              })"""
+          if old_import not in content or old_client not in content:
+              raise SystemExit("SparkBoxCore source changed; review the Bangladesh config patch.")
+          content = content.replace(old_import, new_import, 1)
+          content = content.replace(old_client, new_client, 1)
+          source.write_text(content)
+          PY
+
+          cd /tmp/SparkBoxCore
+          cargo test --workspace --locked
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o "$GITHUB_WORKSPACE/android/app/src/main/jniLibs" \
+            build --release -p sparkbox-ffi --locked
+
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a/libsparkbox_ffi.so"
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/armeabi-v7a/libsparkbox_ffi.so"
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/x86_64/libsparkbox_ffi.so"
+
       - name: Check environment
         run: |
           flutter --version
