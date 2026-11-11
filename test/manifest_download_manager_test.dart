@@ -50,7 +50,7 @@ segment-2.ts
   });
 
   group('ManifestDownloadManager DASH support', () {
-    const staticDash = '''
+    const staticDash = r'''
 <?xml version="1.0" encoding="UTF-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
      type="static" mediaPresentationDuration="PT10S">
