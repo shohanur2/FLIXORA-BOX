@@ -2104,7 +2104,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...hollywoodMovies,
       ...southIndianMovies,
       ...indianDramaTv,
-      ..._movieBoxSections.expand((section) => section.items),
     ];
 
     return _deduplicateMovies(combined);
