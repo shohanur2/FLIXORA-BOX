@@ -1,0 +1,18 @@
+name: Hosted Runner Diagnostic
+
+on:
+  push:
+    branches:
+      - feature/play4u-tv-series-provider
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runner-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Confirm hosted runner
+        run: echo "GitHub-hosted runner is available."
