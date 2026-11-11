@@ -537,36 +537,69 @@ class FlixoraCachedImage extends StatelessWidget {
 }
 
 class InternetService {
-  static Future<bool> isOnline() async {
+  static bool? _cachedOnline;
+  static DateTime? _lastCheck;
+  static Future<bool>? _checkInFlight;
+  static const Duration _cacheDuration = Duration(seconds: 10);
+
+  static void invalidateCache() {
+    _cachedOnline = null;
+    _lastCheck = null;
+  }
+
+  static Future<bool> isOnline({bool forceRefresh = false}) async {
+    final checkedAt = _lastCheck;
+    if (!forceRefresh &&
+        _cachedOnline != null &&
+        checkedAt != null &&
+        DateTime.now().difference(checkedAt) < _cacheDuration) {
+      return _cachedOnline!;
+    }
+
+    final pending = _checkInFlight;
+    if (pending != null) return pending;
+
+    final request = _performCheck();
+    _checkInFlight = request;
+    try {
+      final online = await request;
+      _cachedOnline = online;
+      _lastCheck = DateTime.now();
+      return online;
+    } finally {
+      if (identical(_checkInFlight, request)) _checkInFlight = null;
+    }
+  }
+
+  static Future<bool> _performCheck() async {
     try {
       final connectivity = await Connectivity().checkConnectivity();
       if (connectivity.contains(ConnectivityResult.none)) return false;
 
-      // Test real Internet reachability, not just Wi-Fi/mobile connectivity.
+      // Probe both reachability endpoints together. A slow first endpoint
+      // must not hold up every movie tap while the second is already online.
       final endpoints = <Uri>[
         Uri.parse('https://www.google.com/generate_204'),
         Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
       ];
-
-      for (final endpoint in endpoints) {
-        try {
-          final response = await http
-              .get(endpoint)
-              .timeout(const Duration(seconds: 4));
-          if (response.statusCode == 204 || response.statusCode == 200) {
-            return true;
+      final results = await Future.wait<bool>(
+        endpoints.map((endpoint) async {
+          try {
+            final response = await http
+                .get(endpoint)
+                .timeout(const Duration(seconds: 2));
+            return response.statusCode == 204 || response.statusCode == 200;
+          } catch (_) {
+            return false;
           }
-        } catch (_) {
-          // Try the fallback endpoint.
-        }
-      }
-      return false;
+        }),
+      );
+      return results.any((reachable) => reachable);
     } catch (_) {
       return false;
     }
   }
 }
-
 class MovieCache {
   static const String trendingKey = 'flixora_trending';
   static const String popularKey = 'flixora_popular';
@@ -1410,6 +1443,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> searchResults = [];
   List<MovieBoxHomeSection> _movieBoxSections = [];
   final Map<String, Movie> _movieBoxMatchCache = {};
+  final Set<String> _downloadPreparationKeys = <String>{};
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -1499,32 +1533,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// trending endpoint temporarily returns an empty response. Admin records
   /// stay first so they retain precedence over matching TMDB catalogue items.
   List<Movie> _homeTrendingMovies() {
-    final primary = _withoutFlixoraDuplicates(trending)
+    final primaryMovies = _withoutFlixoraDuplicates(trending)
         .where((title) => title.mediaType == 'movie')
+        .toList();
+    final primaryTv = _withoutFlixoraDuplicates(trendingTv)
+        .where((title) => title.mediaType == 'tv')
         .toList();
     final movieBoxBanners = _movieBoxSections
         .where((section) =>
             section.isBanner ||
             section.title.toLowerCase().contains('trending'))
         .expand((section) => section.items)
-        .where((title) => title.mediaType == 'movie')
         .toList();
+
+    // Admin-published entries stay first, followed by MovieBox banner titles,
+    // then TMDB trending movies and series. This keeps one synchronized hero
+    // carousel for both movies and TV/anime titles.
     final candidates = <Movie>[
-      ...flixoraMovies.where((title) => title.mediaType == 'movie'),
+      ...flixoraMovies.where(
+        (title) => title.mediaType == 'movie' || title.mediaType == 'tv',
+      ),
       ...movieBoxBanners,
-      ...primary,
+      ...primaryMovies,
+      ...primaryTv,
     ];
 
-    if (primary.length < 5) {
+    if (candidates.length < 8) {
       candidates.addAll(_withoutFlixoraDuplicates(popular)
           .where((title) => title.mediaType == 'movie'));
       candidates.addAll(_withoutFlixoraDuplicates(latest)
           .where((title) => title.mediaType == 'movie'));
       candidates.addAll(_withoutFlixoraDuplicates(topRated)
           .where((title) => title.mediaType == 'movie'));
+      candidates.addAll(_withoutFlixoraDuplicates(popularTv)
+          .where((title) => title.mediaType == 'tv'));
+      candidates.addAll(_withoutFlixoraDuplicates(topRatedTv)
+          .where((title) => title.mediaType == 'tv'));
     }
 
-    return _deduplicateMovies(candidates);
+    return _deduplicateMovies(candidates)
+        .where((title) =>
+            title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
+        .toList(growable: false);
   }
 
   bool _isAnimeTitle(Movie title) {
@@ -1604,8 +1654,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return;
         }
 
-        final slideCount = _homeTrendingMovies().length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
+        final visibleCount = _homeTrendingMovies().length;
 
         if (visibleCount == 0) return;
 
@@ -1818,6 +1867,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen(
       (results) async {
+        InternetService.invalidateCache();
         final hasNetwork = !results.contains(ConnectivityResult.none);
 
         if (!hasNetwork) {
@@ -2075,8 +2125,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           homeError = null;
         }
 
-        final slideCount = _homeTrendingMovies().length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
+        final visibleCount = _homeTrendingMovies().length;
 
         if (visibleCount == 0) {
           _slide = 0;
@@ -2291,17 +2340,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required int episode,
   }) async {
     final rawItem = movie.toMovieBoxMap();
-    Map<String, dynamic> playItem = rawItem;
-    try {
-      final rich = await MovieBoxService.detail(rawItem);
-      if (rich['item'] is Map) {
-        playItem = Map<String, dynamic>.from(rich['item'] as Map);
-      }
-    } catch (error) {
-      debugPrint('MovieBox download details unavailable; using catalogue item: $error');
-    }
-
-    final detail = await MovieBoxService.playDetail(playItem);
+    // The player resolves streams from this same catalogue payload; avoid an
+    // extra rich-details request on the download button's critical path.
+    final detail = await MovieBoxService.playDetail(rawItem);
     final response = await MovieBoxService.streams(
       detail,
       season: season,
@@ -2336,6 +2377,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     int? seasonNumber,
     int? episodeNumber,
   }) async {
+    final preparationKey =
+        '${movie.source}:${movie.id}:${seasonNumber ?? 0}:${episodeNumber ?? 0}';
+    if (!_downloadPreparationKeys.add(preparationKey)) return;
+
+    // Give instant tap feedback while source lookup runs in the background.
+    _showMessage('Preparing download options...');
+    try {
+      await _prepareDownload(
+        movie,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+      );
+    } finally {
+      _downloadPreparationKeys.remove(preparationKey);
+    }
+  }
+
+  Future<void> _prepareDownload(
+    Movie movie, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
     final hasInternet = await InternetService.isOnline();
     if (!hasInternet) {
       if (mounted) {
@@ -2352,7 +2415,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     var resolvedSeason = seasonNumber ?? 0;
     var resolvedEpisode = episodeNumber ?? 0;
-    if (movie.isMovieBox && movie.movieBoxIsSeries) {
+    if (movie.isMovieBox &&
+        movie.movieBoxIsSeries &&
+        (resolvedSeason <= 0 || resolvedEpisode <= 0)) {
       try {
         final seasons = await MovieBoxService.seasons(movie.movieBoxId);
         if (seasons.isEmpty) {
@@ -2422,19 +2487,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final options = await Future.wait(rawOptions.map((item) async {
-      final size = await DownloadManager.getRemoteFileSize(
-        item['video_url']!,
-        headers: _decodeDownloadHeaders(item['headers']),
-      );
-      return <String, String>{
-        ...item,
-        'size_bytes': size?.toString() ?? '',
-        'size_label': size == null
-            ? 'File size unavailable'
-            : DownloadManager.formatBytes(size),
-      };
-    }));
+    // Do not issue one or more HEAD/Range requests before showing the
+    // quality picker. The downloader reads Content-Length from the actual
+    // transfer response, so the size can be detected without delaying the tap.
+    final options = rawOptions
+        .map((item) => <String, String>{
+              ...item,
+              'size_bytes': '',
+              'size_label': 'Detected when download starts',
+            })
+        .toList(growable: false);
 
     if (!mounted) return;
     final selected = await showModalBottomSheet<Map<String, String>>(
@@ -3025,6 +3087,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       final selectedMovie = resolvedMovie;
+      if (selectedMovie.isMovieBox) {
+        unawaited(MovieBoxService.prewarm(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ));
+      }
       final isFavourite = _favourites.contains(selectedMovie.id) ||
           _favourites.contains(movie.id);
       final isSaved = _saved.contains(selectedMovie.id) ||
@@ -3157,6 +3225,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!_online) setState(() => _online = true);
+    if (selectedMovie.isMovieBox) {
+      unawaited(MovieBoxService.prewarm(
+        selectedMovie.toMovieBoxMap(),
+        isSeries: selectedMovie.movieBoxIsSeries,
+      ));
+    }
     _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
@@ -3493,7 +3567,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _featuredSlider() {
-    final slides = _homeTrendingMovies().take(5).toList(growable: false);
+    final slides = _homeTrendingMovies().toList(growable: false);
 
     if (slides.isEmpty) {
       return const SizedBox(height: 12);
@@ -3543,9 +3617,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 final heroImageUrl = hasLandscapeBackdrop
                     ? movie.backdropUrl
                     : movie.posterUrl;
-                final heroImageFit = hasLandscapeBackdrop
-                    ? BoxFit.cover
-                    : BoxFit.contain;
+                // Keep every hero frame full-bleed and the same 16:9 size.
+                // Poster-only titles now fill the frame instead of shrinking
+                // into a small letterboxed image.
+                const heroImageFit = BoxFit.cover;
                 return GestureDetector(
                   onTap: _isOpeningTitle ? null : () => _playMovie(movie),
                   child: Stack(
@@ -3914,7 +3989,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _syncFeaturedCarouselAfterDataChange() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final visibleCount = _homeTrendingMovies().take(5).length;
+      final visibleCount = _homeTrendingMovies().length;
       if (visibleCount == 0) {
         if (_sliderController.hasClients) _sliderController.jumpToPage(0);
         if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
@@ -4660,7 +4735,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         children: [
           _homeTopCategories(),
-          _featuredSlider(),
+          RepaintBoundary(child: _featuredSlider()),
           _ottHomeSection(),
           if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
           _sectionBlock('Trending Movies', _homeTrendingMovies()),
@@ -7147,7 +7222,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 dailymotionUrl: widget.movie.videoUrl,
                 adminVideoUrl: widget.movie.videoUrl,
               );
-    _movieDetailsFuture = _loadPlayerMovieDetails();
+    _movieDetailsFuture = widget.movie.isMovieBox
+        ? Future<Map<String, dynamic>>.value(const <String, dynamic>{})
+        : _loadPlayerMovieDetails();
     _player = Player(
       configuration: PlayerConfiguration(
         title: 'FLIXORA',
