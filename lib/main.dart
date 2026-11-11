@@ -5153,6 +5153,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _currentPage() {
     if (_showRanking) return _rankingContent();
+    if (_searchOpen) {
+      return _search.isEmpty
+          ? _searchLandingContent()
+          : _searchContent();
+    }
     if (_search.isNotEmpty) return _searchContent();
 
     switch (_tab) {
@@ -5200,6 +5205,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 2:
         return _libraryContent();
       case 3:
+        return _downloadsContent();
+      case 4:
         return _profileSection == null
             ? _profileContent()
             : _profileSectionContent();
@@ -5216,6 +5223,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           FocusScope.of(context).unfocus();
           setState(() {
             _search = '';
+            _searchOpen = false;
+            _searchCategory = 'All';
             _showRanking = false;
             _searchController.clear();
             _searchLoading = false;
@@ -5242,8 +5251,96 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
-    if (_tab == 3) return _profileSection ?? 'CineProfile';
+    if (_tab == 3) return 'Downloads';
+    if (_tab == 4) return _profileSection ?? 'CineProfile';
     return 'FLIXORA';
+  }
+
+  Widget _searchField() {
+    return Row(
+      children: [
+        Expanded(
+          child: Container(
+            height: 46,
+            decoration: BoxDecoration(
+              color: const Color(0xFF3B3C40),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: TextField(
+              controller: _searchController,
+              focusNode: _searchFocusNode,
+              readOnly: !_searchOpen,
+              autofocus: _searchOpen,
+              onTap: _openSearch,
+              onChanged: _onSearchChanged,
+              onSubmitted: (value) {
+                FocusScope.of(context).unfocus();
+                searchMovies(value);
+              },
+              style: const TextStyle(color: white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Search movies, series & anime...',
+                hintStyle: const TextStyle(
+                  color: ink70,
+                  fontSize: 13,
+                ),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: white,
+                  size: 22,
+                ),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _searchController.clear();
+                          _onSearchChanged('');
+                          if (_searchOpen) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) _searchFocusNode.requestFocus();
+                            });
+                          }
+                        },
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: ink70,
+                          size: 18,
+                        ),
+                      ),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 13,
+                  horizontal: 8,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 3),
+        TextButton(
+          onPressed: () {
+            if (!_searchOpen) {
+              _openSearch();
+              return;
+            }
+            FocusScope.of(context).unfocus();
+            _onSearchChanged(_searchController.text);
+          },
+          style: TextButton.styleFrom(
+            foregroundColor: gold,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+          ),
+          child: const Text(
+            'Search',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -5251,100 +5348,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Scaffold(
       extendBodyBehindAppBar: _tab == 0 && _search.isEmpty && !_showRanking,
       appBar: AppBar(
-        backgroundColor: _tab == 0 && _search.isEmpty && !_showRanking ? Colors.transparent : bg,
-        systemOverlayStyle: SystemUiOverlayStyle(
+        backgroundColor: _tab == 0 && !_searchOpen && _search.isEmpty && !_showRanking
+            ? Colors.transparent
+            : bg,
+        systemOverlayStyle: const SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
           statusBarBrightness: Brightness.dark,
         ),
-        elevation: 0, scrolledUnderElevation: 0, surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
         centerTitle: _showRanking,
-        toolbarHeight: _showRanking ? kToolbarHeight : (_tab == 0 ? 62 : kToolbarHeight),
-        titleSpacing: _tab == 0 && !_showRanking ? 8 : 16,
-        leading: _showRanking ? IconButton(onPressed: () => setState(() => _showRanking = false), icon: const Icon(Icons.arrow_back)) : (_tab == 3 && _profileSection != null ? IconButton(onPressed: () => setState(() => _profileSection = null), icon: const Icon(Icons.arrow_back)) : null),
-        title: _showRanking ? const Text('Ranking', style: TextStyle(color: white, fontWeight: FontWeight.w700)) : _tab == 0
-            ? Row(
-                children: [
-                  Image.asset(
-                    'assets/images/flixora_logo.png',
-                    width: 39,
-                    height: 39,
-                    fit: BoxFit.contain,
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Container(
-                      height: 46,
-                      decoration: BoxDecoration(
-                        color: Colors.transparent,
-                        borderRadius: BorderRadius.circular(11),
-                        border: Border.all(color: white.withValues(alpha: 0.24)),
-                      ),
-                      child: TextField(
-                        controller: _searchController,
-                        onChanged: _onSearchChanged,
-                        onSubmitted: _onSearchChanged,
-                        style: const TextStyle(color: white, fontSize: 14),
-                        decoration: InputDecoration(
-                          hintText: 'Search movies & series...',
-                          hintStyle: const TextStyle(
-                            color: ink54,
-                            fontSize: 13,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            color: ink70,
-                            size: 21,
-                          ),
-                          suffixIcon: _searchController.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  onPressed: () {
-                                    _searchController.clear();
-                                    _onSearchChanged('');
-                                  },
-                                  icon: const Icon(
-                                    Icons.close,
-                                    color: ink54,
-                                    size: 18,
-                                  ),
-                                ),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            vertical: 13,
-                            horizontal: 8,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      FocusScope.of(context).unfocus();
-                      _onSearchChanged(_searchController.text);
-                    },
-                    style: TextButton.styleFrom(
-                      foregroundColor: gold,
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
-                    ),
-                    child: const Text(
-                      'Search',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ],
+        toolbarHeight: _showRanking
+            ? kToolbarHeight
+            : (_tab == 0 ? 62 : kToolbarHeight),
+        titleSpacing: _searchOpen ? 0 : (_tab == 0 && !_showRanking ? 8 : 16),
+        leadingWidth: _searchOpen ? 48 : null,
+        leading: _showRanking
+            ? IconButton(
+                onPressed: () => setState(() => _showRanking = false),
+                icon: const Icon(Icons.arrow_back),
               )
-            : Text(
-                _pageTitle(),
-                style: const TextStyle(
-                  color: gold,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
+            : _searchOpen
+                ? IconButton(
+                    tooltip: 'Back',
+                    onPressed: _closeSearch,
+                    icon: const Icon(Icons.arrow_back_rounded),
+                  )
+                : (_tab == 4 && _profileSection != null
+                    ? IconButton(
+                        onPressed: () => setState(() => _profileSection = null),
+                        icon: const Icon(Icons.arrow_back),
+                      )
+                    : null),
+        title: _showRanking
+            ? const Text(
+                'Ranking',
+                style: TextStyle(color: white, fontWeight: FontWeight.w700),
+              )
+            : _tab == 0
+                ? (_searchOpen
+                    ? _searchField()
+                    : Row(
+                        children: [
+                          Image.asset(
+                            'assets/images/flixora_logo.png',
+                            width: 39,
+                            height: 39,
+                            fit: BoxFit.contain,
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(child: _searchField()),
+                        ],
+                      ))
+                : Text(
+                    _pageTitle(),
+                    style: const TextStyle(
+                      color: gold,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
         actions: _tab == 0 || _showRanking
             ? const []
             : [
@@ -5371,21 +5436,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
-        color: panel,
+        decoration: const BoxDecoration(
+          color: Color(0xFF202126),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          border: Border(top: BorderSide(color: ink10, width: 0.5)),
+        ),
         child: SafeArea(
           top: false,
           maintainBottomViewPadding: true,
-          child: Container(
-            height: 56,
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: ink10, width: 0.5)),
-            ),
+          child: SizedBox(
+            height: 60,
             child: Row(
               children: [
-                _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
-                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
-                _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                _bottomNavItem(0, Icons.home_outlined, Icons.home_rounded, 'Home'),
+                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv_rounded, 'OTT'),
+                _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library_rounded, 'Library'),
+                _bottomNavItem(3, Icons.download_outlined, Icons.download_rounded, 'Downloads'),
+                _bottomNavItem(4, Icons.person_outline, Icons.person_rounded, 'Me'),
               ],
             ),
           ),
