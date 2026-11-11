@@ -1952,7 +1952,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return _allMoviesMemo = _deduplicateMovies(combined);
   }
 
-  void _openSearch() {
+  Future<void> _openSearch() async {
     if (_searchOpen) {
       _searchFocusNode.requestFocus();
       return;
