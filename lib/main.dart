@@ -5762,6 +5762,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     required int episode,
     bool selectProvider = false,
   }) async {
+    if (!_playerIsOnline) return;
     final requestToken = ++_publicSourceRequestToken;
     final peerTubeFuture = PeerTubeSourceService.discover(
       widget.movie.title,
