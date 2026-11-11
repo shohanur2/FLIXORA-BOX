@@ -435,8 +435,8 @@ class ProviderCatalog {
     return null;
   }
 
-  /// Play4U may host its player in a separate HTTPS frame; other providers
-  /// remain restricted to their own and explicitly approved player hosts.
+  /// Play4U and VidRift may host their players in separate HTTPS frames.
+  /// Other Admin embeds remain restricted to explicit host allowlists.
   /// Local/private targets and insecure schemes are always rejected.
   static bool allowsSubframeNavigation(
     ProviderEmbedSource source,
@@ -450,10 +450,9 @@ class ProviderCatalog {
 
     final host = uri.host.toLowerCase();
 
-    // The reference player embeds Play4U as a page, and that page owns its
-    // nested video-player frames. Those frames can use separate HTTPS hosts.
-    // Allow secure public hosts for Play4U only; keep local/private targets
-    // and insecure schemes blocked, and retain strict allowlists elsewhere.
+    // Play4U owns nested player frames and VidRift relays its media player
+    // through third-party hosts. Allow secure public hosts for these two
+    // sources only; local/private targets and insecure schemes stay blocked.
     if (source.id == 'play4u' ||
         source.id == 'play4u-tv' ||
         source.id.startsWith('vidrift-')) {
