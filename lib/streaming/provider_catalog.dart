@@ -323,9 +323,12 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uMovieUrl(imdbId),
         allowedHosts: const <String>{'play4u.org'},
-        // Match FLIXORA-REFERENCE: render Play4U's official embed-mode
-        // page in a full-size iframe with playback/fullscreen permissions.
-        loadInIframe: true,
+        // Keep the exact FLIXORA-REFERENCE embed URL, but load the
+        // provider page directly in Android WebView. A second wrapper iframe
+        // can leave Play4U's video surface black on some Android WebView builds.
+        // The provider's own nested player frames remain allowed by the
+        // Play4U-specific secure subframe navigation policy.
+        loadInIframe: false,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID (tt...). Choose another available stream for this title.'
             : null,
@@ -433,9 +436,10 @@ class ProviderCatalog {
         name: 'STREAM 1 · Play4U',
         url: _play4uTvUrl(imdbId, season, episode),
         allowedHosts: const <String>{'play4u.org'},
-        // Match the reference Player's full-size iframe for the exact
-        // selected /series/{IMDb_ID}/s-XX/ep-XX?cont=1 route.
-        loadInIframe: true,
+        // Load the exact reference episode route directly in Android
+        // WebView instead of wrapping it in a second iframe; Play4U creates
+        // and controls its own nested player frames.
+        loadInIframe: false,
         unavailableReason: _validatedPlay4uImdbId(imdbId) == null
             ? 'Play4U requires a valid IMDb title ID for this series episode. Choose another available stream.'
             : null,
