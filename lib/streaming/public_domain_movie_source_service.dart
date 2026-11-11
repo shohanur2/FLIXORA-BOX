@@ -160,15 +160,21 @@ class PublicDomainMovieSourceService {
         .replaceAll(RegExp(r'<[^>]*>'), ' ')
         .toLowerCase();
     final restrictiveRights = rights.contains('not public domain') ||
+        rights.contains('not in the public domain') ||
+        rights.contains('not in public domain') ||
         rights.contains('all rights reserved') ||
         rights.contains('copyright') ||
         rights.contains('permission required');
     if (restrictiveRights) return false;
-    return license.contains('publicdomain/mark/1.0') ||
+
+    final approvedLicense = license.contains('publicdomain/mark/1.0') ||
         license.contains('publicdomain/zero/1.0') ||
-        license.contains('cc0') ||
-        rights.contains('public domain') ||
-        rights.contains('cc0');
+        license.contains('cc0');
+    // When an item supplies a licence URL, it must itself be an approved
+    // public-domain/CC0 declaration. A conflicting rights sentence cannot
+    // override a restrictive or unrelated licence URL.
+    if (license.isNotEmpty) return approvedLicense;
+    return rights.contains('public domain') || rights.contains('cc0');
   }
 
   /// Private files and non-video archives are never presented as playable.
