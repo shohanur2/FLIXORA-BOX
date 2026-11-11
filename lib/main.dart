@@ -2032,7 +2032,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           movie.year,
           ...movie.genres,
         ].join(' ').toLowerCase();
-        return terms.every(searchable.contains);
+        return terms.every((term) => searchable.contains(term));
       }).toList();
       final offlineResults = _deduplicateMovies([
         ...cachedQueryResults,
