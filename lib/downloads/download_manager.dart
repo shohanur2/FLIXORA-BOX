@@ -267,6 +267,19 @@ class DownloadManager {
       }
 
       var offset = await partialFile.exists() ? await partialFile.length() : 0;
+      if (task.totalBytes > 0 && offset >= task.totalBytes && offset > 0) {
+        await partialFile.rename(task.filePath!);
+        task
+          ..status = 'Completed'
+          ..progress = 1
+          ..bytesReceived = offset
+          ..totalBytes = offset
+          ..partialPath = null
+          ..errorMessage = null;
+        await onComplete(task.filePath!);
+        onStateChanged?.call();
+        return;
+      }
       task
         ..status = 'Downloading'
         ..errorMessage = null
@@ -341,6 +354,7 @@ class DownloadManager {
       await sink.flush();
       await sink.close();
       sink = null;
+      if (token.isCancelled) throw StateError('Download interrupted.');
 
       if (task.totalBytes > 0 && received < task.totalBytes) {
         throw StateError('The download ended before the full video arrived.');
@@ -358,6 +372,13 @@ class DownloadManager {
       await onComplete(task.filePath!);
       onStateChanged?.call();
     } on DioException catch (error) {
+      if (sink != null) {
+        try {
+          await sink.flush();
+          await sink.close();
+        } catch (_) {}
+        sink = null;
+      }
       if (_pauseRequests.remove(task.taskId) || token.isCancelled &&
           !_cancelRequests.contains(task.taskId)) {
         task
@@ -380,6 +401,13 @@ class DownloadManager {
         onStateChanged?.call();
       }
     } catch (error) {
+      if (sink != null) {
+        try {
+          await sink.flush();
+          await sink.close();
+        } catch (_) {}
+        sink = null;
+      }
       if (_pauseRequests.remove(task.taskId) ||
           token.isCancelled && !_cancelRequests.contains(task.taskId)) {
         task
