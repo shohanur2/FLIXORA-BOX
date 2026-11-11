@@ -6955,7 +6955,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() => _errorMessage = value);
+      setState(() => _errorMessage = MediaDiagnostics.friendlyError(value));
       if (value.trim().isNotEmpty &&
           !_isOpening &&
           widget.localFilePath == null &&
@@ -7035,8 +7035,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (!mounted || _isDisposed) return;
 
       setState(() {
-        _errorMessage =
-            'Unable to play this video. Please check the video link and try again.';
+        _errorMessage = MediaDiagnostics.friendlyError(e);
       });
       if (widget.localFilePath == null && _playerIsOnline) {
         unawaited(_selectDefaultProviderIfNeeded(force: true));
