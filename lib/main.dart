@@ -3017,9 +3017,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     isOnline: _online,
                                     fit: BoxFit.cover,
                                     memCacheWidth:
-                                        FeaturedCarouselLayout.posterWidth * 3,
+                                        (FeaturedCarouselLayout.posterWidth * 3).round(),
                                     memCacheHeight:
-                                        FeaturedCarouselLayout.posterHeight * 3,
+                                        (FeaturedCarouselLayout.posterHeight * 3).round(),
                                     placeholder: Container(
                                       color: const Color(0xFF292929),
                                     ),
