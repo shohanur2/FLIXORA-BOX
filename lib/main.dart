@@ -13,7 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
@@ -82,8 +82,9 @@ const Color playerWhite = Colors.white;
 
 // Keep loaded posters/backdrops available for offline browsing for longer
 // than the package's small default cache.
-final CacheManager flixoraImageCacheManager = CacheManager(
-  Config(
+final cache_manager.CacheManager flixoraImageCacheManager =
+    cache_manager.CacheManager(
+  cache_manager.Config(
     'flixoraImageCache',
     stalePeriod: const Duration(days: 90),
     maxNrOfCacheObjects: 600,
@@ -373,7 +374,7 @@ class FlixoraCachedImage extends StatelessWidget {
       );
     }
 
-    return FutureBuilder<FileInfo?>(
+    return FutureBuilder<cache_manager.FileInfo?>(
       future: flixoraImageCacheManager.getFileFromCache(imageUrl),
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
