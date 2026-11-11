@@ -61,6 +61,11 @@ class AuthorizedProviderService {
             season: season,
             episode: episode,
           )),
+      _safe(() => _discoverInternetArchive(
+            query,
+            year: year,
+            isTv: isTv,
+          )),
     ]);
 
     final seen = <String>{};
@@ -659,6 +664,206 @@ class AuthorizedProviderService {
       }
     }
     return output;
+  }
+
+  /// Internet Archive is included only for items whose own metadata
+  /// explicitly identifies Public Domain or CC0 rights and contains a
+  /// supported video file. It is a public-domain catalogue source, not a
+  /// general-purpose mirror for copyrighted commercial releases.
+  static Future<List<ProviderEmbedSource>> _discoverInternetArchive(
+    String title, {
+    String? year,
+    required bool isTv,
+  }) async {
+    if (isTv) return const <ProviderEmbedSource>[];
+
+    final escapedTitle = title.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+    final searchQuery = 'mediatype:movies AND title:"$escapedTitle"';
+    final searchUri = Uri.parse(
+      'https://archive.org/advancedsearch.php'
+      '?q=${Uri.encodeQueryComponent(searchQuery)}'
+      '&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=year'
+      '&rows=8&page=1&output=json',
+    );
+
+    final searchJson = jsonDecode((await _get(searchUri)).body);
+    if (searchJson is! Map) return const <ProviderEmbedSource>[];
+    final response = searchJson['response'];
+    if (response is! Map || response['docs'] is! List) {
+      return const <ProviderEmbedSource>[];
+    }
+
+    final matches = (response['docs'] as List)
+        .whereType<Map>()
+        .where((item) => _matchesTitle(
+              _archiveText(item['title']),
+              title,
+              candidateYear: _yearFrom(item['year']),
+              requestedYear: year,
+            ))
+        .take(6)
+        .toList(growable: false);
+
+    final verified = await Future.wait<ProviderEmbedSource?>(
+      matches.map((item) async {
+        final identifier = _archiveText(item['identifier']).trim();
+        if (!RegExp(r'^[A-Za-z0-9_-]{2,80}
+    final match = RegExp(r'S(\d{1,2})\s*E(\d{1,3})', caseSensitive: false)
+        .firstMatch(value);
+    if (match == null) return null;
+    final season = int.tryParse(match.group(1) ?? '');
+    final episode = int.tryParse(match.group(2) ?? '');
+    if (season == null || episode == null) return null;
+    return season * 1000 + episode;
+  }
+
+  static String? _languageFromTitle(String value) {
+    final lower = value.toLowerCase();
+    const languages = <String, String>{
+      'hindi': 'Hindi',
+      'english': 'English',
+      'bengali': 'Bengali',
+      'bangla': 'Bengali',
+      'tamil': 'Tamil',
+      'telugu': 'Telugu',
+      'korean': 'Korean',
+      'japanese': 'Japanese',
+      'chinese': 'Chinese',
+      'dual audio': 'Dual Audio',
+      'multi audio': 'Multi Audio',
+    };
+    for (final entry in languages.entries) {
+      if (lower.contains(entry.key)) return entry.value;
+    }
+    return null;
+  }
+}
+).hasMatch(identifier)) {
+          return null;
+        }
+        try {
+          final metadataUri = Uri.https(
+            'archive.org',
+            '/metadata/$identifier',
+          );
+          final itemJson = jsonDecode(
+            (await _get(
+              metadataUri,
+              timeout: const Duration(seconds: 8),
+            )).body,
+          );
+          if (itemJson is! Map || itemJson['metadata'] is! Map) return null;
+
+          final metadata = Map<dynamic, dynamic>.from(
+            itemJson['metadata'] as Map,
+          );
+          if (_archiveText(metadata['mediatype']).toLowerCase() != 'movies' ||
+              !isPublicDomainOrCc0(metadata) ||
+              !hasSupportedVideoFile(itemJson['files'])) {
+            return null;
+          }
+
+          final itemTitle = _archiveText(metadata['title']);
+          if (!_matchesTitle(
+            itemTitle,
+            title,
+            candidateYear: _yearFrom(metadata['year']),
+            requestedYear: year,
+          )) {
+            return null;
+          }
+
+          final licenseText = (
+            _archiveText(metadata['licenseurl']) + ' ' +
+            _archiveText(metadata['rights'])
+          ).toLowerCase();
+          final isCc0 = licenseText.contains('publicdomain/zero/1.0') ||
+              RegExp(r'\\bcc0\\b').hasMatch(licenseText);
+
+          return ProviderEmbedSource(
+            id: 'internet-archive-$identifier',
+            name: isCc0
+                ? 'Internet Archive · CC0'
+                : 'Internet Archive · Public Domain',
+            url: Uri.https('archive.org', '/embed/$identifier').toString(),
+            allowedHosts: const <String>{'archive.org'},
+            loadInIframe: true,
+            languageLabel: _archiveText(metadata['language']).isEmpty
+                ? null
+                : _archiveText(metadata['language']),
+          );
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+
+    return verified
+        .whereType<ProviderEmbedSource>()
+        .take(3)
+        .toList(growable: false);
+  }
+
+  static String _archiveText(dynamic value) {
+    if (value is List) {
+      return value.map((item) => item?.toString() ?? '').join(' ');
+    }
+    return (value ?? '').toString();
+  }
+
+  /// True only for explicit Public Domain Mark, CC0, or a rights statement
+  /// that clearly declares the item to be public domain.
+  static bool isPublicDomainOrCc0(Map<dynamic, dynamic> metadata) {
+    final license = _archiveText(metadata['licenseurl']).toLowerCase();
+    final rights = _archiveText(metadata['rights'])
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .toLowerCase();
+    return license.contains('publicdomain/mark/1.0') ||
+        license.contains('publicdomain/zero/1.0') ||
+        RegExp(r'\\bcc0\\b').hasMatch(license) ||
+        RegExp(r'\\bpublic[\\s-]+domain\\b').hasMatch(rights) ||
+        RegExp(r'\\bcc0\\b').hasMatch(rights);
+  }
+
+  /// Only items with a browser-playable video file are offered as a source.
+  static bool hasSupportedVideoFile(dynamic rawFiles) {
+    if (rawFiles is! List) return false;
+    return rawFiles.whereType<Map>().any((file) {
+      final name = _archiveText(file['name']).toLowerCase();
+      final isPrivate = _archiveText(file['private']).toLowerCase() == 'true';
+      return !isPrivate && RegExp(r'\\.(mp4|m4v|ogv|webm)
+    final match = RegExp(r'S(\d{1,2})\s*E(\d{1,3})', caseSensitive: false)
+        .firstMatch(value);
+    if (match == null) return null;
+    final season = int.tryParse(match.group(1) ?? '');
+    final episode = int.tryParse(match.group(2) ?? '');
+    if (season == null || episode == null) return null;
+    return season * 1000 + episode;
+  }
+
+  static String? _languageFromTitle(String value) {
+    final lower = value.toLowerCase();
+    const languages = <String, String>{
+      'hindi': 'Hindi',
+      'english': 'English',
+      'bengali': 'Bengali',
+      'bangla': 'Bengali',
+      'tamil': 'Tamil',
+      'telugu': 'Telugu',
+      'korean': 'Korean',
+      'japanese': 'Japanese',
+      'chinese': 'Chinese',
+      'dual audio': 'Dual Audio',
+      'multi audio': 'Multi Audio',
+    };
+    for (final entry in languages.entries) {
+      if (lower.contains(entry.key)) return entry.value;
+    }
+    return null;
+  }
+}
+).hasMatch(name);
+    });
   }
 
   static int? _seasonEpisode(String value) {
