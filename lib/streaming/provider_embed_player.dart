@@ -116,14 +116,17 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
           onWebResourceError: (error) {
             if (!mounted || _disposed) return;
             if (error.isForMainFrame == false) {
+              // Nested ad/telemetry frames can fail independently of the
+              // actual player. Only a failure on the provider's own approved
+              // frame should mark the selected stream as unavailable.
               final failedUri = Uri.tryParse(error.url ?? '');
               if (failedUri != null &&
-                  ProviderCatalog.allowsSubframeNavigation(
+                  ProviderCatalog.allowsNavigation(
                     widget.source,
                     failedUri,
                   )) {
                 _reportProviderFailure(
-                  'The embedded video frame could not load. Trying another available stream.',
+                  'The provider embed frame could not load. Trying another available stream.',
                 );
               }
               return;
@@ -217,9 +220,9 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
 
       _startLoadTimeout();
       if (widget.source.loadInIframe) {
-        // VidRift documents iframe embedding as its supported integration.
-        // Keep it inside FLIXORA's WebView so its full player controls and
-        // episode navigation work without opening an external browser.
+        // FLIXORA-REFERENCE renders Play4U and VidRift as full-size
+        // iframes. Keep the provider's own player controls and episode
+        // navigation inside FLIXORA's WebView.
         final html = '''
 <!doctype html>
 <html>
@@ -231,7 +234,7 @@ iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:#000}
 </style>
 </head>
 <body>
-<iframe id="flixora-player-frame" src="${widget.source.url}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+<iframe id="flixora-player-frame" src="${widget.source.url}" title="${widget.source.name}" scrolling="no" allow="autoplay *; fullscreen *; encrypted-media *; picture-in-picture *; clipboard-write *; screen-wake-lock *; web-share *; accelerometer *; gyroscope *" allowfullscreen referrerpolicy="origin-when-cross-origin" loading="eager"></iframe>
 <script>
 const playerFrame = document.getElementById('flixora-player-frame');
 playerFrame.addEventListener('load', function() {
