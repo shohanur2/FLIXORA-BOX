@@ -353,6 +353,7 @@ class FlixoraCachedImage extends StatelessWidget {
     if (isOnline) {
       return CachedNetworkImage(
         imageUrl: imageUrl,
+        cacheManager: DefaultCacheManager(),
         fit: fit,
         memCacheWidth: memCacheWidth,
         memCacheHeight: memCacheHeight,
@@ -387,6 +388,12 @@ class InternetService {
   static DateTime? _lastCheckAt;
   static bool? _lastCheckResult;
   static Future<bool>? _inFlight;
+
+  /// Forces the next connectivity check to verify the live internet path.
+  static void invalidate() {
+    _lastCheckAt = null;
+    _lastCheckResult = null;
+  }
 
   static Future<bool> isOnline() async {
     try {
@@ -1205,6 +1212,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _connectionKnown = false;
   bool _refreshing = false;
   bool _checkingConnection = false;
+  bool _noInternetScreenOpen = false;
   bool _isOpeningTitle = false;
   String? _openingTitleKey;
 
@@ -1608,6 +1616,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
 
         if (online && wasOffline) {
+          _dismissNoInternetScreen();
           await loadHome();
 
           if (_search.trim().isNotEmpty) {
@@ -1640,6 +1649,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (online && wasOffline) {
+        _dismissNoInternetScreen();
         await Future.wait<void>([loadHome(), _loadOttProviders()]);
         if (_search.trim().isNotEmpty) {
           searchMovies(_search);
@@ -1867,7 +1877,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return _deduplicateMovies(combined);
   }
 
-  void _openSearch() {
+  Future<void> _openSearch() async {
     if (_searchOpen) return;
     FocusScope.of(context).unfocus();
     setState(() {
@@ -1881,6 +1891,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = false;
       _searchController.clear();
     });
+
+    final online = await InternetService.isOnline();
+    if (!mounted) return;
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+    if (!online) {
+      _showNoInternetScreen();
+      return;
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _searchFocusNode.requestFocus();
     });
@@ -1973,15 +1995,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _online = false;
         _connectionKnown = true;
-      });
-      final cached = await MovieCache.getSearch(text);
-      if (!mounted) return;
-      setState(() {
         _search = text;
-        searchResults = cached;
+        searchResults = [];
         _searchLoading = false;
-        _searchError = cached.isEmpty ? 'Check your internet connection' : null;
+        _searchError = null;
       });
+      _showNoInternetScreen();
       return;
     }
 
@@ -2462,12 +2481,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _showNoInternetScreen() {
-    if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const NoInternetScreen(),
-      ),
-    );
+    if (!mounted || _noInternetScreenOpen) return;
+    _noInternetScreenOpen = true;
+
+    var cachedBackdrop = '';
+    for (final movie in _allMovies()) {
+      if (movie.backdropUrl.isNotEmpty) {
+        cachedBackdrop = movie.backdropUrl;
+        break;
+      }
+    }
+
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => NoInternetScreen(
+              backdropUrl: cachedBackdrop,
+              onRetry: _retryInternetConnection,
+            ),
+          ),
+        )
+        .whenComplete(() {
+          _noInternetScreenOpen = false;
+        });
+  }
+
+  void _dismissNoInternetScreen() {
+    if (!mounted || !_noInternetScreenOpen) return;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) navigator.pop();
+  }
+
+  Future<bool> _retryInternetConnection() async {
+    InternetService.invalidate();
+    final online = await InternetService.isOnline();
+    if (!mounted) return false;
+
+    setState(() {
+      _online = online;
+      _connectionKnown = true;
+    });
+    if (!online) return false;
+
+    _dismissNoInternetScreen();
+    await Future.wait<void>([loadHome(), _loadOttProviders()]);
+    final query = _search.trim();
+    if (query.isNotEmpty) {
+      await searchMovies(query);
+    }
+    return true;
   }
 
   Future<void> _openMovie(Movie movie) async {
@@ -2603,11 +2665,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (!selectedMovie.canAttemptPlayback) {
-      _showMessage('This title has no supported FLIXORA playback source.');
-      return;
-    }
-
+    // A completed local download is handled above and remains available
+    // offline. Every network/provider stream requires a live connection.
     final hasInternet = await InternetService.isOnline();
     if (!mounted) return;
     if (!hasInternet) {
@@ -2620,6 +2679,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!_online) setState(() => _online = true);
+
+    if (!selectedMovie.canAttemptPlayback) {
+      _showMessage('This title has no supported FLIXORA playback source.');
+      return;
+    }
     _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
@@ -3734,8 +3798,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _searchForTitle(String title) {
-    if (!_searchOpen) _openSearch();
+  Future<void> _searchForTitle(String title) async {
+    if (!_searchOpen) await _openSearch();
+    if (!mounted || !_online) return;
     _searchController.text = title;
     _searchController.selection = TextSelection.collapsed(
       offset: title.length,
