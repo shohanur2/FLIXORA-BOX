@@ -20,7 +20,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/featured_carousel_layout.dart';
 import 'streaming/tmdb_media_type.dart';
-import 'streaming/ott_catalog_service.dart';
 import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
@@ -1388,15 +1387,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   int _slide = 0;
   int _tab = 0;
-  String _ottRegion = 'BD';
-  String _ottMediaFilter = 'All';
-  List<OttProvider> _ottProviders = [];
-  OttProvider? _selectedOttProvider;
-  List<Movie> _ottProviderTitles = [];
-  bool _ottProvidersLoading = false;
-  bool _ottTitlesLoading = false;
-  String? _ottProvidersError;
-  String? _ottTitlesError;
   String _librarySection = 'Downloads';
   bool _showRanking = false;
   bool _searchOpen = false;
@@ -1493,6 +1483,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
     }).toList(growable: false);
     return _deduplicateMovies([...adminMatches, ...section.items]);
+  }
+
+  bool _isFlixoraOriginalSection(MovieBoxHomeSection section) {
+    final normalizedTitle = section.title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return normalizedTitle.contains('flixora original');
   }
 
   List<Movie> _deduplicateMovies(List<Movie> movies) {
@@ -1697,7 +1695,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
 
     if (online) {
-      await Future.wait<void>([loadHome(), _loadOttProviders()]);
+      await loadHome();
     } else {
       setState(() {
         loading = false;
@@ -1831,7 +1829,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
-    final cachedMovieBoxSections = await MovieCache.getMovieBoxSections();
+    final cachedMovieBoxSections = (await MovieCache.getMovieBoxSections())
+        .where((section) => !_isFlixoraOriginalSection(section))
+        .toList(growable: false);
     if (!mounted) return;
 
     setState(() {
@@ -1919,7 +1919,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (online && wasOffline) {
-        await Future.wait<void>([loadHome(), _loadOttProviders()]);
+        await loadHome();
         if (_search.trim().isNotEmpty) {
           searchMovies(_search);
         }
@@ -1956,7 +1956,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .timeout(const Duration(seconds: 15));
       final sections = rawSections
           .map(MovieBoxHomeSection.fromApi)
-          .where((section) => section.items.isNotEmpty)
+          .where((section) =>
+              section.items.isNotEmpty && !_isFlixoraOriginalSection(section))
           .toList(growable: false);
       if (!mounted) return;
       setState(() => _movieBoxSections = sections);
@@ -4743,7 +4744,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
-          _ottHomeSection(),
           _sectionBlock('Trending Movies', _homeTrendingMovies()),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._movieBoxSections.expand((section) => section.items)
@@ -4753,7 +4753,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ])),
           ..._movieBoxSections
               .where((section) => !section.isBanner &&
-                  !section.title.toLowerCase().contains('trending'))
+                  !section.title.toLowerCase().contains('trending') &&
+                  !_isFlixoraOriginalSection(section))
               .map((section) => _sectionBlock(
                     section.title,
                     _movieBoxSectionItems(section),
@@ -4990,484 +4991,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-
-  Future<void> _loadOttProviders() async {
-    if (apiKey.isEmpty || !_online) return;
-    if (mounted) {
-      setState(() {
-        _ottProvidersLoading = true;
-        _ottProvidersError = null;
-      });
-    }
-    try {
-      final providers = await OttCatalogService.getProviders(apiKey: apiKey);
-      if (!mounted) return;
-      final selectedId = _selectedOttProvider?.id;
-      setState(() {
-        _ottProviders = providers;
-        _ottProvidersLoading = false;
-        if (selectedId != null) {
-          _selectedOttProvider = providers.cast<OttProvider?>().firstWhere(
-            (provider) => provider?.id == selectedId,
-            orElse: () => null,
-          );
-        }
-      });
-      if (_selectedOttProvider != null) {
-        await _loadOttProviderTitles(_selectedOttProvider!);
-      }
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _ottProvidersLoading = false;
-        _ottProvidersError = 'Could not load streaming platforms. Please retry.';
-      });
-      debugPrint('OTT provider catalogue error: $error');
-    }
-  }
-
-  Future<void> _loadOttProviderTitles(OttProvider provider) async {
-    if (!_online || apiKey.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _ottTitlesError = 'Connect to the internet to browse this platform.';
-          _ottProviderTitles = [];
-        });
-      }
-      return;
-    }
-    final requestedRegion = _ottRegion;
-    final requestedFilter = _ottMediaFilter;
-    setState(() {
-      _selectedOttProvider = provider;
-      _ottTitlesLoading = true;
-      _ottTitlesError = null;
-      _ottProviderTitles = [];
-    });
-    try {
-      final rows = await OttCatalogService.getProviderTitles(
-        apiKey: apiKey,
-        providerId: provider.id,
-        region: requestedRegion,
-        mediaFilter: requestedFilter == 'Movies' || requestedFilter == 'TV Series'
-            ? requestedFilter
-            : 'All',
-      );
-      final titles = rows.map((row) {
-        final mediaType = (row['media_type'] ?? 'movie').toString();
-        final catalogueMovie = Movie.fromJson(row, mediaType: mediaType);
-        for (final adminTitle in flixoraMovies) {
-          if (adminTitle.tmdbId > 0 &&
-              adminTitle.tmdbId == catalogueMovie.tmdbId &&
-              adminTitle.mediaType == mediaType) {
-            return adminTitle.withFallbackMetadata(catalogueMovie);
-          }
-        }
-        return catalogueMovie;
-      }).toList();
-      if (!mounted ||
-          _selectedOttProvider?.id != provider.id ||
-          _ottRegion != requestedRegion ||
-          _ottMediaFilter != requestedFilter) return;
-      setState(() {
-        _ottProviderTitles = _deduplicateMovies(titles);
-        _ottTitlesLoading = false;
-      });
-    } catch (error) {
-      if (!mounted ||
-          _selectedOttProvider?.id != provider.id ||
-          _ottRegion != requestedRegion ||
-          _ottMediaFilter != requestedFilter) return;
-      setState(() {
-        _ottTitlesLoading = false;
-        _ottTitlesError = 'Could not load titles for ${provider.name}.';
-      });
-      debugPrint('OTT title discovery error: $error');
-    }
-  }
-
-  void _changeOttRegion(String? region) {
-    if (region == null || region == _ottRegion) return;
-    setState(() => _ottRegion = region);
-    final provider = _selectedOttProvider;
-    if (provider != null) unawaited(_loadOttProviderTitles(provider));
-  }
-
-  void _changeOttMediaFilter(String filter) {
-    if (_ottMediaFilter == filter) return;
-    setState(() => _ottMediaFilter = filter);
-    final provider = _selectedOttProvider;
-    if (provider != null) unawaited(_loadOttProviderTitles(provider));
-  }
-
-  void _openOttProvider(OttProvider provider) {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _tab = 1;
-      _search = '';
-      _searchController.clear();
-      _showRanking = false;
-      _ottMediaFilter = 'All';
-      _selectedOttProvider = provider;
-    });
-    unawaited(_loadOttProviderTitles(provider));
-  }
-
-  Widget _ottProviderLogo(OttProvider provider, {double size = 58}) {
-    return Container(
-      width: size,
-      height: size,
-      padding: const EdgeInsets.all(9),
-      decoration: BoxDecoration(
-        color: const Color(0xFF202020),
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: ink12),
-      ),
-      child: provider.logoUrl.isEmpty
-          ? const Icon(Icons.live_tv_rounded, color: gold, size: 25)
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(9),
-              child: Image.network(
-                provider.logoUrl,
-                fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Icon(
-                  Icons.live_tv_rounded,
-                  color: gold,
-                  size: 25,
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _ottHomeSection() {
-    if (_ottProviders.isEmpty && !_ottProvidersLoading) {
-      return const SizedBox.shrink();
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 12, 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Stream on OTT',
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: () => setState(() {
-                  _tab = 1;
-                  _search = '';
-                  _searchController.clear();
-                }),
-                child: const Text(
-                  'Explore all',
-                  style: TextStyle(color: gold, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (_ottProvidersLoading && _ottProviders.isEmpty)
-          const SizedBox(
-            height: 78,
-            child: Center(
-              child: CircularProgressIndicator(color: gold, strokeWidth: 2),
-            ),
-          )
-        else
-          SizedBox(
-            height: 104,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              scrollDirection: Axis.horizontal,
-              itemCount: _ottProviders.take(18).length,
-              separatorBuilder: (_, __) => const SizedBox(width: 13),
-              itemBuilder: (context, index) {
-                final provider = _ottProviders[index];
-                return GestureDetector(
-                  onTap: () => _openOttProvider(provider),
-                  child: SizedBox(
-                    width: 68,
-                    child: Column(
-                      children: [
-                        _ottProviderLogo(provider, size: 60),
-                        const SizedBox(height: 5),
-                        Text(
-                          provider.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: ink70,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
-    );
-  }
-
-  List<Movie> _filteredOttProviderTitles() {
-    final titles = _ottProviderTitles;
-    switch (_ottMediaFilter) {
-      case 'Movies':
-        return titles.where((movie) => movie.mediaType == 'movie').toList();
-      case 'TV Series':
-        return titles.where((movie) => movie.mediaType == 'tv').toList();
-      case 'Anime':
-        return titles.where((title) {
-          final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
-          return genres.contains('anime') ||
-              (genres.contains('animation') &&
-                  (title.originalLanguage.toLowerCase() == 'ja' ||
-                      title.originCountry.toUpperCase() == 'JP'));
-        }).toList();
-      case 'Drama':
-        return titles.where((movie) => movie.genres.any(
-          (genre) => genre.toLowerCase() == 'drama',
-        )).toList();
-      case 'Documentary':
-        return titles.where((movie) => movie.genres.any(
-          (genre) => genre.toLowerCase() == 'documentary',
-        )).toList();
-      default:
-        return titles;
-    }
-  }
-
-  Widget _ottContent() {
-    const mediaFilters = [
-      'All', 'Movies', 'TV Series', 'Anime', 'Drama', 'Documentary',
-    ];
-    final selectedProvider = _selectedOttProvider;
-    final titles = _filteredOttProviderTitles();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Explore streaming platforms',
-                  style: TextStyle(color: ink60, fontSize: 13),
-                ),
-              ),
-              const Text('Region', style: TextStyle(color: ink54, fontSize: 11)),
-              const SizedBox(width: 7),
-              DropdownButton<String>(
-                value: _ottRegion,
-                dropdownColor: panel,
-                underline: const SizedBox.shrink(),
-                style: const TextStyle(
-                  color: white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-                items: const [
-                  DropdownMenuItem(value: 'BD', child: Text('🇧🇩 BD')),
-                  DropdownMenuItem(value: 'IN', child: Text('🇮🇳 IN')),
-                  DropdownMenuItem(value: 'US', child: Text('🇺🇸 US')),
-                  DropdownMenuItem(value: 'GB', child: Text('🇬🇧 UK')),
-                  DropdownMenuItem(value: 'CA', child: Text('🇨🇦 CA')),
-                  DropdownMenuItem(value: 'AU', child: Text('🇦🇺 AU')),
-                ],
-                onChanged: _changeOttRegion,
-              ),
-            ],
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            'Platform logos show catalogue availability for the selected region. Playback and audio tracks depend on the video source available in FLIXORA.',
-            style: TextStyle(color: ink54, fontSize: 10, height: 1.35),
-          ),
-        ),
-        SizedBox(
-          height: 106,
-          child: _ottProvidersLoading && _ottProviders.isEmpty
-              ? const Center(child: CircularProgressIndicator(color: gold))
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _ottProviders.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 13),
-                  itemBuilder: (context, index) {
-                    final provider = _ottProviders[index];
-                    final selected = selectedProvider?.id == provider.id;
-                    return GestureDetector(
-                      onTap: () => _loadOttProviderTitles(provider),
-                      child: SizedBox(
-                        width: 70,
-                        child: Column(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(19),
-                                border: Border.all(
-                                  color: selected ? gold : Colors.transparent,
-                                  width: 2,
-                                ),
-                              ),
-                              child: _ottProviderLogo(provider, size: 58),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              provider.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: selected ? gold : ink70,
-                                fontSize: 10,
-                                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-        ),
-        if (_ottProvidersError != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-            child: Text(
-              _ottProvidersError!,
-              style: const TextStyle(color: ink60, fontSize: 12),
-            ),
-          ),
-        if (selectedProvider == null)
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.touch_app_rounded, color: gold, size: 36),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Choose a platform to explore its catalogue',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: ink70, fontSize: 13),
-                  ),
-                  if (_ottProvidersError != null)
-                    TextButton(
-                      onPressed: _loadOttProviders,
-                      child: const Text('Retry'),
-                    ),
-                ],
-              ),
-            ),
-          )
-        else ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 5),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    selectedProvider.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                Text(
-                  _ottRegion,
-                  style: const TextStyle(color: gold, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(
-            height: 42,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-              scrollDirection: Axis.horizontal,
-              itemCount: mediaFilters.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 7),
-              itemBuilder: (context, index) {
-                final filter = mediaFilters[index];
-                final selected = _ottMediaFilter == filter;
-                return ChoiceChip(
-                  label: Text(filter),
-                  selected: selected,
-                  onSelected: (_) => _changeOttMediaFilter(filter),
-                  selectedColor: gold,
-                  backgroundColor: panel,
-                  side: BorderSide(color: selected ? gold : ink24),
-                  labelStyle: TextStyle(
-                    color: selected ? white : ink70,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                );
-              },
-            ),
-          ),
-          Expanded(
-            child: _ottTitlesLoading
-                ? const Center(child: CircularProgressIndicator(color: gold))
-                : _ottTitlesError != null
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _ottTitlesError!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: ink60),
-                            ),
-                            TextButton(
-                              onPressed: () => _loadOttProviderTitles(selectedProvider),
-                              child: const Text('Try again'),
-                            ),
-                          ],
-                        ),
-                      )
-                    : titles.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(22),
-                              child: Text(
-                                'No ${_ottMediaFilter.toLowerCase()} titles found for ${selectedProvider.name} in $_ottRegion. Try another region or category.',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: ink54, height: 1.4),
-                              ),
-                            ),
-                          )
-                        : _collectionContent(
-                            selectedProvider.name + ' · ' + _ottMediaFilter,
-                            titles,
-                          ),
-          ),
-        ],
-      ],
-    );
-  }
 
   Widget _libraryContent() {
     const sections = ['Downloads', 'My List', 'Favourites', 'History'];
@@ -6227,8 +5750,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         return _homeContent();
 
-      case 1:
-        return _ottContent();
       case 2:
         return _libraryContent();
       case 3:
@@ -6274,7 +5795,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
-    if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
     if (_tab == 4) return 'Free Movies';
@@ -6380,7 +5900,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
               ],
