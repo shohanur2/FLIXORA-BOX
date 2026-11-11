@@ -20,6 +20,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/anilist_service.dart';
+import 'streaming/media_diagnostics.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
@@ -426,7 +427,12 @@ class MovieCache {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         downloadsKey,
-        jsonEncode(tasks.where((task) => task.status == 'Completed' && task.filePath != null).map((task) => task.toJson()).toList()),
+        jsonEncode(
+          tasks
+              .where((task) => task.status != 'Cancelled')
+              .map((task) => task.toJson())
+              .toList(),
+        ),
       );
     } catch (_) {}
   }
@@ -439,21 +445,40 @@ class MovieCache {
       final decoded = jsonDecode(raw) as List;
       final tasks = decoded
           .whereType<Map>()
-          .map(
-            (item) => DownloadTask.fromJson(
-              Map<String, dynamic>.from(item),
-            ),
-          )
+          .map((item) => DownloadTask.fromJson(
+                Map<String, dynamic>.from(item),
+              ))
           .toList();
       final valid = <DownloadTask>[];
       for (final task in tasks) {
-        if (task.status == 'Completed' &&
-            task.filePath != null &&
-            await File(task.filePath!).exists()) {
+        if (task.status == 'Completed') {
+          if (task.filePath != null && await File(task.filePath!).exists()) {
+            valid.add(task);
+          }
+          continue;
+        }
+
+        final partial = task.partialFilePath;
+        if (partial != null && await File(partial).exists()) {
+          final length = await File(partial).length();
+          task
+            ..bytesReceived = length
+            ..progress = task.totalBytes > 0
+                ? (length / task.totalBytes).clamp(0.0, 1.0)
+                : 0
+            ..status = 'Paused'
+            ..errorMessage = null;
+          valid.add(task);
+        } else if (task.videoUrl.isNotEmpty) {
+          // A task interrupted before its first byte can safely restart.
+          task
+            ..status = 'Paused'
+            ..bytesReceived = 0
+            ..progress = 0;
           valid.add(task);
         }
       }
-      // Remove stale records whose local video file no longer exists.
+
       await prefs.setString(
         downloadsKey,
         jsonEncode(valid.map((task) => task.toJson()).toList()),
@@ -884,6 +909,7 @@ class FlixoraMovieService {
 
 class DownloadTask {
   final int movieId;
+  int downloadId;
   final String title;
   final String poster;
   final String videoUrl;
@@ -893,10 +919,12 @@ class DownloadTask {
   int totalBytes;
   String status;
   String? filePath;
+  String? partialFilePath;
   String? errorMessage;
 
   DownloadTask({
     required this.movieId,
+    this.downloadId = 0,
     required this.title,
     required this.poster,
     this.videoUrl = '',
@@ -906,11 +934,13 @@ class DownloadTask {
     this.totalBytes = 0,
     this.status = 'Waiting',
     this.filePath,
+    this.partialFilePath,
     this.errorMessage,
   });
 
   Map<String, dynamic> toJson() => {
         'movieId': movieId,
+        'downloadId': downloadId,
         'title': title,
         'poster': poster,
         'videoUrl': videoUrl,
@@ -920,26 +950,38 @@ class DownloadTask {
         'totalBytes': totalBytes,
         'status': status,
         'filePath': filePath,
+        'partialFilePath': partialFilePath,
         'errorMessage': errorMessage,
       };
 
   factory DownloadTask.fromJson(Map<String, dynamic> json) => DownloadTask(
         movieId: _toInt(json['movieId']),
-        title: (json['title'] ?? 'Downloaded Movie').toString(),
+        downloadId: _toInt(json['downloadId']),
+        title: (json['title'] ?? 'Downloaded Video').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
         quality: (json['quality'] ?? 'Original').toString(),
-        progress: (json['progress'] as num?)?.toDouble() ?? 1,
+        progress: (json['progress'] as num?)?.toDouble() ?? 0,
         bytesReceived: _toInt(json['bytesReceived']),
         totalBytes: _toInt(json['totalBytes']),
-        status: (json['status'] ?? 'Completed').toString(),
+        status: (json['status'] ?? 'Paused').toString(),
         filePath: json['filePath']?.toString(),
+        partialFilePath: json['partialFilePath']?.toString(),
         errorMessage: json['errorMessage']?.toString(),
       );
 }
 
 class DownloadManager {
-  static final Dio _dio = Dio();
+  static final Dio _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 25),
+      receiveTimeout: const Duration(minutes: 10),
+      sendTimeout: const Duration(seconds: 25),
+      followRedirects: true,
+      maxRedirects: 8,
+    ),
+  );
+  static final Map<int, CancelToken> _activeTokens = <int, CancelToken>{};
 
   static String formatBytes(int bytes) {
     if (bytes <= 0) return 'Size unavailable';
@@ -951,6 +993,20 @@ class DownloadManager {
       unit++;
     }
     return '${size.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
+  }
+
+  static String _safeName(String fileName) => fileName
+      .replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
+      .replaceAll(RegExp(r'_+'), '_');
+
+  static Future<String> partialPathFor({
+    required String fileName,
+    required String url,
+    required int uniqueId,
+  }) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final extension = MediaDiagnostics.fileExtension(url);
+    return '${directory.path}/${_safeName(fileName)}_$uniqueId$extension.part';
   }
 
   static Future<int?> getRemoteFileSize(String url) async {
@@ -998,51 +1054,183 @@ class DownloadManager {
     return null;
   }
 
+  static void pause(int uniqueId) {
+    _activeTokens[uniqueId]?.cancel('FLIXORA_PAUSE');
+  }
+
+  static void cancel(int uniqueId) {
+    _activeTokens[uniqueId]?.cancel('FLIXORA_CANCEL');
+  }
+
+  static String _httpErrorMessage(int? statusCode) {
+    switch (statusCode) {
+      case 401:
+      case 403:
+        return 'The video host denied access. This link may have expired or needs authorization.';
+      case 404:
+        return 'The video file was not found on the host.';
+      case 416:
+        return 'The host rejected the resume range. Resume again to restart this file.';
+      case 429:
+        return 'The host is receiving too many requests. Try again later.';
+      default:
+        if (statusCode != null && statusCode >= 500) {
+          return 'The video host is temporarily unavailable. Try again later.';
+        }
+        return 'Download failed because the host did not return a valid video file.';
+    }
+  }
+
   static Future<void> download({
     required String url,
     required String fileName,
     required int uniqueId,
+    String? partialFilePath,
     required void Function(int received, int total) onProgress,
     required Future<void> Function(String path) onComplete,
+    required Future<void> Function(String path, int received, int total) onPaused,
     required void Function(String message) onError,
   }) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        (uri.scheme != 'https' && uri.scheme != 'http')) {
+      onError('Invalid download URL.');
+      return;
+    }
+    if (!MediaDiagnostics.isDirectDownloadable(url)) {
+      onError('This source is not a direct video file. HLS/DASH and provider pages need a separate offline-stream pipeline.');
+      return;
+    }
+
+    final token = CancelToken();
+    _activeTokens[uniqueId] = token;
+    var received = 0;
+    var total = 0;
+    String? partPath;
+
     try {
-      final uri = Uri.tryParse(url);
-      if (uri == null ||
-          (uri.scheme != 'https' && uri.scheme != 'http') ||
-          uri.host.isEmpty) {
-        onError('Invalid download URL.');
-        return;
+      final directory = await getApplicationDocumentsDirectory();
+      final extension = MediaDiagnostics.fileExtension(url);
+      final safeName = _safeName(fileName);
+      final finalPath = '${directory.path}/${safeName}_$uniqueId$extension';
+      partPath = partialFilePath ??
+          await partialPathFor(
+            fileName: fileName,
+            url: url,
+            uniqueId: uniqueId,
+          );
+      final part = File(partPath);
+      await part.parent.create(recursive: true);
+      var offset = await part.exists() ? await part.length() : 0;
+      received = offset;
+
+      final headers = <String, String>{
+        'Accept-Encoding': 'identity',
+        if (offset > 0) 'Range': 'bytes=$offset-',
+      };
+      final response = await _dio.get<ResponseBody>(
+        url,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: headers,
+          validateStatus: (status) =>
+              status == 200 || status == 206 || status == 416,
+        ),
+        cancelToken: token,
+      );
+
+      final contentRange = response.headers.value('content-range') ?? '';
+      if (response.statusCode == 416) {
+        final totalMatch = RegExp(r'/([0-9]+)$').firstMatch(contentRange);
+        final remoteTotal = int.tryParse(totalMatch?.group(1) ?? '');
+        if (offset > 0 && remoteTotal == offset) {
+          if (await File(finalPath).exists()) await File(finalPath).delete();
+          await part.rename(finalPath);
+          await onComplete(finalPath);
+          return;
+        }
+        throw DioException(
+          requestOptions: response.requestOptions,
+          response: response,
+          type: DioExceptionType.badResponse,
+          message: 'Range not satisfiable',
+        );
       }
 
-      final directory = await getApplicationDocumentsDirectory();
-      final safeName = fileName.replaceAll(
-        RegExp(r'[^a-zA-Z0-9_-]'),
-        '_',
-      );
-      final extensionMatch = RegExp(
-        r'\.(mp4|mkv|webm|mov|avi|m4v)$',
-        caseSensitive: false,
-      ).firstMatch(uri.path);
-      final extension = extensionMatch?.group(0) ?? '.mp4';
-      final path = '${directory.path}/${safeName}_$uniqueId$extension';
+      // A server that ignores Range and returns 200 requires a clean restart.
+      if (offset > 0 && response.statusCode == 200) {
+        offset = 0;
+        received = 0;
+      } else if (offset > 0 && response.statusCode == 206) {
+        final rangeStart = RegExp(r'^bytes\s+(\d+)-', caseSensitive: false)
+            .firstMatch(contentRange);
+        if (int.tryParse(rangeStart?.group(1) ?? '') != offset) {
+          throw StateError('The host returned an invalid byte range.');
+        }
+      }
 
-      await _dio.download(
-        url,
-        path,
-        onReceiveProgress: (received, total) {
+      final rangeTotalMatch = RegExp(r'/([0-9]+)$').firstMatch(contentRange);
+      final rangeTotal = int.tryParse(rangeTotalMatch?.group(1) ?? '');
+      final responseLength = int.tryParse(
+            response.headers.value('content-length') ?? '',
+          ) ??
+          0;
+      total = rangeTotal != null && rangeTotal > 0
+          ? rangeTotal
+          : (responseLength > 0 ? offset + responseLength : 0);
+
+      final body = response.data;
+      if (body == null) throw StateError('The host returned an empty response.');
+      final sink = await part.open(
+        mode: offset > 0 ? FileMode.append : FileMode.write,
+      );
+      try {
+        await for (final chunk in body.stream) {
+          await sink.writeFrom(chunk);
+          received += chunk.length;
           onProgress(received, total);
-        },
-      );
-      await onComplete(path);
-    } on DioException catch (e) {
-      onError(
-        e.type == DioExceptionType.cancel
-            ? 'Download cancelled'
-            : 'Download failed. Please try again.',
-      );
-    } catch (_) {
-      onError('Download failed. Please try again.');
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+
+      if (received <= 0) throw StateError('The host returned an empty video file.');
+      if (total > 0 && received < total) {
+        throw StateError('The download ended before all bytes arrived. Resume to continue.');
+      }
+
+      if (await File(finalPath).exists()) await File(finalPath).delete();
+      await part.rename(finalPath);
+      await onComplete(finalPath);
+    } on DioException catch (error) {
+      final reason = token.cancelError?.message ?? '';
+      final partial = partPath;
+      if (token.isCancelled && reason == 'FLIXORA_PAUSE' && partial != null) {
+        await onPaused(partial, received, total);
+      } else if (token.isCancelled) {
+        onError('Download cancelled.');
+      } else {
+        onError(_httpErrorMessage(error.response?.statusCode));
+      }
+    } catch (error) {
+      final reason = token.cancelError?.message ?? '';
+      final partial = partPath;
+      if (token.isCancelled && reason == 'FLIXORA_PAUSE' && partial != null) {
+        await onPaused(partial, received, total);
+      } else if (token.isCancelled) {
+        onError('Download cancelled.');
+      } else if (error.toString().contains('before all bytes')) {
+        onError('Download was interrupted. Tap Resume to continue from the saved bytes.');
+      } else {
+        onError('Could not save this video. Check available storage and try again.');
+      }
+    } finally {
+      if (identical(_activeTokens[uniqueId], token)) {
+        _activeTokens.remove(uniqueId);
+      }
     }
   }
 }
