@@ -430,7 +430,7 @@ class ManifestDownloadManager {
           line.startsWith('#EXT-X-SESSION-KEY:')) {
         final method = RegExp(r'METHOD=([^,]+)')
             .firstMatch(line)?.group(1)?.replaceAll('"', '').trim();
-        if (method != null && method.toUpperCase() != 'NONE') {
+        if (method == null || method.toUpperCase() != 'NONE') {
           throw StateError('Encrypted HLS streams are not available for offline downloads.');
         }
         if (line.startsWith('#EXT-X-SESSION-KEY:')) {
