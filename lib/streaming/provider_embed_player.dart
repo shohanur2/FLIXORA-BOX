@@ -141,8 +141,9 @@ class _ProviderEmbedPlayerState extends State<ProviderEmbedPlayer> {
               return NavigationDecision.prevent;
             }
 
-            // Provider pages may use separate player hosts. Only explicitly
-            // approved HTTPS player hosts are allowed in subframes.
+            // Play4U owns a nested player on separate HTTPS hosts;
+            // ProviderCatalog applies its Play4U-specific secure-frame rule.
+            // Other providers remain on their explicit HTTPS host allowlists.
             if (!request.isMainFrame) {
               return ProviderCatalog.allowsSubframeNavigation(
                 widget.source,
