@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'download_task.dart';
+import 'manifest_download_manager.dart';
 
 class DownloadFileInfo {
   const DownloadFileInfo({
@@ -209,6 +210,51 @@ class DownloadManager {
   static Future<int?> getRemoteFileSize(String url) async =>
       (await inspectRemoteFile(url))?.sizeBytes;
 
+  /// Resolves direct files and finite HLS/DASH manifests into selectable
+  /// download options. Embed pages are deliberately not treated as media.
+  static Future<List<Map<String, String>>> inspectDownloadSources(
+    String rawUrl, {
+    String? qualityLabel,
+  }) async {
+    final manifestOptions = await ManifestDownloadManager.inspect(rawUrl);
+    if (manifestOptions.isNotEmpty) {
+      return manifestOptions.map((option) => option.toMap()).toList();
+    }
+
+    final info = await inspectRemoteFile(rawUrl);
+    if (info == null) return const [];
+    return [
+      <String, String>{
+        'quality': qualityLabel?.trim().isNotEmpty == true
+            ? qualityLabel!.trim()
+            : 'Original',
+        'video_url': rawUrl.trim(),
+        'download_type': 'direct',
+        'size_bytes': info.sizeBytes?.toString() ?? '',
+      },
+    ];
+  }
+
+  static Future<int> getTaskStorageBytes(DownloadTask task) async {
+    final directoryPath = task.downloadDirectory;
+    if (directoryPath != null && directoryPath.isNotEmpty) {
+      final directory = Directory(directoryPath);
+      if (!await directory.exists()) return 0;
+      var total = 0;
+      await for (final entity
+          in directory.list(recursive: true, followLinks: false)) {
+        if (entity is File && !entity.path.endsWith('.part')) {
+          total += await entity.length();
+        }
+      }
+      return total;
+    }
+    final path = task.filePath;
+    if (path == null) return 0;
+    final file = File(path);
+    return await file.exists() ? file.length() : 0;
+  }
+
   static Future<void> download({
     required DownloadTask task,
     required void Function(int received, int total) onProgress,
@@ -216,6 +262,17 @@ class DownloadManager {
     required void Function(String message) onError,
     void Function()? onStateChanged,
   }) async {
+    if (task.downloadType == 'hls' || task.downloadType == 'dash') {
+      await _downloadManifest(
+        task: task,
+        onProgress: onProgress,
+        onComplete: onComplete,
+        onError: onError,
+        onStateChanged: onStateChanged,
+      );
+      return;
+    }
+
     final uri = safeDownloadUri(task.videoUrl);
     if (uri == null) {
       task.status = 'Failed';
@@ -442,6 +499,124 @@ class DownloadManager {
     }
   }
 
+  static Future<void> _downloadManifest({
+    required DownloadTask task,
+    required void Function(int received, int total) onProgress,
+    required Future<void> Function(String path) onComplete,
+    required void Function(String message) onError,
+    void Function()? onStateChanged,
+  }) async {
+    final token = CancelToken();
+    _activeTokens[task.taskId] = token;
+    _pauseRequests.remove(task.taskId);
+    _cancelRequests.remove(task.taskId);
+
+    try {
+      task
+        ..status = 'Downloading'
+        ..errorMessage = null;
+      onStateChanged?.call();
+
+      final path = await ManifestDownloadManager.download(
+        task: task,
+        cancelToken: token,
+        onProgress: () {
+          onProgress(task.bytesReceived, task.totalBytes);
+          onStateChanged?.call();
+        },
+      );
+      if (token.isCancelled) {
+        throw DioException(
+          requestOptions: RequestOptions(path: task.videoUrl),
+          type: DioExceptionType.cancel,
+          message: 'Download interrupted.',
+        );
+      }
+      task
+        ..status = 'Completed'
+        ..progress = 1
+        ..filePath = path
+        ..partialPath = null
+        ..errorMessage = null;
+      await onComplete(path);
+      onStateChanged?.call();
+    } on DioException catch (error) {
+      if (_cancelRequests.remove(task.taskId)) {
+        await _removeTaskPartial(task);
+        task
+          ..status = 'Cancelled'
+          ..progress = 0
+          ..bytesReceived = 0
+          ..totalBytes = 0
+          ..completedSegments = 0
+          ..errorMessage = null
+          ..filePath = null;
+        onStateChanged?.call();
+      } else if (_pauseRequests.remove(task.taskId) || token.isCancelled) {
+        task
+          ..status = 'Paused'
+          ..errorMessage = null;
+        onStateChanged?.call();
+      } else {
+        task
+          ..status = 'Failed'
+          ..errorMessage = _friendlyError(error);
+        onError(task.errorMessage!);
+        onStateChanged?.call();
+      }
+    } catch (error) {
+      if (_cancelRequests.remove(task.taskId)) {
+        await _removeTaskPartial(task);
+        task
+          ..status = 'Cancelled'
+          ..progress = 0
+          ..bytesReceived = 0
+          ..totalBytes = 0
+          ..completedSegments = 0
+          ..errorMessage = null
+          ..filePath = null;
+        onStateChanged?.call();
+      } else if (_pauseRequests.remove(task.taskId) || token.isCancelled) {
+        task
+          ..status = 'Paused'
+          ..errorMessage = null;
+        onStateChanged?.call();
+      } else {
+        task
+          ..status = 'Failed'
+          ..errorMessage = error is StateError
+              ? error.message
+              : 'Manifest download failed. Please try again.';
+        onError(task.errorMessage!);
+        onStateChanged?.call();
+      }
+    } finally {
+      _activeTokens.remove(task.taskId);
+      _pauseRequests.remove(task.taskId);
+      _cancelRequests.remove(task.taskId);
+    }
+  }
+
+  static Future<void> _removeTaskPartial(DownloadTask task) async {
+    await _deletePath(task.downloadDirectory);
+    await _deletePath(task.partialPath);
+    task
+      ..downloadDirectory = null
+      ..partialPath = null;
+  }
+
+  static Future<void> _deletePath(String? path) async {
+    if (path == null || path.isEmpty) return;
+    try {
+      final type = await FileSystemEntity.type(path, followLinks: false);
+      if (type == FileSystemEntityType.directory) {
+        await Directory(path).delete(recursive: true);
+      } else if (type == FileSystemEntityType.file) {
+        await File(path).delete();
+      }
+    } catch (_) {}
+  }
+
   static String _friendlyError(DioException error) {
     if (error.response?.statusCode == 403) {
       return 'The video link expired or access was denied. Refresh the source and try again.';
@@ -470,10 +645,10 @@ class DownloadManager {
       token.cancel('cancel');
       return;
     }
-    final partial = task.partialPath;
-    if (partial != null) await _removePartial(File(partial));
+    await _removeTaskPartial(task);
     task
       ..status = 'Cancelled'
+      ..filePath = null
       ..progress = 0
       ..bytesReceived = 0
       ..errorMessage = null;
@@ -487,12 +662,12 @@ class DownloadManager {
   }
 
   static Future<void> deleteTaskFiles(DownloadTask task) async {
-    for (final path in <String?>[task.filePath, task.partialPath]) {
-      if (path == null || path.isEmpty) continue;
-      try {
-        final file = File(path);
-        if (await file.exists()) await file.delete();
-      } catch (_) {}
-    }
+    await _deletePath(task.downloadDirectory);
+    await _deletePath(task.filePath);
+    await _deletePath(task.partialPath);
+    task
+      ..downloadDirectory = null
+      ..filePath = null
+      ..partialPath = null;
   }
 }
