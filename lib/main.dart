@@ -2164,18 +2164,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _toggleFavourite(Movie movie) async {
-    setState(() {
-      if (_favourites.contains(movie.id)) {
-        _favourites.remove(movie.id);
-      } else {
-        _favourites.add(movie.id);
-      }
-    });
-
-    await MovieCache.saveFavourites(_favourites);
-  }
-
   Future<void> _toggleSaved(Movie movie) async {
     setState(() {
       if (_saved.contains(movie.id)) {
@@ -2660,48 +2648,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return true;
   }
 
-  Future<void> _openMovie(Movie movie) async {
-    if (!_beginTitleOpening(movie)) return;
-    try {
-      if (!await _ensureInternetForPlayback()) return;
-
-      final resolvedMovie = await _resolveMovieForOpening(movie);
-      if (!mounted) return;
-
-      if (resolvedMovie == null) {
-        _showMessage('This title is currently unavailable.');
-        return;
-      }
-
-      final selectedMovie = resolvedMovie;
-      final isFavourite = _favourites.contains(selectedMovie.id) ||
-          _favourites.contains(movie.id);
-      final isSaved = _saved.contains(selectedMovie.id) ||
-          _saved.contains(movie.id);
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => MovieDetailsScreen(
-            movie: selectedMovie,
-            isOnline: _online,
-            isFavourite: isFavourite,
-            isSaved: isSaved,
-            onShare: () => Share.share(
-              '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
-            ),
-            onFavourite: () => _toggleFavourite(selectedMovie),
-            onSave: () => _toggleSaved(selectedMovie),
-            onDownload: () => addDownload(selectedMovie),
-            onWatch: () => _playResolvedMovie(selectedMovie, movie),
-          ),
-        ),
-      );
-    } finally {
-      _endTitleOpening();
-    }
-  }
-
   Future<void> _playMovieFromPlayer(Movie movie) async {
     await _playMovie(movie, closeCurrentPlayer: true);
   }
@@ -2757,19 +2703,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       await _openResolvedPlayer(selectedMovie, movie);
-    } finally {
-      _endTitleOpening();
-    }
-  }
-
-  Future<void> _playResolvedMovie(
-    Movie selectedMovie,
-    Movie requestedMovie,
-  ) async {
-    if (!_beginTitleOpening(selectedMovie)) return;
-    try {
-      if (!await _ensureInternetForPlayback()) return;
-      await _openResolvedPlayer(selectedMovie, requestedMovie);
     } finally {
       _endTitleOpening();
     }
@@ -4319,7 +4252,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             movie: movie,
             localFilePath: task.filePath,
             recommendedMovies: _allMovies(),
-            onMovieSelected: _openMovie,
+            onMovieSelected: _playMovieFromPlayer,
             isOnline: _online,
           )));
       },
