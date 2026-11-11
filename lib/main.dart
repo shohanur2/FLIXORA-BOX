@@ -836,8 +836,7 @@ class FlixoraMovieService {
           final quality = (item['quality'] ?? '').toString().trim();
           final url = (item['video_url'] ?? '').toString().trim();
           if (quality.isEmpty || !_isHttpUrl(url)) continue;
-          final path = Uri.parse(url).path.toLowerCase();
-          if (path.endsWith('.m3u8') || path.endsWith('.mpd')) continue;
+          if (!MediaDiagnostics.isDirectDownloadable(url)) continue;
           options.add({'quality': quality, 'video_url': url});
         }
       } catch (e) {
@@ -846,8 +845,7 @@ class FlixoraMovieService {
     }
 
     if (options.isEmpty && _isHttpUrl(movie.downloadUrl)) {
-      final path = Uri.parse(movie.downloadUrl).path.toLowerCase();
-      if (!path.endsWith('.m3u8') && !path.endsWith('.mpd')) {
+      if (MediaDiagnostics.isDirectDownloadable(movie.downloadUrl)) {
         options.add({
           'quality': 'Original',
           'video_url': movie.downloadUrl.trim(),
@@ -2233,30 +2231,66 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final expectedBytes = int.tryParse(selected['size_bytes'] ?? '') ?? 0;
     final quality = selected['quality'] ?? 'Original';
+    final downloadId = DateTime.now().microsecondsSinceEpoch;
+    final fileName = '${movie.title}_$quality';
+    final partialPath = await DownloadManager.partialPathFor(
+      fileName: fileName,
+      url: selectedUrl,
+      uniqueId: downloadId,
+    );
+    if (!mounted) return;
+
     final task = DownloadTask(
       movieId: movie.id,
+      downloadId: downloadId,
       title: movie.title,
       poster: movie.posterUrl,
       videoUrl: selectedUrl,
       quality: quality,
       totalBytes: expectedBytes,
-      status: 'Downloading',
+      partialFilePath: partialPath,
+      status: 'Paused',
     );
 
     setState(() => _downloads.insert(0, task));
+    await MovieCache.saveDownloads(_downloads);
+    await _runDownloadTask(task);
+  }
+
+  Future<void> _runDownloadTask(DownloadTask task) async {
+    if (task.status == 'Completed' || task.videoUrl.trim().isEmpty) return;
+    if (task.downloadId <= 0) {
+      task.downloadId = DateTime.now().microsecondsSinceEpoch;
+    }
+    final partialPath = task.partialFilePath ??
+        await DownloadManager.partialPathFor(
+          fileName: '${task.title}_${task.quality}',
+          url: task.videoUrl,
+          uniqueId: task.downloadId,
+        );
+    task.partialFilePath = partialPath;
+    if (!mounted) return;
+
+    setState(() {
+      task
+        ..status = 'Downloading'
+        ..errorMessage = null;
+    });
+    await MovieCache.saveDownloads(_downloads);
 
     await DownloadManager.download(
-      url: selectedUrl,
-      fileName: '${movie.title}_$quality',
-      uniqueId: DateTime.now().millisecondsSinceEpoch,
+      url: task.videoUrl,
+      fileName: '${task.title}_${task.quality}',
+      uniqueId: task.downloadId,
+      partialFilePath: partialPath,
       onProgress: (received, total) {
         if (!mounted) return;
         setState(() {
           task.bytesReceived = received;
           if (total > 0) task.totalBytes = total;
-          if (task.totalBytes > 0) {
-            task.progress = (received / task.totalBytes).clamp(0.0, 1.0);
-          }
+          task.progress = task.totalBytes > 0
+              ? (received / task.totalBytes).clamp(0.0, 1.0)
+              : 0;
         });
       },
       onComplete: (path) async {
@@ -2269,10 +2303,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..totalBytes = fileSize
             ..status = 'Completed'
             ..filePath = path
+            ..partialFilePath = null
             ..errorMessage = null;
         });
         await MovieCache.saveDownloads(_downloads);
-        _showMessage('Successfully downloaded ${movie.title}.');
+        _showMessage('Successfully downloaded ${task.title}.');
+      },
+      onPaused: (path, received, total) async {
+        if (!mounted) return;
+        setState(() {
+          task
+            ..status = 'Paused'
+            ..partialFilePath = path
+            ..bytesReceived = received
+            ..totalBytes = total > 0 ? total : task.totalBytes
+            ..progress = task.totalBytes > 0
+                ? (received / task.totalBytes).clamp(0.0, 1.0)
+                : 0;
+        });
+        await MovieCache.saveDownloads(_downloads);
+        _showMessage('Download paused. You can resume it later.');
       },
       onError: (message) {
         if (!mounted) return;
@@ -2281,9 +2331,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..status = 'Failed'
             ..errorMessage = message;
         });
+        unawaited(MovieCache.saveDownloads(_downloads));
         _showMessage(message);
       },
     );
+  }
+
+  void _pauseDownload(DownloadTask task) {
+    if (task.status == 'Downloading') {
+      DownloadManager.pause(task.downloadId);
+    }
+  }
+
+  Future<void> _resumeDownload(DownloadTask task) async {
+    if (task.status == 'Completed' || task.videoUrl.trim().isEmpty) return;
+    await _runDownloadTask(task);
   }
 
   Future<void> _deleteDownload(DownloadTask task) async {
@@ -2300,9 +2362,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (confirmed != true) return;
-    if (task.filePath != null) {
+    if (task.status == 'Downloading') {
+      DownloadManager.cancel(task.downloadId);
+      await Future.delayed(const Duration(milliseconds: 250));
+    }
+    for (final path in <String?>[task.filePath, task.partialFilePath]) {
+      if (path == null) continue;
       try {
-        final file = File(task.filePath!);
+        final file = File(path);
         if (await file.exists()) await file.delete();
       } catch (_) {
         _showMessage('Could not delete downloaded file.');
@@ -3368,6 +3435,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return DownloadsScreen(
       tasks: _downloads,
       onDelete: _deleteDownload,
+      onPause: _pauseDownload,
+      onResume: _resumeDownload,
       onPlay: (task) {
         if (task.filePath == null) return;
         final movie = Movie(
@@ -4907,12 +4976,16 @@ class NoInternetScreen extends StatelessWidget {
 class DownloadsScreen extends StatelessWidget {
   final List<DownloadTask> tasks;
   final Future<void> Function(DownloadTask) onDelete;
+  final ValueChanged<DownloadTask> onPause;
+  final ValueChanged<DownloadTask> onResume;
   final ValueChanged<DownloadTask> onPlay;
 
   const DownloadsScreen({
     super.key,
     required this.tasks,
     required this.onDelete,
+    required this.onPause,
+    required this.onResume,
     required this.onPlay,
   });
 
@@ -4974,11 +5047,15 @@ class DownloadsScreen extends StatelessWidget {
               final task = tasks[index];
               final completed = task.status == 'Completed';
               final failed = task.status == 'Failed';
+              final paused = task.status == 'Paused' || task.status == 'Waiting';
+              final downloading = task.status == 'Downloading';
               final statusColor = completed
                   ? const Color(0xFF39E69B)
                   : failed
                       ? Colors.redAccent
-                      : goldLight;
+                      : paused
+                          ? Colors.orangeAccent
+                          : goldLight;
               final percent = (task.progress * 100).round().clamp(0, 100);
 
               return Container(
@@ -5053,7 +5130,9 @@ class DownloadsScreen extends StatelessWidget {
                                 ? 'Successfully Downloaded'
                                 : failed
                                     ? (task.errorMessage ?? 'Download failed')
-                                    : 'Downloading',
+                                    : paused
+                                        ? 'Paused · ready to resume'
+                                        : 'Downloading',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -5112,7 +5191,7 @@ class DownloadsScreen extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         IconButton(
-                          tooltip: 'Play downloaded movie',
+                          tooltip: 'Play downloaded video',
                           onPressed: completed && task.filePath != null
                               ? () => onPlay(task)
                               : null,
@@ -5121,11 +5200,27 @@ class DownloadsScreen extends StatelessWidget {
                             color: completed ? const Color(0xFF39E69B) : ink24,
                           ),
                         ),
+                        if (downloading)
+                          IconButton(
+                            tooltip: 'Pause download',
+                            onPressed: () => onPause(task),
+                            icon: const Icon(
+                              Icons.pause_circle_outline,
+                              color: Colors.orangeAccent,
+                            ),
+                          )
+                        else if (!completed)
+                          IconButton(
+                            tooltip: 'Resume download',
+                            onPressed: () => onResume(task),
+                            icon: const Icon(
+                              Icons.play_circle_outline,
+                              color: Color(0xFF39E69B),
+                            ),
+                          ),
                         IconButton(
                           tooltip: 'Delete download',
-                          onPressed: completed || failed
-                              ? () => onDelete(task)
-                              : null,
+                          onPressed: () => onDelete(task),
                           icon: const Icon(
                             Icons.delete_outline,
                             color: Colors.redAccent,
