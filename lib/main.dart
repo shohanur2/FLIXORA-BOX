@@ -413,6 +413,14 @@ class MovieBoxHomeSection {
     this.isBanner = false,
   });
 
+  bool get isFlixoraOriginal {
+    final normalizedTitle = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return normalizedTitle.contains('flixora original');
+  }
+
   factory MovieBoxHomeSection.fromApi(Map<String, dynamic> json) {
     final rawItems = json['items'] as List? ?? const [];
     return MovieBoxHomeSection(
@@ -1485,14 +1493,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return _deduplicateMovies([...adminMatches, ...section.items]);
   }
 
-  bool _isFlixoraOriginalSection(MovieBoxHomeSection section) {
-    final normalizedTitle = section.title
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
-        .trim();
-    return normalizedTitle.contains('flixora original');
-  }
-
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
     final seenTitleYears = <String>{};
@@ -1830,7 +1830,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]);
 
     final cachedMovieBoxSections = (await MovieCache.getMovieBoxSections())
-        .where((section) => !_isFlixoraOriginalSection(section))
+        .where((section) => !section.isFlixoraOriginal)
         .toList(growable: false);
     if (!mounted) return;
 
@@ -1957,7 +1957,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final sections = rawSections
           .map(MovieBoxHomeSection.fromApi)
           .where((section) =>
-              section.items.isNotEmpty && !_isFlixoraOriginalSection(section))
+              section.items.isNotEmpty && !section.isFlixoraOriginal)
           .toList(growable: false);
       if (!mounted) return;
       setState(() => _movieBoxSections = sections);
@@ -4754,7 +4754,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..._movieBoxSections
               .where((section) => !section.isBanner &&
                   !section.title.toLowerCase().contains('trending') &&
-                  !_isFlixoraOriginalSection(section))
+                  !section.isFlixoraOriginal)
               .map((section) => _sectionBlock(
                     section.title,
                     _movieBoxSectionItems(section),
