@@ -162,17 +162,20 @@ class PublicDomainMovieSourceService {
     final restrictiveRights = rights.contains('not public domain') ||
         rights.contains('not in the public domain') ||
         rights.contains('not in public domain') ||
+        rights.contains('not cc0') ||
         rights.contains('all rights reserved') ||
         rights.contains('copyright') ||
         rights.contains('permission required');
     if (restrictiveRights) return false;
 
-    final approvedLicense = license.contains('publicdomain/mark/1.0') ||
-        license.contains('publicdomain/zero/1.0') ||
-        license.contains('cc0');
+    final licenseUri = Uri.tryParse(license);
+    final approvedLicense = licenseUri != null &&
+        licenseUri.host.toLowerCase() == 'creativecommons.org' &&
+        (licenseUri.path.contains('/publicdomain/mark/1.0') ||
+            licenseUri.path.contains('/publicdomain/zero/1.0'));
     // When an item supplies a licence URL, it must itself be an approved
-    // public-domain/CC0 declaration. A conflicting rights sentence cannot
-    // override a restrictive or unrelated licence URL.
+    // Creative Commons public-domain declaration. A conflicting rights
+    // sentence cannot override a restrictive or unrelated licence URL.
     if (license.isNotEmpty) return approvedLicense;
     return rights.contains('public domain') || rights.contains('cc0');
   }
