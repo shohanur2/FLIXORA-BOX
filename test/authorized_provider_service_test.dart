@@ -62,6 +62,18 @@ void main() {
         }),
         isFalse,
       );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'licenseurl': 'https://untrusted.example/cc0',
+        }),
+        isFalse,
+      );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'rights': 'This is not CC0.',
+        }),
+        isFalse,
+      );
     });
 
     test('only accepts safe Archive identifiers', () {
