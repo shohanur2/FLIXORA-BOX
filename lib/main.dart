@@ -23,7 +23,6 @@ import 'streaming/anilist_service.dart';
 import 'streaming/episode_number_mapper.dart';
 import 'streaming/provider_catalog.dart';
 import 'streaming/featured_carousel_layout.dart';
-import 'streaming/authorized_provider_service.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'streaming/provider_embed_player.dart';
 import 'streaming/media3_player_view.dart';
@@ -5475,7 +5474,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String? _tvEpisodeError;
   final Set<String> _failedProviderIds = <String>{};
   bool _isSelectingDefaultProvider = false;
-  int _providerDiscoveryToken = 0;
 
   String? _errorMessage;
 
@@ -5658,13 +5656,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               adminVideoUrl: widget.movie.videoUrl,
             );
           });
-          // Optional catalogue providers must not delay the reference
-          // Play4U stream. Discover them in the background as fallbacks.
-          unawaited(_appendAuthorizedProviderSources(
-            isTv: false,
-            season: 1,
-            episode: 1,
-          ));
         }
       }
       return details;
@@ -5712,57 +5703,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       );
       unawaited(_selectProviderSource(firstAvailable));
     }
-    // Keep episode changes responsive: Play4U is selected from the core
-    // catalogue immediately; optional sources are appended asynchronously.
-    unawaited(_appendAuthorizedProviderSources(
-      isTv: true,
-      season: season,
-      episode: episode,
-    ));
   }
 
-  Future<void> _appendAuthorizedProviderSources({
-    required bool isTv,
-    required int season,
-    required int episode,
-  }) async {
-    if (!_playerIsOnline || widget.localFilePath != null) return;
-    final requestToken = ++_providerDiscoveryToken;
-    final titleId = widget.movie.tmdbId;
-    final found = await AuthorizedProviderService.discover(
-      title: widget.movie.title,
-      year: widget.movie.year,
-      isTv: isTv,
-      season: season,
-      episode: episode,
-    );
-    if (!mounted ||
-        _isDisposed ||
-        requestToken != _providerDiscoveryToken ||
-        titleId != widget.movie.tmdbId ||
-        (isTv &&
-            (season != _selectedSeasonNumber ||
-                episode != _selectedEpisodeNumber))) {
-      return;
-    }
-
-    final existingUrls = _providerSources.map((source) => source.url).toSet();
-    final additions = found
-        .where((source) =>
-            source.isAvailable && !existingUrls.contains(source.url))
-        .toList(growable: false);
-    if (additions.isEmpty) return;
-
-    // Preserve the declared catalogue order: Admin-managed source first,
-    // then Play4U (STREAM 1), built-in providers and Anime Sub/Dub choices.
-    // Optional discovery results remain available as later fallbacks.
-    setState(() {
-      _providerSources = <ProviderEmbedSource>[
-        ..._providerSources,
-        ...additions,
-      ];
-    });
-  }
 
   Future<void> _loadTvSeasonEpisodes(
     int seasonNumber, {
