@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flixora/streaming/authorized_provider_service.dart';
+import 'package:flixora/streaming/public_domain_movie_source_service.dart';
 import 'package:flixora/streaming/provider_catalog.dart';
 
 void main() {
