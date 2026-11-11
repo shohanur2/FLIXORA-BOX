@@ -190,8 +190,22 @@ class ResumableDownloadService {
       if (response.statusCode == 416) {
         final rangeHeader =
             response.headers.value('content-range')?.trim() ?? '';
-        final totalMatch =
-            RegExp(r'^bytes \\*/(\\d+)
+        const unsatisfiedPrefix = 'bytes */';
+        final remoteTotal = rangeHeader.startsWith(unsatisfiedPrefix)
+            ? int.tryParse(rangeHeader.substring(unsatisfiedPrefix.length))
+            : null;
+        if (offset > 0 && remoteTotal == offset) {
+          if (await File(finalPath).exists()) await File(finalPath).delete();
+          final completedFile = await partFile.rename(finalPath);
+          await onComplete(completedFile.path);
+          return;
+        }
+        throw StateError(
+          'The host rejected the resume range. Retry to restart this download.',
+        );
+      }
+
+      final contentType = (response.headers.value('content-type') ?? '')
           .split(';')
           .first
           .trim()
