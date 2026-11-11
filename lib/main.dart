@@ -2476,6 +2476,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _endTitleOpening() {
+    if (!mounted) return;
     _openingTitleNotifier.value = null;
   }
 
