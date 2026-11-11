@@ -74,8 +74,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          source = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
-          content = source.read_text()
+          ffi_source = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
+          ffi_content = ffi_source.read_text()
           old_import = "use sparkbox_core::{CoreError, MediaItem, MovieBoxClient, StreamKind};"
           new_import = "use sparkbox_core::{Config, CoreError, MediaItem, MovieBoxClient, StreamKind};"
           old_client = "CLIENT.get_or_init(MovieBoxClient::new)"
@@ -85,11 +85,48 @@ jobs:
                   config.timezone = "Asia/Dhaka".to_string();
                   MovieBoxClient::with_config(config)
               })"""
-          if old_import not in content or old_client not in content:
-              raise SystemExit("SparkBoxCore source changed; review the Bangladesh config patch.")
-          content = content.replace(old_import, new_import, 1)
-          content = content.replace(old_client, new_client, 1)
-          source.write_text(content)
+          if old_import not in ffi_content or old_client not in ffi_content:
+              raise SystemExit("SparkBoxCore FFI source changed; review the Bangladesh config patch.")
+          ffi_content = ffi_content.replace(old_import, new_import, 1)
+          ffi_content = ffi_content.replace(old_client, new_client, 1)
+          ffi_source.write_text(ffi_content)
+
+          # The upstream signer hard-codes India in x-client-info. Apply the
+          # Config region/timezone to the signed mobile header as well.
+          mobile_source = Path("/tmp/SparkBoxCore/sparkbox-core/src/mobile.rs")
+          mobile_content = mobile_source.read_text()
+          old_info = """        ins(
+                      &mut h,
+                      "x-client-info",
+                      client_info(
+                          v4,
+                          &self.device_id,
+                          if v4 {
+                              self.config.client_info_v4.as_deref()
+                          } else {
+                              self.config.client_info_v3.as_deref()
+                          },
+                      ),
+                  );"""
+          new_info = """        let mut client_info_json: Value = serde_json::from_str(&client_info(
+                      v4,
+                      &self.device_id,
+                      if v4 {
+                          self.config.client_info_v4.as_deref()
+                      } else {
+                          self.config.client_info_v3.as_deref()
+                      },
+                  ))
+                  .unwrap_or_else(|_| serde_json::json!({}));
+                  if let Some(info) = client_info_json.as_object_mut() {
+                      info.insert("region".into(), Value::String(self.config.region.clone()));
+                      info.insert("timezone".into(), Value::String(self.config.timezone.clone()));
+                  }
+                  ins(&mut h, "x-client-info", client_info_json.to_string());"""
+          if old_info not in mobile_content:
+              raise SystemExit("SparkBoxCore mobile header source changed; review the Bangladesh header patch.")
+          mobile_content = mobile_content.replace(old_info, new_info, 1)
+          mobile_source.write_text(mobile_content)
           PY
 
           cd /tmp/SparkBoxCore
