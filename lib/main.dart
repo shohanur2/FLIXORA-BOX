@@ -1432,7 +1432,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _timer = Timer.periodic(
       const Duration(seconds: 5),
       (_) {
-        if (!mounted || _tab != 0 || !(ModalRoute.of(context)?.isCurrent ?? true)) {
+        if (!mounted ||
+            _tab != 0 ||
+            _isOpeningTitle ||
+            !(ModalRoute.of(context)?.isCurrent ?? true)) {
           return;
         }
 
