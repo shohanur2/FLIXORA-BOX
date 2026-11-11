@@ -1876,7 +1876,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } catch (error) {
         debugPrint('MovieBox safe-content filter setup failed: $error');
       }
-      final rawSections = await MovieBoxService.home();
+      final rawSections = await MovieBoxService.home()
+          .timeout(const Duration(seconds: 15));
       final sections = rawSections
           .map(MovieBoxHomeSection.fromApi)
           .where((section) => section.items.isNotEmpty)
@@ -2150,7 +2151,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
-    final movieBoxSearch = MovieBoxService.search(text).then((result) {
+    final movieBoxSearch = MovieBoxService.search(text)
+        .timeout(const Duration(seconds: 7))
+        .then((result) {
       final items = result['items'] as List? ?? const [];
       return items
           .whereType<Map>()
@@ -2807,7 +2810,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return null;
     }
     try {
-      final result = await MovieBoxService.search(movie.title, perPage: 20);
+      final result = await MovieBoxService.search(movie.title, perPage: 20)
+          .timeout(const Duration(seconds: 7));
       final items = (result['items'] as List? ?? const [])
           .whereType<Map>()
           .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
