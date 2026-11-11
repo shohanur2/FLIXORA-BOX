@@ -8,6 +8,7 @@ on:
       - main
       - design/white-gold-cinematic
       - feature/**
+      - feat/**
       - fix/**
   pull_request:
     branches:
