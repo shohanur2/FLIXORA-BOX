@@ -558,7 +558,7 @@ class MovieCache {
           task.bytesReceived = await File(partialPath).length();
           if (task.totalBytes > 0) {
             task.progress =
-                (task.bytesReceived / task.totalBytes).clamp(0.0, 1.0);
+                (task.bytesReceived / task.totalBytes).clamp(0.0, 1.0).toDouble();
           }
           if (task.status == 'Downloading' || task.status == 'Waiting') {
             task.status = 'Paused';
