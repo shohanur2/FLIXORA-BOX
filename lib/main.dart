@@ -2660,13 +2660,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return true;
   }
 
-  /// Keeps every catalogue entry point on one FLIXORA player-first route.
-  /// The player tries Admin-managed hosting (Publitio/Supabase/direct URL)
-  /// before falling back to the configured movie, TV and anime providers.
-  Future<void> _openMovie(Movie movie) async {
-    await _playMovie(movie);
-  }
-
   Future<void> _playMovieFromPlayer(Movie movie) async {
     await _playMovie(movie, closeCurrentPlayer: true);
   }
