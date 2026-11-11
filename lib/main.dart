@@ -5792,6 +5792,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isLocked = false;
   bool _isFullscreen = false;
   bool _isDisposed = false;
+  bool _isMinimizing = false;
   bool _initialized = false;
   bool _isOpening = false;
   bool _playerIsOnline = true;
@@ -5868,7 +5869,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         );
       },
     );
-    navigator.pop();
+    setState(() => _isMinimizing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (navigator.mounted && navigator.canPop()) {
+        navigator.pop();
+      }
+    });
   }
 
   static const MethodChannel _pictureInPictureChannel =
@@ -9680,8 +9686,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_isFullscreen &&
-          (!MiniPlayerSession.owns(_player) || _selectedProviderSource != null),
+      canPop: _isMinimizing ||
+          (!_isFullscreen &&
+              (!MiniPlayerSession.owns(_player) || _selectedProviderSource != null)),
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && _isFullscreen) {
           _toggleFullscreen();
