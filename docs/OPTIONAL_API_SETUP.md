@@ -10,7 +10,8 @@ This guide separates **metadata/availability APIs** from **video playback source
 - **Watchmode** — region-specific subscription, free, rent and buy availability; it returns links and provider details, not video.
 - **TasteDive** — related movie and TV recommendations (legacy endpoint).
 - **Trakt** — community rating, vote count and rank.
-- **Internet Archive** — public-domain/CC0 catalogue items only.
+- **Internet Archive** — public-domain/CC0 catalogue items only. FLIXORA checks each matching movie's rights metadata and public video files before adding its official Archive embed; TV episodes and copyrighted uploads are excluded.
+- **PeerTube / Sepia Search** — federated video search, but FLIXORA accepts only public items explicitly labelled Public Domain or CC0. Exact TV episode tokens are required; commercial titles are not guaranteed to exist.
 - **Existing player sources** — Admin-managed direct MP4/HLS and the provider adapters already in FLIXORA. The current player and Admin source priority must remain unchanged.
 
 The Supabase `external-catalog` Edge Function is already deployed and active in the FLIXORA project. Its optional API integrations read secrets server-side.

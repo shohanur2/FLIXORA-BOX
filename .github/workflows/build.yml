@@ -6,9 +6,6 @@ on:
   push:
     branches:
       - main
-      - design/white-gold-cinematic
-      - feature/**
-      - fix/**
   pull_request:
     branches:
       - main
@@ -22,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
@@ -135,10 +132,17 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           DAILYMOTION_PLAYER_ID: ${{ secrets.DAILYMOTION_PLAYER_ID }}
+          FLIXORA_DRAMACHI_API_BASE_URL: ${{ secrets.FLIXORA_DRAMACHI_API_BASE_URL }}
+          FLIXORA_CIRCLEFTP_API_BASE_URL: ${{ secrets.FLIXORA_CIRCLEFTP_API_BASE_URL }}
+          FLIXORA_4KHDHUB_BASE_URL: ${{ secrets.FLIXORA_4KHDHUB_BASE_URL }}
           GRADLE_OPTS: >-
             -Dorg.gradle.internal.http.connectionTimeout=120000
             -Dorg.gradle.internal.http.socketTimeout=120000
         run: |
+          DRAMACHI_API_BASE_URL="${FLIXORA_DRAMACHI_API_BASE_URL:-https://api.nodeobjects.com/}"
+          CIRCLEFTP_API_BASE_URL="${FLIXORA_CIRCLEFTP_API_BASE_URL:-http://new.circleftp.net:5000/api}"
+          FOURKHDHUB_BASE_URL="${FLIXORA_4KHDHUB_BASE_URL:-https://4khdhub.one/}"
+
           for attempt in 1 2 3; do
             echo "Starting APK build attempt $attempt of 3"
 
@@ -146,7 +150,10 @@ jobs:
               --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
               --dart-define=SUPABASE_URL="$SUPABASE_URL" \
               --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID"; then
+              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID" \
+              --dart-define=FLIXORA_DRAMACHI_API_BASE_URL="$DRAMACHI_API_BASE_URL" \
+              --dart-define=FLIXORA_CIRCLEFTP_API_BASE_URL="$CIRCLEFTP_API_BASE_URL" \
+              --dart-define=FLIXORA_4KHDHUB_BASE_URL="$FOURKHDHUB_BASE_URL"; then
               echo "APK build successful."
               exit 0
             fi
@@ -159,6 +166,30 @@ jobs:
 
           echo "APK build failed after 3 attempts."
           exit 1
+
+      - name: Prepare GPL corresponding source bundle
+        run: |
+          set -euo pipefail
+          mkdir -p build/gpl-source
+
+          # Include the exact FLIXORA source tree used for this APK.
+          git archive --format=zip HEAD -o build/gpl-source/FLIXORA-BOX-source.zip
+
+          # Include the pinned GPL-3.0 NextLib source used by the Android player.
+          curl -fL --retry 3 \
+            https://github.com/anilbeesetti/nextlib/archive/refs/tags/1.8.0-0.9.0.zip \
+            -o build/gpl-source/NextLib-1.8.0-0.9.0-source.zip
+
+          cp LICENSE build/gpl-source/GPL-3.0-LICENSE.txt
+          (cd build && zip -qr FLIXORA-GPL-CORRESPONDING-SOURCE.zip gpl-source)
+
+      - name: Upload GPL corresponding source
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLIXORA-GPL-CORRESPONDING-SOURCE
+          path: build/FLIXORA-GPL-CORRESPONDING-SOURCE.zip
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Verify APK
         run: |

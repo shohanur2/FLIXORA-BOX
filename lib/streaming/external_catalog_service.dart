@@ -1,5 +1,27 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+Uri? _safeHttpsUri(String rawValue) {
+  final uri = Uri.tryParse(rawValue.trim());
+  if (uri == null ||
+      uri.scheme.toLowerCase() != 'https' ||
+      uri.host.isEmpty ||
+      uri.userInfo.isNotEmpty) {
+    return null;
+  }
+  return uri;
+}
+
+Future<void> _openHttpsUrl(Uri uri) async {
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (error) {
+    debugPrint('Could not open provider availability link: $error');
+  }
+}
 
 class OmdbMetadata {
   const OmdbMetadata({
@@ -291,24 +313,41 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
               if (data.trakt != null && data.trakt!.hasContent) ...[
                 _ExternalPanel(
                   title: 'Trakt community rating',
-                  child: Wrap(
-                    spacing: 16,
-                    runSpacing: 9,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (data.trakt!.rating != null)
-                        _ExternalMetric(
-                          label: 'Rating',
-                          value: data.trakt!.rating!.toStringAsFixed(1) + '/10',
-                        ),
-                      if (data.trakt!.votes != null)
-                        _ExternalMetric(
-                          label: 'Votes',
-                          value: data.trakt!.votes.toString(),
-                        ),
-                      if (data.trakt!.rank != null)
-                        _ExternalMetric(
-                          label: 'Rank',
-                          value: '#${data.trakt!.rank}',
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 9,
+                        children: [
+                          if (data.trakt!.rating != null)
+                            _ExternalMetric(
+                              label: 'Rating',
+                              value: data.trakt!.rating!.toStringAsFixed(1) + '/10',
+                            ),
+                          if (data.trakt!.votes != null)
+                            _ExternalMetric(
+                              label: 'Votes',
+                              value: data.trakt!.votes.toString(),
+                            ),
+                          if (data.trakt!.rank != null)
+                            _ExternalMetric(
+                              label: 'Rank',
+                              value: '#${data.trakt!.rank}',
+                            ),
+                        ],
+                      ),
+                      if (_safeHttpsUri(data.trakt!.traktUrl) != null)
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: TextButton.icon(
+                            onPressed: () {
+                              final uri = _safeHttpsUri(data.trakt!.traktUrl);
+                              if (uri != null) unawaited(_openHttpsUrl(uri));
+                            },
+                            icon: const Icon(Icons.open_in_new, size: 14),
+                            label: const Text('Open Trakt'),
+                          ),
                         ),
                     ],
                   ),
@@ -353,6 +392,21 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
                           label: 'Box office',
                           value: data.omdb!.boxOffice,
                         ),
+                      if (data.omdb!.awards.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Awards',
+                          value: data.omdb!.awards,
+                        ),
+                      if (data.omdb!.country.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Country',
+                          value: data.omdb!.country,
+                        ),
+                      if (data.omdb!.language.isNotEmpty)
+                        _ExternalMetric(
+                          label: 'Language',
+                          value: data.omdb!.language,
+                        ),
                     ],
                   ),
                 ),
@@ -369,35 +423,59 @@ class _ExternalCatalogSectionState extends State<ExternalCatalogSection> {
                         if (source.format.isNotEmpty) source.format,
                         if (source.price.isNotEmpty) source.price,
                       ].join(' · ');
+                      final destination = _safeHttpsUri(source.webUrl);
                       return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 5),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.live_tv_outlined,
-                              color: Color(0xFFD6AD45),
-                              size: 17,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                source.name,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 12,
-                                ),
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(8),
+                            onTap: destination == null
+                                ? null
+                                : () => unawaited(_openHttpsUrl(destination)),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 7,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.live_tv_outlined,
+                                    color: Color(0xFFD6AD45),
+                                    size: 17,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      source.name,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                  if (detail.isNotEmpty)
+                                    Text(
+                                      detail,
+                                      style: const TextStyle(
+                                        color: Colors.white60,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                  if (destination != null) ...[
+                                    const SizedBox(width: 6),
+                                    const Icon(
+                                      Icons.open_in_new,
+                                      color: Colors.white54,
+                                      size: 13,
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
-                            if (detail.isNotEmpty)
-                              Text(
-                                detail,
-                                style: const TextStyle(
-                                  color: Colors.white60,
-                                  fontSize: 10,
-                                ),
-                              ),
-                          ],
+                          ),
                         ),
                       );
                     }).toList(),
