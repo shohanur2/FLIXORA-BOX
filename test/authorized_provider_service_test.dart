@@ -55,6 +55,13 @@ void main() {
         }),
         isFalse,
       );
+      expect(
+        PublicDomainMovieSourceService.isPublicDomainOrCc0({
+          'licenseurl': 'https://creativecommons.org/licenses/by-nc/4.0/',
+          'rights': 'This item is public domain.',
+        }),
+        isFalse,
+      );
     });
 
     test('only accepts safe Archive identifiers', () {
