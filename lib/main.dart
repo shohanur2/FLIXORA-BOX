@@ -11613,12 +11613,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  String _subtitleBackgroundValue() {
-    final alpha = (_subtitleBackgroundOpacity * 255).round()
-        .clamp(0, 255).toInt().toRadixString(16).padLeft(2, '0');
-    return '#$alpha${_subtitleBackgroundColor.replaceFirst('#', '')}';
-  }
-
   SubtitleViewConfiguration _subtitleViewConfiguration() {
     final backgroundHex = _subtitleBackgroundColor.replaceFirst('#', '');
     final backgroundRgb = int.parse(backgroundHex, radix: 16);
@@ -11728,7 +11722,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         onChanged: (v) => updateSheet(() => fontSize = v)),
                       sectionLabel('TEXT COLOUR'),
                       DropdownButtonFormField<String>(
-                        value: colors.containsValue(textColor) ? textColor : '#FFFFFF',
+                        initialValue: colors.containsValue(textColor) ? textColor : '#FFFFFF',
                         dropdownColor: playerPanel,
                         decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
                         items: colors.entries.map((entry) => DropdownMenuItem(
@@ -11745,7 +11739,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       ),
                       sectionLabel('BACKGROUND'),
                       DropdownButtonFormField<String>(
-                        value: backgrounds.containsValue(backgroundColor) ? backgroundColor : '#000000',
+                        initialValue: backgrounds.containsValue(backgroundColor) ? backgroundColor : '#000000',
                         dropdownColor: playerPanel,
                         decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
                         items: backgrounds.entries.map((entry) => DropdownMenuItem(
