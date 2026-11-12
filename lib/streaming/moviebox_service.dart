@@ -31,6 +31,28 @@ class MovieBoxService {
     );
   }
 
+  static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
+      _shortsCache = {};
+
+  static Future<Map<String, dynamic>> shorts({
+    bool forceRefresh = false,
+    int perPage = 24,
+    int maxPages = 10,
+  }) {
+    final key = '$perPage:$maxPages';
+    if (forceRefresh) _shortsCache.remove(key);
+    return _remember(
+      _shortsCache,
+      key,
+      const Duration(minutes: 10),
+      () => _retry(
+        () => SparkBoxCore.shorts(perPage: perPage, maxPages: maxPages),
+        isUsable: (value) =>
+            (value['items'] as List? ?? const <dynamic>[]).isNotEmpty,
+      ),
+    );
+  }
+
   static Future<List<String>> suggest(String query) =>
       SparkBoxCore.suggest(query);
 
@@ -235,7 +257,14 @@ class MovieBoxService {
         season = int.tryParse((firstSeason['se'] ?? '').toString()) ?? 0;
         final episodes = firstSeason['episodes'] as List? ?? const [];
         if (episodes.isNotEmpty) {
-          episode = int.tryParse(episodes.first.toString()) ?? 0;
+          final firstEpisode = episodes.first;
+          final episodeValue = firstEpisode is Map
+              ? (firstEpisode['ep'] ??
+                  firstEpisode['episode'] ??
+                  firstEpisode['episodeNumber'] ??
+                  firstEpisode['number'])
+              : firstEpisode;
+          episode = int.tryParse(episodeValue.toString()) ?? 0;
         }
         if (season <= 0) return null;
       }
