@@ -124,6 +124,19 @@ class SparkBoxCore {
             .toList(growable: false);
       });
 
+  /// Paginated Short TV catalogue from the dedicated WeFeed endpoint.
+  static Future<Map<String, dynamic>> shorts({
+    int perPage = 24,
+    int maxPages = 10,
+  }) =>
+      _run(() {
+        final library = _openLibrary();
+        final call = library.lookupFunction<
+            Pointer<Utf8> Function(Int32, Int32),
+            Pointer<Utf8> Function(int, int)>('sparkbox_shorts');
+        return _readObject(library, call(perPage, maxPages));
+      });
+
   /// Search suggestions from the central MovieBox content system.
   static Future<List<String>> suggest(String query) => _run(() {
         final library = _openLibrary();
