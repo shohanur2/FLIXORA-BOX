@@ -222,8 +222,8 @@ jobs:
           mobile = mobile.replace(old_models, new_models, 1)
 
           helper_anchor = "impl MovieBoxClient {\n"
-          helper = """fn parse_short_subject(raw: &Value, block_adult: bool) -> Option<MediaItem> {
-              let mut subject = raw.as_object()?.clone();
+          helper = """fn parse_short_subject(raw: &Map<String, Value>, block_adult: bool) -> Option<MediaItem> {
+              let mut subject = raw.clone();
               if !subject.contains_key("stills") {
                   if let Some(pre_video_cover) = subject.get("preVideoCover").cloned() {
                       subject.insert("stills".into(), pre_video_cover);
@@ -399,7 +399,7 @@ jobs:
                       "cover": { "url": "https://cdn.example.test/poster.jpg" },
                       "preVideoCover": { "url": "https://cdn.example.test/backdrop.jpg" }
                   });
-                  let item = parse_short_subject(&raw, false).expect("short TV item parses");
+                  let item = parse_short_subject(raw.as_object().unwrap(), false).expect("short TV item parses");
                   assert!(item.is_series);
                   assert_eq!(item.subject_type, 3);
                   assert_eq!(item.backdrop, "https://cdn.example.test/backdrop.jpg");
@@ -552,15 +552,17 @@ jobs:
                   .filter_map(|t| t.trim().parse::<i64>().ok())
                   .collect();
               if listed.is_empty() {
-                  for raw in get_arr(o.get("episodes")) {
-                      let episode = as_i64(Some(raw))
-                          .or_else(|| as_i64(raw.get("ep")))
-                          .or_else(|| as_i64(raw.get("episode")))
-                          .or_else(|| as_i64(raw.get("episodeNumber")))
-                          .or_else(|| as_i64(raw.get("number")));
-                      if let Some(number) = episode {
-                          if number > 0 {
-                              listed.push(number);
+                  if let Some(raw_episodes) = o.get("episodes").and_then(Value::as_array) {
+                      for raw in raw_episodes {
+                          let episode = as_i64(Some(raw))
+                              .or_else(|| as_i64(raw.get("ep")))
+                              .or_else(|| as_i64(raw.get("episode")))
+                              .or_else(|| as_i64(raw.get("episodeNumber")))
+                              .or_else(|| as_i64(raw.get("number")));
+                          if let Some(number) = episode {
+                              if number > 0 {
+                                  listed.push(number);
+                              }
                           }
                       }
                   }
