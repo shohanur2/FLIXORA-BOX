@@ -408,6 +408,39 @@ jobs:
           """
           if "mod shorts_catalog_tests" not in mobile:
               mobile += "\n" + test_module
+          # Short TV's own detail and season endpoints include the resolved host
+          # query parameter. Keep it on the shared MovieBox calls as well.
+          old_seasons = """        let url = format!(
+                      "{}/wefeed-mobile-bff/subject-api/season-info?subjectId={}",
+                      self.config.mobile_base, subject_id
+                  );"""
+          new_seasons = """        let base = self.config.mobile_base.trim_end_matches('/');
+                  let host = base
+                      .trim_start_matches("https://")
+                      .trim_start_matches("http://")
+                      .trim_end_matches('/');
+                  let url = format!(
+                      "{base}/wefeed-mobile-bff/subject-api/season-info?host={host}&subjectId={subject_id}"
+                  );"""
+          if old_seasons not in mobile:
+              raise SystemExit("SparkBoxCore season-info URL changed; review Short TV episode support.")
+          mobile = mobile.replace(old_seasons, new_seasons, 1)
+
+          old_detail = """        let url = format!(
+                      "{}/wefeed-mobile-bff/subject-api/get?subjectId={}",
+                      self.config.mobile_base, id
+                  );"""
+          new_detail = """        let base = self.config.mobile_base.trim_end_matches('/');
+                  let host = base
+                      .trim_start_matches("https://")
+                      .trim_start_matches("http://")
+                      .trim_end_matches('/');
+                  let url = format!(
+                      "{base}/wefeed-mobile-bff/subject-api/get?host={host}&subjectId={id}"
+                  );"""
+          if old_detail not in mobile:
+              raise SystemExit("SparkBoxCore subject detail URL changed; review Short TV playback support.")
+          mobile = mobile.replace(old_detail, new_detail, 1)
           mobile_path.write_text(mobile)
 
           ffi_path = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
