@@ -56,6 +56,12 @@ function yearOf(value: unknown): string {
 }
 
 function serviceKey(): string {
+  // The existing FLIXORA project uses legacy JWT-based keys. Prefer that key
+  // while the project still provides it; the Supabase client can then use its
+  // normal Authorization header without the new secret-key JWT limitation.
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (legacy) return legacy;
+
   const secretKeysRaw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
   if (secretKeysRaw) {
     try {
@@ -64,12 +70,9 @@ function serviceKey(): string {
         Object.values(secretKeys).find((value) => typeof value === "string");
       if (preferred) return preferred;
     } catch {
-      // Fall back to the legacy service-role key below.
+      // No usable server-side key was found.
     }
   }
-
-  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-  if (legacy) return legacy;
   throw new Error("Supabase server key is not configured.");
 }
 
