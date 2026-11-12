@@ -4585,8 +4585,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  List<Movie> _filterSectionMovies(String section, List<Movie> source, String filter) {
-    final items = _deduplicateMovies(source);
+  List<Movie> _filterSectionMovies(
+    String section,
+    List<Movie> source,
+    String filter, {
+    bool sourceIsDeduplicated = false,
+  }) {
+    final items = sourceIsDeduplicated ? source : _deduplicateMovies(source);
 
     if (section == 'Trending Movies') {
       switch (filter) {
@@ -5128,9 +5133,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _sectionBlock(String title, List<Movie> movies) {
     final allFilters = _sectionFilterOptions(title);
+    // Deduplicate the source once per section build. The old implementation
+    // repeated this O(n*m) work for every filter pill, delaying taps/rebuilds.
+    final deduplicatedMovies = _deduplicateMovies(movies);
     final filteredByOption = <String, List<Movie>>{
       for (final filter in allFilters)
-        filter: _filterSectionMovies(title, movies, filter),
+        filter: _filterSectionMovies(
+          title,
+          deduplicatedMovies,
+          filter,
+          sourceIsDeduplicated: true,
+        ),
     };
     final filters = allFilters
         .where((filter) => filteredByOption[filter]!.isNotEmpty)
@@ -5139,7 +5152,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ? _sectionFilters[title]!
         : (filters.isNotEmpty ? filters.first : '');
     final visibleMovies = filters.isEmpty
-        ? _deduplicateMovies(movies)
+        ? deduplicatedMovies
         : filteredByOption[selected] ?? const <Movie>[];
 
     // A category with no matching catalogue items is omitted instead of
