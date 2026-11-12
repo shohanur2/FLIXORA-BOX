@@ -1696,6 +1696,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         languages.add(language);
       }
     }
+    final detailItem = detail['item'];
+    if (languages.isEmpty && detailItem is Map && detailItem.isNotEmpty) {
+      languages.add('Original');
+    }
     return languages;
   }
 
@@ -8146,7 +8150,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     Object? lastError;
 
     _isOpening = true;
+    _currentVideoUrl = null;
     _playbackErrorTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _initialized = false;
+        _errorMessage = null;
+        _tvEpisodeError = null;
+      });
+    }
     try {
       for (final candidate in candidates) {
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
