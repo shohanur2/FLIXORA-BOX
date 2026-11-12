@@ -2565,25 +2565,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Fetch pages 2-3 without downloading page 1 again.
         () => TmdbService.getMovies(
           'trending/movie/week', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/popular', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/now_playing', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/top_rated', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'trending/tv/week', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'tv/popular', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'tv/top_rated', pages: 2, startPage: 2,
-        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
 
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16',
