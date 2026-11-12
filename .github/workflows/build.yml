@@ -156,7 +156,7 @@ jobs:
                       let mut status = response.status().as_u16();
                       let mut text = response.text().await?;
                       let mut root = try_json(&text).unwrap_or_default();
-                      let has_streams = |value: &Value| {
+                      let has_streams = |value: &Map<String, Value>| {
                           let data = value.get("data").and_then(Value::as_object);
                           ["dash", "hls", "streams"].iter().any(|key| {
                               !get_arr(data.and_then(|d| d.get(*key))).is_empty()
