@@ -4101,6 +4101,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
+          localSeasonNumber: downloaded!.seasonNumber,
+          localEpisodeNumber: downloaded!.episodeNumber,
           recommendedMovies: _allMovies(),
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
@@ -7570,6 +7572,8 @@ class MovieDetailsScreen extends StatelessWidget {
 class MoviePlayerScreen extends StatefulWidget {
   final Movie movie;
   final String? localFilePath;
+  final int? localSeasonNumber;
+  final int? localEpisodeNumber;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
@@ -7583,6 +7587,8 @@ class MoviePlayerScreen extends StatefulWidget {
     super.key,
     required this.movie,
     this.localFilePath,
+    this.localSeasonNumber,
+    this.localEpisodeNumber,
     this.recommendedMovies = const [],
     this.onMovieSelected,
     this.onSave,
@@ -7733,6 +7739,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
+    _selectedSeasonNumber = widget.localSeasonNumber ?? 1;
+    _selectedEpisodeNumber = widget.localEpisodeNumber ?? 1;
     _movieDetailsFuture = widget.movie.isMovieBox
         ? Future<Map<String, dynamic>>.value(const <String, dynamic>{})
         : _loadPlayerMovieDetails();
@@ -7850,7 +7858,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _tvEpisodeSelector() {
-    if (widget.movie.mediaType != 'tv') return const SizedBox.shrink();
+    if (widget.movie.mediaType != 'tv' || widget.localFilePath != null) {
+      return const SizedBox.shrink();
+    }
 
     final seasonNumbers = _tvSeasons
         .map((season) => _toInt(season['season_number']))
@@ -8750,6 +8760,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Future<void> _prepareAndInitializePlayer() async {
+    // A downloaded MovieBox movie/episode must play from local storage without
+    // trying to resolve online seasons or CDN streams again.
+    if (widget.localFilePath != null) {
+      await _initializePlayer();
+      return;
+    }
+
     if (widget.movie.isMovieBox) {
       await _prepareMovieBoxPlayback();
       if (!mounted || _isDisposed) return;
