@@ -1709,7 +1709,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (isFullRefresh) {
         return _refreshCatalogVisibility(forceRefresh: true);
       }
-      final missing = candidates!
+      final missing = candidates
           .where((movie) => !_checkedCatalogVisibilityKeys
               .contains(_catalogVisibilityKey(movie)))
           .toList(growable: false);
@@ -4142,8 +4142,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
-          localSeasonNumber: downloaded!.seasonNumber,
-          localEpisodeNumber: downloaded!.episodeNumber,
+          localSeasonNumber: downloaded.seasonNumber,
+          localEpisodeNumber: downloaded.episodeNumber,
           recommendedMovies: _allMovies(),
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
