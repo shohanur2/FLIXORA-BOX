@@ -30,6 +30,7 @@ import 'streaming/moviebox_stream_policy.dart';
 import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
+import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -1523,6 +1524,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _searchRequestToken = 0;
   bool _homeRefreshQueued = false;
   DateTime? _lastSecondaryCataloguesRefreshAt;
+  DateTime? _lastCatalogVisibilityRefreshAt;
+  final Set<String> _unpublishedCatalogKeys = {};
+  final Set<String> _checkedCatalogVisibilityKeys = {};
+  bool _refreshingCatalogVisibility = false;
+  Future<void>? _catalogVisibilityRefreshFuture;
   DateTime? _lastCarouselInteractionAt;
   DateTime? _lastHomeScrollAt;
 
@@ -1638,6 +1644,151 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return _deduplicateMovies([...adminMatches, ...section.items]);
   }
 
+  String _catalogVisibilityKey(Movie movie) {
+    final mediaType = movie.mediaType == 'tv' ? 'tv' : 'movie';
+    if (movie.tmdbId > 0) return '$mediaType:tmdb:${movie.tmdbId}';
+    final normalizedTitle = _normalizedMovieTitle(movie.title);
+    final rawYear = movie.year.trim();
+    final year = rawYear.length >= 4 ? rawYear.substring(0, 4) : 'N/A';
+    return '$mediaType:title:$normalizedTitle:$year';
+  }
+
+  Map<String, dynamic> _catalogVisibilityPayload(Movie movie) {
+    final rawYear = movie.year.trim();
+    return {
+      'key': _catalogVisibilityKey(movie),
+      'tmdbId': movie.tmdbId,
+      'mediaType': movie.mediaType == 'tv' ? 'tv' : 'movie',
+      'title': movie.title,
+      'year': rawYear.length >= 4 ? rawYear.substring(0, 4) : 'N/A',
+    };
+  }
+
+  List<Movie> _allCatalogVisibilityCandidates() => [
+        ...trending,
+        ...popular,
+        ...latest,
+        ...topRated,
+        ...trendingTv,
+        ...popularTv,
+        ...topRatedTv,
+        ...anime,
+        ...koreanDrama,
+        ...bengaliMovies,
+        ...bengaliTv,
+        ...flixoraMovies,
+        ...bollywoodMovies,
+        ...hollywoodMovies,
+        ...southIndianMovies,
+        ...indianDramaTv,
+        ..._trendingMovies,
+        ..._tmdbTrendingMovies,
+        ..._trendingHindiDubbedMovies,
+        ..._movieBoxSections.expand((section) => section.items),
+      ];
+
+  Future<void> _refreshCatalogVisibility({
+    List<Movie>? candidates,
+    bool forceRefresh = false,
+  }) async {
+    final client = supabaseClient;
+    if (client == null || !_online || !mounted) return;
+
+    final isFullRefresh = candidates == null;
+    if (isFullRefresh &&
+        !forceRefresh &&
+        _lastCatalogVisibilityRefreshAt != null &&
+        DateTime.now().difference(_lastCatalogVisibilityRefreshAt!) <
+            const Duration(minutes: 10)) {
+      return;
+    }
+
+    if (_refreshingCatalogVisibility) {
+      final active = _catalogVisibilityRefreshFuture;
+      if (active != null) await active;
+      if (!mounted || !_online) return;
+      if (isFullRefresh) {
+        return _refreshCatalogVisibility(forceRefresh: true);
+      }
+      final missing = candidates!
+          .where((movie) => !_checkedCatalogVisibilityKeys
+              .contains(_catalogVisibilityKey(movie)))
+          .toList(growable: false);
+      if (missing.isEmpty) return;
+      return _refreshCatalogVisibility(
+        candidates: missing,
+        forceRefresh: true,
+      );
+    }
+
+    final source = candidates ?? _allCatalogVisibilityCandidates();
+    final payloadByKey = <String, Map<String, dynamic>>{};
+    for (final movie in source) {
+      if (movie.title.trim().isEmpty) continue;
+      final payload = _catalogVisibilityPayload(movie);
+      payloadByKey[payload['key'] as String] = payload;
+    }
+    if (payloadByKey.isEmpty) return;
+
+    _refreshingCatalogVisibility = true;
+    final completer = Completer<void>();
+    _catalogVisibilityRefreshFuture = completer.future;
+    try {
+      final checked = <String>{};
+      final blocked = <String>{};
+      final payloads = payloadByKey.values.toList(growable: false);
+      for (var start = 0; start < payloads.length; start += 200) {
+        final batch = payloads.skip(start).take(200).toList(growable: false);
+        final blockedBatch = await CatalogVisibilityService.blockedKeys(
+          client: client,
+          candidates: batch,
+        );
+        checked.addAll(batch.map((item) => item['key'].toString()));
+        blocked.addAll(blockedBatch);
+      }
+
+      if (!mounted) return;
+      final oldBlocked = Set<String>.from(_unpublishedCatalogKeys);
+      if (isFullRefresh) {
+        _unpublishedCatalogKeys
+          ..clear()
+          ..addAll(blocked);
+        _checkedCatalogVisibilityKeys
+          ..clear()
+          ..addAll(checked);
+        _lastCatalogVisibilityRefreshAt = DateTime.now();
+      } else {
+        _unpublishedCatalogKeys.addAll(blocked);
+        _checkedCatalogVisibilityKeys.addAll(checked);
+      }
+
+      final visibilityChanged = oldBlocked.length != _unpublishedCatalogKeys.length ||
+          !oldBlocked.containsAll(_unpublishedCatalogKeys);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'flixora_unpublished_catalog_keys',
+        _unpublishedCatalogKeys.toList(growable: false),
+      );
+      await prefs.setStringList(
+        'flixora_checked_catalog_visibility_keys',
+        _checkedCatalogVisibilityKeys.toList(growable: false),
+      );
+      if (visibilityChanged && mounted) {
+        setState(() {
+          searchResults = _deduplicateMovies(searchResults);
+        });
+      }
+    } catch (error) {
+      debugPrint('Admin catalogue visibility check failed: $error');
+    } finally {
+      _refreshingCatalogVisibility = false;
+      if (!completer.isCompleted) completer.complete();
+      if (identical(_catalogVisibilityRefreshFuture, completer.future)) {
+        _catalogVisibilityRefreshFuture = null;
+      }
+    }
+  }
+
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
     final seenTitleYears = <String>{};
@@ -1646,6 +1797,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final seenFallbackIds = <String>{};
 
     return movies.where((movie) {
+      if (_unpublishedCatalogKeys.contains(_catalogVisibilityKey(movie))) {
+        return false;
+      }
       if (movie.tmdbId > 0 &&
           !seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}')) {
         return false;
@@ -1857,101 +2011,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _refreshingPlayableTrendingMovies = true;
     try {
-      final unpublishedAdminKeys = <String>{};
-      final unpublishedAdminTitleYears = <String>{};
-      final unpublishedAdminTitleUnknownYears = <String>{};
-      final unpublishedAdminTitleBases = <String>{};
-      final client = supabaseClient;
-      final tmdbIds = candidates
-          .map((movie) => movie.tmdbId)
-          .where((id) => id > 0)
-          .toSet()
+      await _refreshCatalogVisibility(
+        candidates: candidates,
+        forceRefresh: true,
+      );
+      final visibleCandidates = candidates
+          .where((candidate) => !_unpublishedCatalogKeys
+              .contains(_catalogVisibilityKey(candidate)))
           .toList(growable: false);
-      final adminTitleCandidates = candidates
-          .where((movie) => movie.title.trim().isNotEmpty)
-          .map((movie) => movie.title.trim())
-          .toSet()
-          .toList(growable: false);
-
-      if (client != null &&
-          (tmdbIds.isNotEmpty || adminTitleCandidates.isNotEmpty)) {
-        try {
-          if (tmdbIds.isNotEmpty) {
-            final rows = await client
-                .from('movies')
-                .select('tmdb_id, media_type, is_published, created_at')
-                .inFilter('tmdb_id', tmdbIds)
-                .order('created_at', ascending: false);
-            final seenAdminKeys = <String>{};
-            for (final item in (rows as List).whereType<Map>()) {
-              final row = Map<String, dynamic>.from(item);
-              final id = _toInt(row['tmdb_id']);
-              if (id <= 0) continue;
-              final mediaType = (row['media_type'] ?? 'movie').toString();
-              final key = '$mediaType:$id';
-              if (!seenAdminKeys.add(key)) continue;
-              if (row['is_published'] != true) {
-                unpublishedAdminKeys.add(key);
-              }
-            }
-          }
-
-          // MovieBox banner entries may not carry TMDB IDs. Check exact
-          // Admin titles too, so an unpublished Admin record still wins.
-          if (adminTitleCandidates.isNotEmpty) {
-            final rows = await client
-                .from('movies')
-                .select('title, release_date, media_type, is_published, created_at')
-                .inFilter('title', adminTitleCandidates)
-                .order('created_at', ascending: false);
-            final seenTitleKeys = <String>{};
-            for (final item in (rows as List).whereType<Map>()) {
-              final row = Map<String, dynamic>.from(item);
-              final title = _normalizedMovieTitle(
-                (row['title'] ?? '').toString(),
-              );
-              if (title.isEmpty) continue;
-              final mediaType = (row['media_type'] ?? 'movie').toString();
-              final date = (row['release_date'] ?? '').toString();
-              final year = date.length >= 4 ? date.substring(0, 4) : 'N/A';
-              final base = '$mediaType:$title';
-              final key = '$base:$year';
-              if (!seenTitleKeys.add(key)) continue;
-              if (row['is_published'] != true) {
-                unpublishedAdminTitleBases.add(base);
-                if (year == 'N/A') {
-                  unpublishedAdminTitleUnknownYears.add(base);
-                } else {
-                  unpublishedAdminTitleYears.add(key);
-                }
-              }
-            }
-          }
-        } catch (error) {
-          debugPrint('Trending Admin publication check failed: $error');
-          return;
-        }
-      }
 
       final verifiedAll = <Movie>[];
       for (var start = 0;
-          start < candidates.length && verifiedAll.length < 16;
+          start < visibleCandidates.length && verifiedAll.length < 16;
           start += 3) {
-        final batch = candidates.skip(start).take(3);
+        final batch = visibleCandidates.skip(start).take(3);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map((candidate) async {
-            final key = '${candidate.mediaType}:${candidate.tmdbId}';
-            final titleBase =
-                '${candidate.mediaType}:${_normalizedMovieTitle(candidate.title)}';
-            final year = candidate.year.trim().length >= 4
-                ? candidate.year.trim().substring(0, 4)
-                : 'N/A';
-            final unpublishedByTitle = year == 'N/A'
-                ? unpublishedAdminTitleBases.contains(titleBase)
-                : unpublishedAdminTitleYears.contains('$titleBase:$year') ||
-                    unpublishedAdminTitleUnknownYears.contains(titleBase);
-            if ((candidate.tmdbId > 0 && unpublishedAdminKeys.contains(key)) ||
-                unpublishedByTitle) {
+            if (_unpublishedCatalogKeys.contains(
+              _catalogVisibilityKey(candidate),
+            )) {
               return null;
             }
             return _verifyPlayableTrendingMovie(candidate);
@@ -2124,6 +2202,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _loadAppSettings();
     final savedHistory = await MovieCache.getList(MovieCache.historyKey);
     final prefs = await SharedPreferences.getInstance();
+    _unpublishedCatalogKeys
+      ..clear()
+      ..addAll(prefs.getStringList('flixora_unpublished_catalog_keys') ?? const []);
+    _checkedCatalogVisibilityKeys
+      ..clear()
+      ..addAll(prefs.getStringList('flixora_checked_catalog_visibility_keys') ?? const []);
     final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
     final savedDownloads = await MovieCache.getDownloads();
     if (mounted) {
@@ -2444,6 +2528,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(sections);
+      unawaited(_refreshCatalogVisibility(
+        candidates: sections.expand((section) => section.items).toList(),
+        forceRefresh: true,
+      ));
     } catch (error) {
       debugPrint('MovieBox/WeFeed home feed unavailable: $error');
     }
@@ -2670,6 +2758,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
         MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
+      unawaited(_refreshCatalogVisibility(
+        candidates: results.expand((items) => items).toList(),
+        forceRefresh: true,
+      ));
       unawaited(_refreshPlayableTrendingMovies());
     } catch (error) {
       debugPrint('Background catalogue refresh failed: $error');
@@ -2799,6 +2891,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
 
+      unawaited(_refreshCatalogVisibility(forceRefresh: true));
       unawaited(_refreshSecondaryCatalogues(forceRefresh: forceRefresh));
       unawaited(_refreshPlayableTrendingMovies());
     } catch (error) {
@@ -2966,6 +3059,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
+    await _refreshCatalogVisibility(
+      candidates: [...adminResults, ...movieBoxItems, ...tmdbResults],
+      forceRefresh: true,
+    );
     final unique = _deduplicateMovies([
       ...adminResults,
       ...movieBoxItems,
@@ -3678,6 +3775,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               _cachedMovieBoxMatch(requested) ??
               requested);
     }
+
+    final visibilityKey = _catalogVisibilityKey(requested);
+    if (!_checkedCatalogVisibilityKeys.contains(visibilityKey)) {
+      await _refreshCatalogVisibility(
+        candidates: [requested],
+        forceRefresh: true,
+      );
+    }
+    if (_unpublishedCatalogKeys.contains(visibilityKey)) return null;
 
     final cachedMovieBox = _cachedMovieBoxMatch(requested);
     final Future<Movie?>? parallelMovieBoxLookup = requested.isFlixora
