@@ -54,7 +54,7 @@ void main() {
           inBollywoodCatalogue: false,
           inHollywoodCatalogue: false,
         ),
-        isEmpty,
+        'South Indian',
       );
     });
 
@@ -88,6 +88,38 @@ void main() {
           inHollywoodCatalogue: false,
         ),
         isEmpty,
+      );
+    });
+
+    test('classifies South Indian, Bengali and Asian cinema separately', () {
+      for (final language in ['ta', 'te', 'ml', 'kn']) {
+        expect(
+          TrendingMovieEligibility.category(
+            originalLanguage: language,
+            originCountry: 'India',
+            inBollywoodCatalogue: false,
+            inHollywoodCatalogue: false,
+          ),
+          'South Indian',
+        );
+      }
+      expect(
+        TrendingMovieEligibility.category(
+          originalLanguage: 'bn',
+          originCountry: 'Bangladesh',
+          inBollywoodCatalogue: false,
+          inHollywoodCatalogue: false,
+        ),
+        'Bengali',
+      );
+      expect(
+        TrendingMovieEligibility.category(
+          originalLanguage: 'ko',
+          originCountry: 'South Korea',
+          inBollywoodCatalogue: false,
+          inHollywoodCatalogue: false,
+        ),
+        'Asian',
       );
     });
 
