@@ -99,7 +99,7 @@ void main() {
       expect(selected, 'moviebox-stream-unavailable');
     });
 
-    test('unpublishing Admin does not block a matching MovieBox title',
+    test('unpublishing Admin does not block a matching MovieBox title', () {
       final blockedKeys = {'admin:id:42'};
 
       expect(
