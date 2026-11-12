@@ -2721,6 +2721,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
+    final cachedSearch = await MovieCache.getSearch(text);
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+    if (cachedSearch.isNotEmpty) {
+      setState(() {
+        searchResults = cachedSearch;
+        _searchLoading = true;
+        _searchError = null;
+      });
+    }
+
     final onlineNow = _online
         ? await InternetService.isOnline()
         : await InternetService.isOnline(forceRefresh: true);
@@ -2730,13 +2742,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _online = false;
         _connectionKnown = true;
       });
-      final cached = await MovieCache.getSearch(text);
-      if (!mounted) return;
       setState(() {
         _search = text;
-        searchResults = cached;
+        searchResults = cachedSearch;
         _searchLoading = false;
-        _searchError = cached.isEmpty ? 'Check your internet connection' : null;
+        _searchError =
+            cachedSearch.isEmpty ? 'Check your internet connection' : null;
       });
       return;
     }
@@ -2744,6 +2755,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {
       _online = true;
       _search = text;
+      if (cachedSearch.isNotEmpty) searchResults = cachedSearch;
       _searchLoading = true;
       _searchError = null;
     });
