@@ -12,7 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
@@ -550,8 +550,8 @@ class FlixoraImageCacheManager {
 
   // Reuse DefaultCacheManager's existing cache key so already-downloaded
   // posters remain available, while allowing a larger catalogue cache.
-  static final CacheManager instance = CacheManager(
-    Config(
+  static final cache_manager.CacheManager instance = cache_manager.CacheManager(
+    cache_manager.Config(
       'libCachedImageData',
       stalePeriod: const Duration(days: 30),
       maxNrOfCacheObjects: 600,
@@ -562,9 +562,9 @@ class FlixoraImageCacheManager {
 /// Displays network images online, but reads disk cache only while offline.
 /// A cache miss offline never starts a network request.
 class FlixoraCachedImage extends StatelessWidget {
-  static final Map<String, Future<FileInfo?>> _offlineLookups = {};
+  static final Map<String, Future<cache_manager.FileInfo?>> _offlineLookups = {};
 
-  static Future<FileInfo?> _offlineFile(String url) {
+  static Future<cache_manager.FileInfo?> _offlineFile(String url) {
     final existing = _offlineLookups[url];
     if (existing != null) return existing;
     final future = FlixoraImageCacheManager.instance.getFileFromCache(url);
@@ -612,7 +612,7 @@ class FlixoraCachedImage extends StatelessWidget {
       );
     }
 
-    return FutureBuilder<FileInfo?>(
+    return FutureBuilder<cache_manager.FileInfo?>(
       future: _offlineFile(imageUrl),
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
@@ -5286,7 +5286,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   int _movieListFingerprint(List<Movie> movies) => Object.hashAll([
-        Object.hashAll(movies.map((movie) => Object.hash(
+        Object.hashAll(movies.map((movie) => Object.hashAll([
               movie.id,
               movie.tmdbId,
               movie.sourceId,
@@ -5310,7 +5310,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               movie.runtime,
               Object.hashAll(movie.genres),
               Object.hashAll(movie.audioLanguages),
-            ))),
+            ]))),
         Object.hashAll(_unpublishedCatalogKeys),
         _catalogueFingerprint(),
       ]);
