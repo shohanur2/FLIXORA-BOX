@@ -2791,7 +2791,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]);
     setState(() {
       searchResults = initialUnique;
-      _searchLoading = true;
+      _searchLoading = initialUnique.isEmpty;
       _searchError = null;
     });
 
