@@ -50,6 +50,42 @@ void main() {
       );
     });
 
+    test('indexed MovieBox matching removes only exact duplicate candidates', () {
+      final ordered = CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<String>(
+        [
+          'first',
+          'admin:interstellar',
+          'middle',
+          'moviebox:interstellar',
+          'admin:other',
+          'last',
+        ],
+        isMovieBox: (item) => item.startsWith('moviebox:'),
+        movieBoxKeys: (item) => item == 'moviebox:interstellar'
+            ? const ['tmdb:movie:42', 'title:movie:interstellar:year:2014']
+            : const [],
+        candidateKeys: (item) => item == 'admin:interstellar'
+            ? const ['tmdb:movie:42']
+            : const [],
+      );
+
+      expect(
+        ordered,
+        ['first', 'middle', 'moviebox:interstellar', 'admin:other', 'last'],
+      );
+    });
+
+    test('indexed matching preserves different release years', () {
+      final ordered = CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<String>(
+        ['admin:2022', 'moviebox:2024'],
+        isMovieBox: (item) => item.startsWith('moviebox:'),
+        movieBoxKeys: (_) => const ['title:movie:dune:year:2024'],
+        candidateKeys: (_) => const ['title:movie:dune:year:2022'],
+      );
+
+      expect(ordered, ['admin:2022', 'moviebox:2024']);
+    });
+
     test('only Admin rows are sent to publication visibility checks', () {
       final candidates = CatalogSourcePolicy.adminCandidates<String>(
         ['tmdb', 'moviebox', 'admin'],
