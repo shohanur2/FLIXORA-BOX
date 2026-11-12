@@ -7575,7 +7575,9 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   @override
   void initState() {
     super.initState();
-    _activeIndex = widget.initialIndex.clamp(0, widget.items.length - 1).toInt();
+    _activeIndex = widget.items.isEmpty
+        ? 0
+        : widget.initialIndex.clamp(0, widget.items.length - 1).toInt();
     _pageController = PageController(initialPage: _activeIndex);
     _player = Player(
       configuration: PlayerConfiguration(
