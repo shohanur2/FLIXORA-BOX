@@ -11,6 +11,9 @@ class TrendingMovieEligibility {
           .first
           .trim()
           .toLowerCase();
+      if (value.contains('subtitle') || value.contains('caption')) {
+        return false;
+      }
       return value == 'hi' ||
           value.contains('hindi') ||
           value == 'हिन्दी' ||
