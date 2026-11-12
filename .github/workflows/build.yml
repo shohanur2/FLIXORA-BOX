@@ -135,48 +135,48 @@ jobs:
           h5_source = Path("/tmp/SparkBoxCore/sparkbox-core/src/h5.rs")
           h5_content = h5_source.read_text()
           old_play_request = """            if let Some(t) = &d.h5_token {
-                          if !t.trim().is_empty() {
-                              ins(&mut h, "authorization", format!("Bearer {t}"));
-                          }
-                      }
-                      let r = self.http.get(&url).headers(h).send().await?;
-                      let status = r.status().as_u16();
-                      let text = r.text().await?;
-                      let root = try_json(&text).unwrap_or_default();
-                      let data = root.get("data").and_then(Value::as_object);"""
+                if !t.trim().is_empty() {
+                    ins(&mut h, "authorization", format!("Bearer {t}"));
+                }
+            }
+            let r = self.http.get(&url).headers(h).send().await?;
+            let status = r.status().as_u16();
+            let text = r.text().await?;
+            let root = try_json(&text).unwrap_or_default();
+            let data = root.get("data").and_then(Value::as_object);"""
           new_play_request = """            let cached_token = self.h5_guest.lock().await.clone().or_else(|| d.h5_token.clone());
-                      if let Some(t) = &cached_token {
-                          if !t.trim().is_empty() {
-                              ins(&mut h, "authorization", format!("Bearer {t}"));
-                          }
-                      }
-                      let mut response = self.http.get(&url).headers(h.clone())
-                          .timeout(std::time::Duration::from_secs(12))
-                          .send().await?;
-                      let mut status = response.status().as_u16();
-                      let mut text = response.text().await?;
-                      let mut root = try_json(&text).unwrap_or_default();
-                      let has_streams = |value: &Value| {
-                          let data = value.get("data").and_then(Value::as_object);
-                          ["dash", "hls", "streams"].iter().any(|key| {
-                              !get_arr(data.and_then(|d| d.get(*key))).is_empty()
-                          })
-                      };
-                      if matches!(status, 400 | 401 | 441) || (status == 200 && !has_streams(&root)) {
-                          if let Some(fresh_token) = self.h5_token(true).await? {
-                              let mut retry_headers = h;
-                              retry_headers.remove(reqwest::header::AUTHORIZATION);
-                              ins(&mut retry_headers, "authorization", format!("Bearer {fresh_token}"));
-                              response = self.http.get(&url).headers(retry_headers)
-                                  .timeout(std::time::Duration::from_secs(12))
-                                  .send().await?;
-                              status = response.status().as_u16();
-                              text = response.text().await?;
-                              root = try_json(&text).unwrap_or_default();
-                          }
-                      }
-                      let data = root.get("data").and_then(Value::as_object);"""
-          if old_play_request not in h5_content:
+            if let Some(t) = &cached_token {
+                if !t.trim().is_empty() {
+                    ins(&mut h, "authorization", format!("Bearer {t}"));
+                }
+            }
+            let mut response = self.http.get(&url).headers(h.clone())
+                .timeout(std::time::Duration::from_secs(12))
+                .send().await?;
+            let mut status = response.status().as_u16();
+            let mut text = response.text().await?;
+            let mut root = try_json(&text).unwrap_or_default();
+            let has_streams = |value: &Value| {
+                let data = value.get("data").and_then(Value::as_object);
+                ["dash", "hls", "streams"].iter().any(|key| {
+                    !get_arr(data.and_then(|d| d.get(*key))).is_empty()
+                })
+            };
+            if matches!(status, 400 | 401 | 441) || (status == 200 && !has_streams(&root)) {
+                if let Some(fresh_token) = self.h5_token(true).await? {
+                    let mut retry_headers = h;
+                    retry_headers.remove(reqwest::header::AUTHORIZATION);
+                    ins(&mut retry_headers, "authorization", format!("Bearer {fresh_token}"));
+                    response = self.http.get(&url).headers(retry_headers)
+                        .timeout(std::time::Duration::from_secs(12))
+                        .send().await?;
+                    status = response.status().as_u16();
+                    text = response.text().await?;
+                    root = try_json(&text).unwrap_or_default();
+                }
+            }
+            let data = root.get("data").and_then(Value::as_object);"""
+                    if old_play_request not in h5_content:
               raise SystemExit("SparkBoxCore play request source changed; review the token-refresh patch.")
           h5_content = h5_content.replace(old_play_request, new_play_request, 1)
 
