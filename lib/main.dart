@@ -20,7 +20,6 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/featured_carousel_layout.dart';
 import 'streaming/tmdb_media_type.dart';
-import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
@@ -7453,13 +7452,6 @@ class MovieDetailsScreen extends StatelessWidget {
                       height: 1.6,
                       fontSize: 14,
                     ),
-                  ),
-                  ExternalCatalogSection(
-                    title: movie.title,
-                    year: movie.year,
-                    mediaType: movie.mediaType,
-                    tmdbId: movie.tmdbId,
-                    client: supabaseClient,
                   ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
