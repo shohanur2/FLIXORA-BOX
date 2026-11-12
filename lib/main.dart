@@ -2310,7 +2310,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               section.items.isNotEmpty && !section.isFlixoraOriginal)
           .toList(growable: false);
       if (!mounted) return;
-      setState(() => _movieBoxSections = sections);
+      setState(() {
+        _movieBoxSections = sections;
+        if (_allMovies().isNotEmpty) {
+          loading = false;
+          homeError = null;
+        }
+      });
       for (final item in sections.expand((section) => section.items)) {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
