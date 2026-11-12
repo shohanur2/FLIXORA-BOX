@@ -11607,7 +11607,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       _subtitleDelay = prefs.getDouble('flixora_sub_delay') ?? 0;
       _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
       _subtitleShadowOffset = prefs.getDouble('flixora_sub_shadow_offset') ?? 1;
-      await _applySubtitlePreferences();
       if (mounted && !_isDisposed) setState(() {});
     } catch (error) {
       debugPrint('Subtitle preferences load failed: $error');
@@ -11620,19 +11619,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return '#$alpha${_subtitleBackgroundColor.replaceFirst('#', '')}';
   }
 
-  Future<void> _applySubtitlePreferences() async {
-    try {
-      await _player.setProperty('sub-font', 'Arial');
-      await _player.setProperty('sub-font-size', _subtitleFontSize.round().toString());
-      await _player.setProperty('sub-color', _subtitleTextColor);
-      await _player.setProperty('sub-back-color', _subtitleBackgroundValue());
-      await _player.setProperty('sub-pos', _subtitlePosition.round().toString());
-      await _player.setProperty('sub-delay', _subtitleDelay.toStringAsFixed(2));
-      await _player.setProperty('sub-border-size', _subtitleOutlineSize.toStringAsFixed(1));
-      await _player.setProperty('sub-shadow-offset', _subtitleShadowOffset.toStringAsFixed(1));
-    } catch (error) {
-      debugPrint('Subtitle style could not be applied by playback engine: $error');
-    }
+  SubtitleViewConfiguration _subtitleViewConfiguration() {
+    final backgroundHex = _subtitleBackgroundColor.replaceFirst('#', '');
+    final backgroundRgb = int.parse(backgroundHex, radix: 16);
+    final backgroundAlpha = (_subtitleBackgroundOpacity * 255)
+        .round().clamp(0, 255).toInt();
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final bottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+        .clamp(8.0, screenHeight * 0.85).toDouble();
+
+    return SubtitleViewConfiguration(
+      style: TextStyle(
+        fontFamily: 'Arial',
+        fontSize: _subtitleFontSize,
+        color: _subtitleColorFromHex(_subtitleTextColor),
+        backgroundColor: Color((backgroundAlpha << 24) | backgroundRgb),
+        fontWeight: FontWeight.w600,
+        shadows: const [
+          Shadow(color: Colors.black87, blurRadius: 2, offset: Offset(1, 1)),
+        ],
+      ),
+      textAlign: TextAlign.center,
+      padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPadding),
+    );
   }
 
   Future<void> _saveSubtitlePreferences() async {
@@ -11645,7 +11654,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await prefs.setDouble('flixora_sub_delay', _subtitleDelay);
     await prefs.setDouble('flixora_sub_outline_size', _subtitleOutlineSize);
     await prefs.setDouble('flixora_sub_shadow_offset', _subtitleShadowOffset);
-    await _applySubtitlePreferences();
   }
 
   Color _subtitleColorFromHex(String value) {
@@ -13051,6 +13059,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? BoxFit.cover
                         : BoxFit.contain),
                 controls: NoVideoControls,
+                subtitleViewConfiguration: _subtitleViewConfiguration(),
               ),
             ),
           ),
