@@ -167,10 +167,8 @@ shorts_method = """    /// Dedicated Short TV catalogue. Fetches multiple pages 
             let raw_items = get_arr(data.get("items"));
             let item_count = raw_items.len();
             for raw in raw_items {
-                if let Some(raw_map) = raw.as_object() {
-                    if let Some(item) = parse_short_subject(raw_map, block_adult) {
-                        all_items.push(item);
-                    }
+                if let Some(item) = parse_short_subject(raw, block_adult) {
+                    all_items.push(item);
                 }
             }
             has_more = data
