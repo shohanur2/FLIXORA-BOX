@@ -237,7 +237,7 @@ class MovieBoxService {
         if (episodes.isNotEmpty) {
           episode = int.tryParse(episodes.first.toString()) ?? 0;
         }
-        if (season <= 0 || episode <= 0) return null;
+        if (season <= 0) return null;
       }
 
       final resolvedStreams = await streams(
