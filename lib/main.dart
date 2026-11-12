@@ -6542,7 +6542,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
       ),
-      body: !_connectionKnown
+      // Render cached Home content immediately while the first connectivity
+      // check is running. Only block the initial screen when no cached titles
+      // exist; offline users keep their previously cached posters and rails.
+      body: (!_connectionKnown && _allMovies().isEmpty)
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
