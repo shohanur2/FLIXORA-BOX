@@ -9659,6 +9659,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   double _volume = 100;
   double _screenBrightness = 0.5;
 
+  // Subtitle presentation only; stream and playback pipeline remain untouched.
+  double _subtitleFontSize = 46;
+  String _subtitleTextColor = '#FFFFFF';
+  String _subtitleBackgroundColor = '#000000';
+  double _subtitleBackgroundOpacity = 0.62;
+  double _subtitlePosition = 92;
+  double _subtitleDelay = 0;
+  double _subtitleOutlineSize = 1.5;
+  double _subtitleShadowOffset = 1;
+
   double _videoZoom = 1.0;
   String? _gestureMode;
   String _gestureFeedback = '';
@@ -9754,6 +9764,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
+    _loadSubtitlePreferences();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
     _prepareAndInitializePlayer();
@@ -11585,6 +11596,207 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _loadSubtitlePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _subtitleFontSize = prefs.getDouble('flixora_sub_font_size') ?? 46;
+      _subtitleTextColor = prefs.getString('flixora_sub_text_color') ?? '#FFFFFF';
+      _subtitleBackgroundColor = prefs.getString('flixora_sub_background_color') ?? '#000000';
+      _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.62;
+      _subtitlePosition = prefs.getDouble('flixora_sub_position') ?? 92;
+      _subtitleDelay = prefs.getDouble('flixora_sub_delay') ?? 0;
+      _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
+      _subtitleShadowOffset = prefs.getDouble('flixora_sub_shadow_offset') ?? 1;
+      if (mounted && !_isDisposed) setState(() {});
+    } catch (error) {
+      debugPrint('Subtitle preferences load failed: $error');
+    }
+  }
+
+  SubtitleViewConfiguration _subtitleViewConfiguration() {
+    final backgroundHex = _subtitleBackgroundColor.replaceFirst('#', '');
+    final backgroundRgb = int.parse(backgroundHex, radix: 16);
+    final backgroundAlpha = (_subtitleBackgroundOpacity * 255)
+        .round().clamp(0, 255).toInt();
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final bottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+        .clamp(8.0, screenHeight * 0.85).toDouble();
+
+    return SubtitleViewConfiguration(
+      style: TextStyle(
+        fontFamily: 'Arial',
+        fontSize: _subtitleFontSize,
+        color: _subtitleColorFromHex(_subtitleTextColor),
+        backgroundColor: Color((backgroundAlpha << 24) | backgroundRgb),
+        fontWeight: FontWeight.w600,
+        shadows: const [
+          Shadow(color: Colors.black87, blurRadius: 2, offset: Offset(1, 1)),
+        ],
+      ),
+      textAlign: TextAlign.center,
+      padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPadding),
+    );
+  }
+
+  Future<void> _saveSubtitlePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('flixora_sub_font_size', _subtitleFontSize);
+    await prefs.setString('flixora_sub_text_color', _subtitleTextColor);
+    await prefs.setString('flixora_sub_background_color', _subtitleBackgroundColor);
+    await prefs.setDouble('flixora_sub_background_opacity', _subtitleBackgroundOpacity);
+    await prefs.setDouble('flixora_sub_position', _subtitlePosition);
+    await prefs.setDouble('flixora_sub_delay', _subtitleDelay);
+    await prefs.setDouble('flixora_sub_outline_size', _subtitleOutlineSize);
+    await prefs.setDouble('flixora_sub_shadow_offset', _subtitleShadowOffset);
+  }
+
+  Color _subtitleColorFromHex(String value) {
+    final hex = value.replaceFirst('#', '');
+    return Color(int.parse('FF$hex', radix: 16));
+  }
+
+  void _showSubtitleStyleSettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: playerPanel,
+      builder: (sheetContext) {
+        var fontSize = _subtitleFontSize;
+        var textColor = _subtitleTextColor;
+        var backgroundColor = _subtitleBackgroundColor;
+        var opacity = _subtitleBackgroundOpacity;
+        var position = _subtitlePosition;
+        var delay = _subtitleDelay;
+        var outline = _subtitleOutlineSize;
+        var shadow = _subtitleShadowOffset;
+        const colors = <String, String>{
+          'White': '#FFFFFF', 'Yellow': '#FFFF00', 'Green': '#00FF80',
+          'Cyan': '#00D5FF', 'Orange': '#FFB347', 'Red': '#FF7070',
+        };
+        const backgrounds = <String, String>{
+          'Black': '#000000', 'Dark Grey': '#333333', 'Navy': '#101827',
+        };
+
+        return StatefulBuilder(
+          builder: (context, updateSheet) {
+            Widget sectionLabel(String label) => Padding(
+              padding: const EdgeInsets.only(top: 14, bottom: 4),
+              child: Text(label, style: const TextStyle(
+                color: playerGoldLight, fontSize: 13, fontWeight: FontWeight.w800,
+              )),
+            );
+            Widget sliderRow({
+              required String label, required double value,
+              required double min, required double max, required int divisions,
+              required String display, required ValueChanged<double> onChanged,
+            }) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Expanded(child: Text(label, style: const TextStyle(color: playerWhite, fontSize: 12))),
+                  Text(display, style: const TextStyle(color: playerGoldLight, fontSize: 12, fontWeight: FontWeight.w700)),
+                ]),
+                Slider(value: value.clamp(min, max).toDouble(), min: min, max: max,
+                  divisions: divisions, activeColor: playerGold,
+                  inactiveColor: const Color(0x33FFFFFF), onChanged: onChanged),
+              ],
+            );
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + MediaQuery.viewInsetsOf(context).bottom),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Subtitle Appearance', style: TextStyle(
+                        color: playerWhite, fontSize: 18, fontWeight: FontWeight.w800,
+                      )),
+                      const SizedBox(height: 4),
+                      const Text('Font: Arial', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+                      sectionLabel('TEXT SIZE'),
+                      sliderRow(label: 'Font size', value: fontSize, min: 24, max: 72,
+                        divisions: 24, display: '${fontSize.round()}',
+                        onChanged: (v) => updateSheet(() => fontSize = v)),
+                      sectionLabel('TEXT COLOUR'),
+                      DropdownButtonFormField<String>(
+                        initialValue: colors.containsValue(textColor) ? textColor : '#FFFFFF',
+                        dropdownColor: playerPanel,
+                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                        items: colors.entries.map((entry) => DropdownMenuItem(
+                          value: entry.value,
+                          child: Row(children: [
+                            Container(width: 16, height: 16, decoration: BoxDecoration(
+                              color: _subtitleColorFromHex(entry.value), shape: BoxShape.circle,
+                            )),
+                            const SizedBox(width: 10),
+                            Text(entry.key, style: const TextStyle(color: playerWhite)),
+                          ]),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) updateSheet(() => textColor = v); },
+                      ),
+                      sectionLabel('BACKGROUND'),
+                      DropdownButtonFormField<String>(
+                        initialValue: backgrounds.containsValue(backgroundColor) ? backgroundColor : '#000000',
+                        dropdownColor: playerPanel,
+                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                        items: backgrounds.entries.map((entry) => DropdownMenuItem(
+                          value: entry.value,
+                          child: Text(entry.key, style: const TextStyle(color: playerWhite)),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) updateSheet(() => backgroundColor = v); },
+                      ),
+                      sliderRow(label: 'Background opacity', value: opacity, min: 0, max: 1,
+                        divisions: 20, display: '${(opacity * 100).round()}%',
+                        onChanged: (v) => updateSheet(() => opacity = v)),
+                      sectionLabel('POSITION'),
+                      sliderRow(label: 'Vertical position', value: position, min: 5, max: 95,
+                        divisions: 18, display: '${position.round()}%',
+                        onChanged: (v) => updateSheet(() => position = v)),
+                      sectionLabel('SYNC'),
+                      sliderRow(label: 'Subtitle delay', value: delay, min: -10, max: 10,
+                        divisions: 200, display: '${delay >= 0 ? '+' : ''}${delay.toStringAsFixed(1)}s',
+                        onChanged: (v) => updateSheet(() => delay = v)),
+                      sectionLabel('READABILITY'),
+                      sliderRow(label: 'Outline', value: outline, min: 0, max: 5,
+                        divisions: 10, display: outline.toStringAsFixed(1),
+                        onChanged: (v) => updateSheet(() => outline = v)),
+                      sliderRow(label: 'Shadow', value: shadow, min: 0, max: 5,
+                        divisions: 10, display: shadow.toStringAsFixed(1),
+                        onChanged: (v) => updateSheet(() => shadow = v)),
+                      const SizedBox(height: 12),
+                      SizedBox(width: double.infinity, child: FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: playerGold, foregroundColor: Colors.black),
+                        onPressed: () async {
+                          setState(() {
+                            _subtitleFontSize = fontSize;
+                            _subtitleTextColor = textColor;
+                            _subtitleBackgroundColor = backgroundColor;
+                            _subtitleBackgroundOpacity = opacity;
+                            _subtitlePosition = position;
+                            _subtitleDelay = delay;
+                            _subtitleOutlineSize = outline;
+                            _subtitleShadowOffset = shadow;
+                          });
+                          await _saveSubtitlePreferences();
+                          if (sheetContext.mounted) Navigator.pop(sheetContext);
+                          _startHideTimer();
+                        },
+                        child: const Text('Save Subtitle Settings', style: TextStyle(fontWeight: FontWeight.w800)),
+                      )),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
+  }
+
   Future<void> _addExternalSubtitle() async {
     final controller = TextEditingController();
 
@@ -11942,6 +12154,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     onTap: () => _selectSubtitleTrack(track),
                   );
                 }),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded, color: playerGoldLight),
+                  title: const Text('Subtitle Appearance', style: TextStyle(color: playerWhite)),
+                  subtitle: const Text(
+                    'Arial · Size · Colour · Background · Sync',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showSubtitleStyleSettings();
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.add, color: playerGold),
                   title: const Text(
@@ -12829,6 +13053,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? BoxFit.cover
                         : BoxFit.contain),
                 controls: NoVideoControls,
+                subtitleViewConfiguration: _subtitleViewConfiguration(),
               ),
             ),
           ),
