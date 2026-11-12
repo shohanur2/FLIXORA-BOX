@@ -1737,14 +1737,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .where((id) => id > 0)
           .toSet()
           .toList(growable: false);
-      final noTmdbTitles = candidates
-          .where((movie) => movie.tmdbId <= 0 && movie.title.trim().isNotEmpty)
+      final adminTitleCandidates = candidates
+          .where((movie) => movie.title.trim().isNotEmpty)
           .map((movie) => movie.title.trim())
           .toSet()
           .toList(growable: false);
 
       if (client != null &&
-          (tmdbIds.isNotEmpty || noTmdbTitles.isNotEmpty)) {
+          (tmdbIds.isNotEmpty || adminTitleCandidates.isNotEmpty)) {
         try {
           if (tmdbIds.isNotEmpty) {
             final rows = await client
@@ -1768,11 +1768,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           // MovieBox banner entries may not carry TMDB IDs. Check exact
           // Admin titles too, so an unpublished Admin record still wins.
-          if (noTmdbTitles.isNotEmpty) {
+          if (adminTitleCandidates.isNotEmpty) {
             final rows = await client
                 .from('movies')
                 .select('title, release_date, media_type, is_published, created_at')
-                .inFilter('title', noTmdbTitles)
+                .inFilter('title', adminTitleCandidates)
                 .order('created_at', ascending: false);
             final seenTitleKeys = <String>{};
             for (final item in (rows as List).whereType<Map>()) {
@@ -2152,10 +2152,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.trendingHollywoodKey),
     ]);
     if (!mounted) return;
+    final cachedPlayableTrending = cachedTrendingData[0].isNotEmpty
+        ? cachedTrendingData[0]
+        : _deduplicateMovies([
+            ...cachedTrendingData[2],
+            ...cachedTrendingData[3],
+            ...cachedTrendingData[4],
+          ]);
 
     setState(() {
       _movieBoxSections = cachedMovieBoxSections;
-      _trendingMovies = cachedTrendingData[0];
+      _trendingMovies = cachedPlayableTrending;
       _tmdbTrendingMovies = cachedTrendingData[1];
       _trendingHindiDubbedMovies = cachedTrendingData[2];
       _trendingBollywoodMovies = cachedTrendingData[3];
@@ -7850,6 +7857,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final detail = _movieBoxDetail;
     if (detail == null || _isDisposed) return;
     final requestToken = ++_movieBoxPlaybackRequestToken;
+    if (openPlayer) _isOpening = false;
 
     // Stop the previous episode's audio immediately; never let it continue
     // while the newly selected season/episode is resolving.
@@ -7960,7 +7968,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
       });
 
-      if (openPlayer && _initialized) {
+      if (openPlayer) {
         await _openMovieBoxEpisode(options.first, requestToken);
       } else {
         _prewarmNextMovieBoxEpisode();
@@ -8262,7 +8270,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     if (_isOpening || url == _currentVideoUrl) return;
-
+    final requestToken = _movieBoxPlaybackRequestToken;
     final previousQuality = _selectedQuality;
     final previousUrl = _currentVideoUrl;
     final wasPlaying = _isPlaying;
@@ -8277,17 +8285,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      await _player.open(Media(
-        url,
-        httpHeaders: _headersForQuality(item),
-      ));
-      if (!mounted || _isDisposed) return;
+      await _player.open(
+        Media(url, httpHeaders: _headersForQuality(item)),
+        play: false,
+      );
+      if (!mounted || _isDisposed ||
+          requestToken != _movieBoxPlaybackRequestToken) return;
       if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
       if (wasPlaying) {
         await _player.play();
       } else {
         await _player.pause();
       }
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
 
       _currentVideoUrl = url;
       if (mounted && !_isDisposed) {
@@ -8296,22 +8307,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _initialized = true;
         });
       }
-    } catch (e) {
-      // Re-open the previous encoded URL so a failed quality change does not
-      // leave the player stuck on a broken source.
+    } catch (error) {
+      // A newer episode selection cancels this quality request; it must not
+      // restore or restart the previous episode over the user's selection.
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
+
       var restored = false;
       if (previousUrl.isNotEmpty && !_isDisposed) {
         try {
-          await _player.open(Media(
-            previousUrl,
-            httpHeaders: _movieBoxHeadersByUrl[previousUrl] ?? const <String, String>{},
-          ));
+          await _player.open(
+            Media(
+              previousUrl,
+              httpHeaders: _movieBoxHeadersByUrl[previousUrl] ??
+                  const <String, String>{},
+            ),
+            play: false,
+          );
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           if (wasPlaying) {
             await _player.play();
           } else {
             await _player.pause();
           }
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           _currentVideoUrl = previousUrl;
           restored = true;
         } catch (_) {
@@ -8319,7 +8339,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         }
       }
 
-      if (mounted && !_isDisposed) {
+      if (mounted && !_isDisposed &&
+          requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
           _selectedQuality = previousQuality;
           _initialized = restored;
@@ -8329,7 +8350,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
     } finally {
-      _isOpening = false;
+      if (requestToken == _movieBoxPlaybackRequestToken) {
+        _isOpening = false;
+      }
     }
   }
 
