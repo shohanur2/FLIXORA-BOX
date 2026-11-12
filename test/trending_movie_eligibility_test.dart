@@ -17,7 +17,7 @@ void main() {
           'English · 1080p',
           'Hindi Subtitles',
         ]),
-        isTrue,
+        isFalse,
       );
       expect(
         TrendingMovieEligibility.hasHindiAudioVariant([
