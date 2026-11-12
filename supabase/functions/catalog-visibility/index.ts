@@ -81,9 +81,10 @@ function findBlockedKeys(
   rows: AdminRow[],
   candidates: Candidate[],
 ): string[] {
-  const rowsById = new Map<number, AdminRow>(
-    rows.map((row) => [Number(row.id), row]),
-  );
+  const rowsById = new Map<number, AdminRow>();
+  for (const row of rows) {
+    rowsById.set(Number(row.id), row);
+  }
 
   return candidates
     .filter((candidate) => {
