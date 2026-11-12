@@ -7684,8 +7684,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final id = widget.movie.tmdbId > 0
         ? widget.movie.tmdbId
         : widget.movie.id;
+    final episodeKey = widget.movie.mediaType == 'tv'
+        ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+        : '';
 
-    return 'flixora_resume_$id';
+    // Every TV episode has its own resume point; never carry the previous
+    // episode's position into a newly selected episode.
+    return 'flixora_resume_$id$episodeKey';
   }
 
   String _resolveInitialNetworkUrl() {
