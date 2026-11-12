@@ -3383,7 +3383,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     try {
       final result = await MovieBoxService.search(movie.title, perPage: 20)
-          .timeout(const Duration(seconds: 7));
+          .timeout(const Duration(seconds: 10));
       final items = (result['items'] as List? ?? const [])
           .whereType<Map>()
           .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
@@ -3457,12 +3457,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Future<Movie?> resolveMovieBoxFallback(Movie base) async {
       final cached = _cachedMovieBoxMatch(base);
       if (cached != null) return cached;
-      final parallelMatch = parallelMovieBoxLookup == null
-          ? null
-          : await parallelMovieBoxLookup;
-      if (parallelMatch != null) {
-        return parallelMatch.withFallbackMetadata(base);
+
+      final sameLookupTitle =
+          base.mediaType == requested.mediaType &&
+          _normalizedMovieTitle(base.title) ==
+              _normalizedMovieTitle(requested.title) &&
+          (base.year == requested.year ||
+              base.year == 'N/A' ||
+              requested.year == 'N/A');
+      if (parallelMovieBoxLookup != null && sameLookupTitle) {
+        final parallelMatch = await parallelMovieBoxLookup;
+        return parallelMatch?.withFallbackMetadata(base);
       }
+
+      // Do not repeat the same MovieBox search after its parallel lookup has
+      // already completed or timed out. Search again only for a genuinely
+      // different Admin title.
       return _searchMovieBoxMatch(base);
     }
 
