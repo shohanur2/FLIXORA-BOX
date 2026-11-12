@@ -4013,7 +4013,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     // Start MovieBox and Admin resolution together. The previous sequential
-    // flow waited for MovieBox search (up to 10s) before even asking Supabase.
+    // flow waited for MovieBox search before even asking Supabase.
     final movieBoxLookup = _searchMovieBoxMatch(requested)
         .timeout(
           const Duration(seconds: 5),
@@ -4043,7 +4043,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    final adminMatch = resolved[1] ?? cachedAdmin;
+    // When Supabase is reachable, trust its publication result. Only use a
+    // cached Admin row when no Supabase client is configured at all.
+    final adminMatch = resolved[1] ?? (client == null ? cachedAdmin : null);
     if (adminMatch != null) {
       return CatalogSourcePolicy.preferMovieBox<Movie>(
         movieBoxMatch: null,
