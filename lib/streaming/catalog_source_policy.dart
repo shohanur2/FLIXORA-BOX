@@ -26,6 +26,28 @@ class CatalogSourcePolicy {
     }).toList(growable: false);
   }
 
+  /// Remove MovieBox duplicates using precomputed keys in linear time.
+  ///
+  /// [movieBoxKeys] emits keys indexed from canonical MovieBox records;
+  /// [candidateKeys] emits keys a non-MovieBox record can match against.
+  static List<T> preferMovieBoxDuplicatesByKey<T>(
+    Iterable<T> items, {
+    required bool Function(T item) isMovieBox,
+    required Iterable<String> Function(T movieBoxItem) movieBoxKeys,
+    required Iterable<String> Function(T candidate) candidateKeys,
+  }) {
+    final values = items.toList(growable: false);
+    final indexedKeys = <String>{};
+    for (final item in values) {
+      if (isMovieBox(item)) indexedKeys.addAll(movieBoxKeys(item));
+    }
+
+    return values.where((item) {
+      if (isMovieBox(item)) return true;
+      return !candidateKeys(item).any(indexedKeys.contains);
+    }).toList(growable: false);
+  }
+
   /// Admin publication status must never be applied to MovieBox or TMDB rows.
   static List<T> adminCandidates<T>(
     Iterable<T> items, {
