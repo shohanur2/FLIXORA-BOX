@@ -8117,8 +8117,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
       if (openPlayer) {
         await _openMovieBoxEpisode(options.first, requestToken);
-      } else {
-        _prewarmNextMovieBoxEpisode();
       }
     } catch (error) {
       debugPrint('MovieBox stream resolution failed: $error');
@@ -8285,7 +8283,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           season: nextSeason,
           episode: nextEpisode,
           isSeries: true,
-        ).timeout(const Duration(seconds: 8));
+        ).timeout(const Duration(seconds: 22));
       } catch (_) {}
     }());
   }
