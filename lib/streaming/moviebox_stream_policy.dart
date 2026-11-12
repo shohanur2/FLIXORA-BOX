@@ -2,7 +2,7 @@
 class MovieBoxStreamPolicy {
   MovieBoxStreamPolicy._();
 
-  static const int maxAttempts = 2;
+  static const int maxAttempts = 3;
   static const Duration retryDelay = Duration(milliseconds: 350);
 
   static bool hasPlayableLinks(Map<String, dynamic> response) {
