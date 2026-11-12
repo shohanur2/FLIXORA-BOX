@@ -15,7 +15,21 @@ class MovieBoxService {
   static Future<void> enableSafeContentFilter() =>
       SparkBoxCore.setBlockAdult(true);
 
-  static Future<List<Map<String, dynamic>>> home() => SparkBoxCore.home();
+  static final Map<String, _MovieBoxCacheEntry<List<Map<String, dynamic>>>>
+      _homeCache = {};
+
+  static Future<List<Map<String, dynamic>>> home({bool forceRefresh = false}) {
+    if (forceRefresh) _homeCache.remove('home');
+    return _remember(
+      _homeCache,
+      'home',
+      const Duration(minutes: 5),
+      () => _retry(
+        SparkBoxCore.home,
+        isUsable: (items) => items.isNotEmpty,
+      ),
+    );
+  }
 
   static Future<List<String>> suggest(String query) =>
       SparkBoxCore.suggest(query);
@@ -57,13 +71,19 @@ class MovieBoxService {
   ) {
     final id = _subjectId(item);
     if (id.isEmpty) {
-      return _retry(() => SparkBoxCore.detailRich(item));
+      return _retry(
+        () => SparkBoxCore.detailRich(item),
+        isUsable: (value) => value.isNotEmpty,
+      );
     }
     return _remember(
       _detailCache,
       id,
       const Duration(minutes: 5),
-      () => _retry(() => SparkBoxCore.detailRich(item)),
+      () => _retry(
+        () => SparkBoxCore.detailRich(item),
+        isUsable: (value) => value.isNotEmpty,
+      ),
     );
   }
 
@@ -130,12 +150,20 @@ class MovieBoxService {
     Map<String, dynamic> item,
   ) {
     final id = _subjectId(item);
-    if (id.isEmpty) return _retry(() => SparkBoxCore.playDetail(item));
+    if (id.isEmpty) {
+      return _retry(
+        () => SparkBoxCore.playDetail(item),
+        isUsable: (value) => value.isNotEmpty,
+      );
+    }
     return _remember(
       _playDetailCache,
       id,
       const Duration(minutes: 2),
-      () => _retry(() => SparkBoxCore.playDetail(item)),
+      () => _retry(
+        () => SparkBoxCore.playDetail(item),
+        isUsable: (value) => value.isNotEmpty,
+      ),
     );
   }
 
@@ -155,6 +183,7 @@ class MovieBoxService {
     required int season,
     required int episode,
     required bool isSeries,
+    bool forceRefresh = false,
   }) {
     final subject = (detail['subjectId'] ??
             detail['subject_id'] ??
@@ -163,6 +192,7 @@ class MovieBoxService {
             detail.toString())
         .toString();
     final key = '$subject:$season:$episode:$isSeries';
+    if (forceRefresh) _streamsCache.remove(key);
     return _remember(
       _streamsCache,
       key,
@@ -181,43 +211,55 @@ class MovieBoxService {
 
   /// Resolve the first playable item while the movie details screen is open.
   /// The player and download actions reuse these short-lived requests.
-  static Future<void> prewarm(
+  static Future<Map<String, dynamic>?> prewarmStreams(
     Map<String, dynamic> item, {
     required bool isSeries,
   }) async {
     final id = _subjectId(item);
-    if (id.isEmpty) return;
+    if (id.isEmpty) return null;
 
     try {
       final requests = <Future<dynamic>>[playDetail(item)];
       if (isSeries) requests.add(seasons(id));
       final resolved = await Future.wait<dynamic>(requests);
       final detail = Map<String, dynamic>.from(resolved.first as Map);
+      if (detail.isEmpty) return null;
 
       var season = 0;
       var episode = 0;
       if (isSeries) {
         final availableSeasons =
             resolved[1] as List<Map<String, dynamic>>;
-        if (availableSeasons.isEmpty) return;
+        if (availableSeasons.isEmpty) return null;
         final firstSeason = availableSeasons.first;
         season = int.tryParse((firstSeason['se'] ?? '').toString()) ?? 0;
         final episodes = firstSeason['episodes'] as List? ?? const [];
         if (episodes.isNotEmpty) {
           episode = int.tryParse(episodes.first.toString()) ?? 0;
         }
-        if (season <= 0) return;
+        if (season <= 0 || episode <= 0) return null;
       }
 
-      await streams(
+      final resolvedStreams = await streams(
         detail,
         season: season,
         episode: episode,
         isSeries: isSeries,
       );
+      return MovieBoxStreamPolicy.hasPlayableLinks(resolvedStreams)
+          ? resolvedStreams
+          : null;
     } catch (_) {
       // Prefetch is opportunistic; the player still reports real failures.
+      return null;
     }
+  }
+
+  static Future<void> prewarm(
+    Map<String, dynamic> item, {
+    required bool isSeries,
+  }) async {
+    await prewarmStreams(item, isSeries: isSeries);
   }
 }
 
