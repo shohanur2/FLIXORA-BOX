@@ -181,10 +181,48 @@ class ResumableDownloadService {
             if (offset > 0) 'Range': 'bytes=${offset}-',
           },
           validateStatus: (status) =>
-              status != null && status >= 200 && status < 300,
+              status != null &&
+              ((status >= 200 && status < 300) || status == 416),
         ),
         cancelToken: token,
       );
+
+      if (response.statusCode == 416) {
+        final rangeHeader =
+            response.headers.value('content-range')?.trim() ?? '';
+        const unsatisfiedPrefix = 'bytes */';
+        final remoteTotal = rangeHeader.startsWith(unsatisfiedPrefix)
+            ? int.tryParse(rangeHeader.substring(unsatisfiedPrefix.length))
+            : null;
+        if (offset > 0 && remoteTotal == offset) {
+          if (await File(finalPath).exists()) await File(finalPath).delete();
+          final completedFile = await partFile.rename(finalPath);
+          await onComplete(completedFile.path);
+          return;
+        }
+        throw StateError(
+          'The host rejected the resume range. Retry to restart this download.',
+        );
+      }
+
+      final contentType = (response.headers.value('content-type') ?? '')
+          .split(';')
+          .first
+          .trim()
+          .toLowerCase();
+      if (contentType == 'text/html' ||
+          contentType == 'application/json' ||
+          contentType.startsWith('text/')) {
+        throw StateError(
+          'This link opened a web page, not a direct video file. Ask Admin to attach a direct video source.',
+        );
+      }
+      if (contentType.contains('mpegurl') ||
+          contentType.contains('dash+xml')) {
+        throw StateError(
+          'This is an adaptive HLS/DASH stream. Choose a direct downloadable video file.',
+        );
+      }
 
       final contentRange =
           response.headers.value('content-range')?.trim() ?? '';
@@ -256,13 +294,23 @@ class ResumableDownloadService {
         final size = await _existingLength(partPath);
         onPaused(partPath, size, total);
       } else {
-        onError(
-          error.type == DioExceptionType.connectionTimeout
-              ? 'Connection timed out. You can retry this download.'
-              : error.type == DioExceptionType.receiveTimeout
-                  ? 'The server stopped sending data. You can resume the download.'
-                  : 'Download failed. Check the connection and retry.',
-        );
+        final status = error.response?.statusCode;
+        final message = switch (status) {
+          401 || 403 =>
+            'The video host denied access. The download link may have expired.',
+          404 => 'The video file was not found on the host.',
+          416 =>
+            'The host rejected the resume range. Retry to restart this download.',
+          429 => 'The video host is busy. Try downloading again later.',
+          final code when code != null && code >= 500 =>
+            'The video host is temporarily unavailable. Try again later.',
+          _ when error.type == DioExceptionType.connectionTimeout =>
+            'Connection timed out. You can retry this download.',
+          _ when error.type == DioExceptionType.receiveTimeout =>
+            'The server stopped sending data. You can resume the download.',
+          _ => 'Download failed. Check the connection and retry.',
+        };
+        onError(message);
       }
     } catch (error) {
       if (sink != null) {
