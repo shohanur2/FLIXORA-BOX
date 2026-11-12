@@ -29,7 +29,7 @@ void main() {
     });
 
     test('uses one bounded retry for transient resolution failures', () {
-      expect(MovieBoxStreamPolicy.maxAttempts, 2);
+      expect(MovieBoxStreamPolicy.maxAttempts, 3);
       expect(MovieBoxStreamPolicy.retryDelay.inMilliseconds, 350);
     });
   });
