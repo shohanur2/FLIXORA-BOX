@@ -2091,11 +2091,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .where((title) => title.mediaType == 'movie')
         .toList(growable: false);
 
+    final koreanMovieTitles = preferMovieBoxRecords([
+      ..._tmdbTrendingMovies,
+      ...trending,
+      ...popular,
+      ...latest,
+      ...topRated,
+    ]).where((title) =>
+        title.mediaType == 'movie' &&
+        title.originalLanguage.toLowerCase() == 'ko'
+    ).toList(growable: false);
+
     final movieTitles = preferMovieBoxRecords([
       ..._trendingMovies,
       ...movieBoxTrendingMovies,
       ..._tmdbTrendingMovies,
       ...trending.where((title) => title.mediaType == 'movie'),
+      ...bollywoodMovies,
+      ...hollywoodMovies,
+      ...koreanMovieTitles,
     ]).where((title) => title.mediaType == 'movie').toList(growable: false);
 
     final seriesCatalog = preferMovieBoxRecords([
@@ -6854,7 +6868,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
-          _sectionBlock('Trending Movies', _trendingMovies),
+          _sectionBlock('Trending Movies', _homeTrendingMovies()),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._regularMovieBoxItems
                 .where((title) => title.mediaType == 'tv'),
@@ -12243,14 +12257,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _centerControls() {
+    final controlScale = _isFullscreen ? 1.0 : 0.72;
     Widget skipControl({
       required IconData icon,
       required String tooltip,
       required VoidCallback onPressed,
     }) {
       return Container(
-        width: 48,
-        height: 48,
+        width: 48 * controlScale,
+        height: 48 * controlScale,
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: 0.48),
           shape: BoxShape.circle,
@@ -12266,7 +12281,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         child: IconButton(
           tooltip: tooltip,
           onPressed: onPressed,
-          icon: Icon(icon, color: playerWhite, size: 26),
+          icon: Icon(icon, color: playerWhite, size: 26 * controlScale),
         ),
       );
     }
@@ -12279,10 +12294,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           tooltip: 'Back 10 seconds',
           onPressed: () => _seekBy(-10),
         ),
-        const SizedBox(width: 24),
+        SizedBox(width: 24 * controlScale),
         Container(
-          width: 76,
-          height: 76,
+          width: 76 * controlScale,
+          height: 76 * controlScale,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: const LinearGradient(
@@ -12310,7 +12325,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           child: IconButton(
             tooltip: _isPlaying ? 'Pause' : 'Play',
             onPressed: _togglePlay,
-            iconSize: 43,
+            iconSize: 43 * controlScale,
             color: playerWhite,
             icon: Icon(
               _isPlaying
@@ -12319,7 +12334,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 24),
+        SizedBox(width: 24 * controlScale),
         skipControl(
           icon: Icons.forward_10_rounded,
           tooltip: 'Forward 10 seconds',
@@ -12331,9 +12346,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _bottomControls() {
     final max = _duration.inMilliseconds.toDouble();
+    final compact = !_isFullscreen;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 9 : 18,
+        0,
+        compact ? 46 : 66,
+        compact ? 8 : 18,
+      ),
       child: DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -12355,7 +12376,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 7, 12, 5),
+          padding: EdgeInsets.fromLTRB(
+            compact ? 7 : 12,
+            compact ? 3 : 7,
+            compact ? 7 : 12,
+            compact ? 2 : 5,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -12420,9 +12446,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               Row(
                 children: [
                   IconButton(
-                    constraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 38,
+                    constraints: BoxConstraints(
+                      minWidth: compact ? 27 : 34,
+                      minHeight: compact ? 30 : 38,
                     ),
                     padding: EdgeInsets.zero,
                     onPressed: () => _changeVolume(_volume - 10),
@@ -12433,7 +12459,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                   ),
                   SizedBox(
-                    width: 58,
+                    width: compact ? 48 : 58,
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
                         trackHeight: 3,
@@ -12457,9 +12483,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     ),
                   ),
                   IconButton(
-                    constraints: const BoxConstraints(
-                      minWidth: 34,
-                      minHeight: 38,
+                    constraints: BoxConstraints(
+                      minWidth: compact ? 27 : 34,
+                      minHeight: compact ? 30 : 38,
                     ),
                     padding: EdgeInsets.zero,
                     onPressed: () => _changeVolume(_volume + 10),
