@@ -440,6 +440,21 @@ jobs:
               raise SystemExit("SparkBoxCore season-info URL changed; review Short TV episode support.")
           mobile = mobile.replace(old_seasons, new_seasons, 1)
 
+          old_signature = """    pub(crate) async fn detail_mobile(
+                  &self,
+                  id: &str,
+                  path_hint: &str,
+              ) -> Result<crate::models::Detail> {"""
+          new_signature = """    pub(crate) async fn detail_mobile(
+                  &self,
+                  id: &str,
+                  path_hint: &str,
+                  subject_type: i64,
+              ) -> Result<crate::models::Detail> {"""
+          if old_signature not in mobile:
+              raise SystemExit("SparkBoxCore detail_mobile signature changed; review Short TV support.")
+          mobile = mobile.replace(old_signature, new_signature, 1)
+
           old_detail = """        let url = format!(
                       "{}/wefeed-mobile-bff/subject-api/get?subjectId={}",
                       self.config.mobile_base, id
@@ -450,12 +465,28 @@ jobs:
                       .trim_start_matches("http://")
                       .trim_end_matches('/');
                   let url = format!(
-                      "{base}/wefeed-mobile-bff/subject-api/get?host={host}&subjectId={id}"
+                      "{base}/wefeed-mobile-bff/subject-api/get?host={host}&subjectId={id}&subjectType={subject_type}"
                   );"""
           if old_detail not in mobile:
               raise SystemExit("SparkBoxCore subject detail URL changed; review Short TV playback support.")
           mobile = mobile.replace(old_detail, new_detail, 1)
           mobile_path.write_text(mobile)
+
+          client_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/client.rs")
+          client = client_path.read_text()
+          old_client_call = 'self.detail_mobile(item.id.as_str(), "").await'
+          new_client_call = 'self.detail_mobile(item.id.as_str(), "", item.subject_type).await'
+          if old_client_call not in client:
+              raise SystemExit("SparkBoxCore play_detail call changed; review Short TV support.")
+          client_path.write_text(client.replace(old_client_call, new_client_call, 1))
+
+          h5_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/h5.rs")
+          h5 = h5_path.read_text()
+          old_h5_call = 'self.detail_mobile(&item.id, "").await'
+          new_h5_call = 'self.detail_mobile(&item.id, "", item.subject_type).await'
+          if old_h5_call not in h5:
+              raise SystemExit("SparkBoxCore detail_rich call changed; review Short TV support.")
+          h5_path.write_text(h5.replace(old_h5_call, new_h5_call, 1))
 
           ffi_path = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
           ffi = ffi_path.read_text()
