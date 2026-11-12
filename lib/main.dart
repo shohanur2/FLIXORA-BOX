@@ -26,6 +26,7 @@ import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
 import 'streaming/moviebox_service.dart';
+import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
 
@@ -603,6 +604,10 @@ class InternetService {
 }
 class MovieCache {
   static const String trendingKey = 'flixora_trending';
+  static const String tmdbTrendingMoviesKey = 'flixora_tmdb_trending_movies';
+  static const String trendingHindiDubbedKey = 'flixora_trending_hindi_dubbed';
+  static const String trendingBollywoodKey = 'flixora_trending_bollywood';
+  static const String trendingHollywoodKey = 'flixora_trending_hollywood';
   static const String popularKey = 'flixora_popular';
   static const String latestKey = 'flixora_latest';
   static const String topRatedKey = 'flixora_top_rated';
@@ -1417,6 +1422,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? homeError;
 
   List<Movie> trending = [];
+  List<Movie> _tmdbTrendingMovies = [];
+  List<Movie> _trendingHindiDubbedMovies = [];
+  List<Movie> _trendingBollywoodMovies = [];
+  List<Movie> _trendingHollywoodMovies = [];
+  bool _refreshingHindiDubbedTrending = false;
   List<Movie> popular = [];
   List<Movie> latest = [];
   List<Movie> topRated = [];
@@ -1567,6 +1577,227 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .where((title) =>
             title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
         .toList(growable: false);
+  }
+
+  String _trendingMovieCategory(Movie movie) {
+    final id = movie.tmdbId;
+    return TrendingMovieEligibility.category(
+      originalLanguage: movie.originalLanguage,
+      originCountry: movie.originCountry,
+      inBollywoodCatalogue: id > 0 &&
+          bollywoodMovies.any((item) => item.tmdbId == id),
+      inHollywoodCatalogue: id > 0 &&
+          hollywoodMovies.any((item) => item.tmdbId == id),
+    );
+  }
+
+  List<Movie> _trendingHindiDubbedCandidates() {
+    // Keep the current TMDB weekly ranking first. Regional discovery lists
+    // are interleaved afterward so one region cannot crowd out the other.
+    final regionalFallbacks = <Movie>[];
+    final fallbackCount = bollywoodMovies.length > hollywoodMovies.length
+        ? bollywoodMovies.length
+        : hollywoodMovies.length;
+    for (var index = 0; index < fallbackCount; index++) {
+      if (index < bollywoodMovies.length) {
+        regionalFallbacks.add(bollywoodMovies[index]);
+      }
+      if (index < hollywoodMovies.length) {
+        regionalFallbacks.add(hollywoodMovies[index]);
+      }
+    }
+
+    return _deduplicateMovies([
+      ..._tmdbTrendingMovies,
+      ...regionalFallbacks,
+    ]).where((movie) {
+      if (movie.mediaType != 'movie') return false;
+      if (_trendingMovieCategory(movie).isEmpty) return false;
+      return TrendingMovieEligibility.isRecentRelease(
+        releaseDate: movie.releaseDate,
+        year: movie.year,
+      );
+    }).take(24).toList(growable: false);
+  }
+
+  Future<bool> _movieBoxHasHindiAudio(Movie movie) async {
+    try {
+      final detail = await MovieBoxService.playDetail(movie.toMovieBoxMap())
+          .timeout(const Duration(seconds: 8));
+      final response = await MovieBoxService.streams(
+        detail,
+        season: 0,
+        episode: 0,
+        isSeries: false,
+      ).timeout(const Duration(seconds: 8));
+      final links = response['links'] as List? ?? const [];
+      return links.whereType<Map>().any((link) {
+        final uri = Uri.tryParse((link['url'] ?? '').toString());
+        final hasPlayableUrl = uri != null &&
+            (uri.scheme == 'http' || uri.scheme == 'https') &&
+            uri.host.isNotEmpty;
+        return hasPlayableUrl &&
+            TrendingMovieEligibility.hasHindiAudioVariant([
+              (link['label'] ?? '').toString(),
+            ]);
+      });
+    } catch (error) {
+      debugPrint('Hindi-dubbed Trending stream check failed: $error');
+      return false;
+    }
+  }
+
+  Future<MapEntry<String, Movie>?> _verifyHindiDubbedTrendingMovie(
+    Movie candidate,
+  ) async {
+    final category = _trendingMovieCategory(candidate);
+    if (category.isEmpty) return null;
+
+    final adminMatch = _cachedFlixoraMatch(candidate);
+    if (adminMatch != null && adminMatch.hasPlayableVideoUrl) {
+      // An Admin direct source has precedence. Only show it in this rail when
+      // its saved audio metadata explicitly confirms Hindi audio.
+      return _hasHindiAudio(adminMatch)
+          ? MapEntry(category, adminMatch)
+          : null;
+    }
+
+    final requested = adminMatch ?? candidate;
+    final movieBoxMatch = _cachedMovieBoxMatch(requested) ??
+        await _searchMovieBoxMatch(requested);
+    if (movieBoxMatch == null ||
+        !movieBoxMatch.isMovieBox ||
+        movieBoxMatch.movieBoxIsSeries) {
+      return null;
+    }
+    if (!await _movieBoxHasHindiAudio(movieBoxMatch)) return null;
+
+    // Store the verified language on the cached card so its Hindi badge and
+    // section filters remain accurate without resolving streams during build.
+    final verifiedMovie = Movie.fromCache({
+      ...movieBoxMatch.toJson(),
+      'audioLanguages': ['Hindi'],
+    });
+    return MapEntry(category, verifiedMovie);
+  }
+
+  Future<void> _refreshHindiDubbedTrendingMovies() async {
+    if (!_online || _refreshingHindiDubbedTrending) return;
+    final candidates = _trendingHindiDubbedCandidates();
+    if (candidates.isEmpty) return;
+
+    _refreshingHindiDubbedTrending = true;
+    try {
+      final unpublishedAdminKeys = <String>{};
+      final adminDirectSourceKeys = <String>{};
+      final client = supabaseClient;
+      final tmdbIds = candidates
+          .map((movie) => movie.tmdbId)
+          .where((id) => id > 0)
+          .toSet()
+          .toList(growable: false);
+
+      if (client != null && tmdbIds.isNotEmpty) {
+        try {
+          final rows = await client
+              .from('movies')
+              .select('tmdb_id, media_type, is_published, video_url, created_at')
+              .inFilter('tmdb_id', tmdbIds)
+              .order('created_at', ascending: false);
+          final seenAdminKeys = <String>{};
+          for (final item in (rows as List).whereType<Map>()) {
+            final row = Map<String, dynamic>.from(item);
+            final id = _toInt(row['tmdb_id']);
+            if (id <= 0) continue;
+            final mediaType = (row['media_type'] ?? 'movie').toString();
+            final key = '$mediaType:$id';
+            // Match the same newest-row precedence used by movie opening.
+            if (!seenAdminKeys.add(key)) continue;
+            if (row['is_published'] != true) {
+              unpublishedAdminKeys.add(key);
+            } else if ((row['video_url'] ?? '').toString().trim().isNotEmpty) {
+              adminDirectSourceKeys.add(key);
+            }
+          }
+        } catch (error) {
+          // Do not replace a previously verified rail if Admin precedence
+          // cannot be checked safely during a transient database failure.
+          debugPrint('Trending Admin publication check failed: $error');
+          return;
+        }
+      }
+
+      final verifiedAll = <Movie>[];
+      final verifiedBollywood = <Movie>[];
+      final verifiedHollywood = <Movie>[];
+
+      for (var start = 0;
+          start < candidates.length &&
+              (verifiedBollywood.length < 6 || verifiedHollywood.length < 6);
+          start += 4) {
+        final batch = candidates.skip(start).take(4);
+        final resolved = await Future.wait<MapEntry<String, Movie>?>(
+          batch.map((candidate) async {
+            final key = '${candidate.mediaType}:${candidate.tmdbId}';
+            if (unpublishedAdminKeys.contains(key)) return null;
+            final category = _trendingMovieCategory(candidate);
+            if (category == 'Bollywood' && verifiedBollywood.length >= 6) {
+              return null;
+            }
+            if (category == 'Hollywood' && verifiedHollywood.length >= 6) {
+              return null;
+            }
+
+            if (adminDirectSourceKeys.contains(key)) {
+              final admin = _cachedFlixoraMatch(candidate);
+              if (admin == null ||
+                  !admin.hasPlayableVideoUrl ||
+                  !_hasHindiAudio(admin)) {
+                return null;
+              }
+              return MapEntry(category, admin);
+            }
+            return _verifyHindiDubbedTrendingMovie(candidate);
+          }),
+        );
+
+        for (final entry in resolved.whereType<MapEntry<String, Movie>>()) {
+          if (entry.key == 'Bollywood' && verifiedBollywood.length < 6) {
+            verifiedBollywood.add(entry.value);
+            verifiedAll.add(entry.value);
+          } else if (entry.key == 'Hollywood' &&
+              verifiedHollywood.length < 6) {
+            verifiedHollywood.add(entry.value);
+            verifiedAll.add(entry.value);
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _trendingHindiDubbedMovies = verifiedAll;
+        _trendingBollywoodMovies = verifiedBollywood;
+        _trendingHollywoodMovies = verifiedHollywood;
+      });
+      await Future.wait([
+        MovieCache.saveList(
+          MovieCache.trendingHindiDubbedKey,
+          _trendingHindiDubbedMovies,
+        ),
+        MovieCache.saveList(
+          MovieCache.trendingBollywoodKey,
+          _trendingBollywoodMovies,
+        ),
+        MovieCache.saveList(
+          MovieCache.trendingHollywoodKey,
+          _trendingHollywoodMovies,
+        ),
+      ]);
+    } catch (error) {
+      debugPrint('Could not refresh Hindi-dubbed Trending Movies: $error');
+    } finally {
+      _refreshingHindiDubbedTrending = false;
+    }
   }
 
   bool _isAnimeTitle(Movie title) {
@@ -1832,10 +2063,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final cachedMovieBoxSections = (await MovieCache.getMovieBoxSections())
         .where((section) => !section.isFlixoraOriginal)
         .toList(growable: false);
+    final cachedTrendingData = await Future.wait<List<Movie>>([
+      MovieCache.getList(MovieCache.tmdbTrendingMoviesKey),
+      MovieCache.getList(MovieCache.trendingHindiDubbedKey),
+      MovieCache.getList(MovieCache.trendingBollywoodKey),
+      MovieCache.getList(MovieCache.trendingHollywoodKey),
+    ]);
     if (!mounted) return;
 
     setState(() {
       _movieBoxSections = cachedMovieBoxSections;
+      _tmdbTrendingMovies = cachedTrendingData[0];
+      _trendingHindiDubbedMovies = cachedTrendingData[1];
+      _trendingBollywoodMovies = cachedTrendingData[2];
+      _trendingHollywoodMovies = cachedTrendingData[3];
       trending = results[0];
       popular = results[1];
       latest = results[2];
@@ -2000,7 +2241,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       unawaited(_refreshMovieBoxHome());
 
       final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week').catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/movie/week', pages: 3)
+            .catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
         TmdbService.getMovies('movie/top_rated').catchError((_) => <Movie>[]),
@@ -2073,6 +2315,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
 
       setState(() {
+        _tmdbTrendingMovies = results[0].isNotEmpty
+            ? results[0]
+            : _tmdbTrendingMovies;
         trending = results[0].isNotEmpty ? results[0] : trending;
         popular = results[1].isNotEmpty ? results[1] : popular;
         latest = results[2].isNotEmpty ? results[2] : latest;
@@ -2133,6 +2378,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       await Future.wait([
         MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
         MovieCache.saveList(MovieCache.popularKey, popular),
         MovieCache.saveList(MovieCache.latestKey, latest),
         MovieCache.saveList(MovieCache.topRatedKey, topRated),
@@ -2149,6 +2395,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
         MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
+      unawaited(_refreshHindiDubbedTrendingMovies());
     } catch (e) {
       if (!mounted) return;
 
@@ -3272,6 +3519,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<String> _sectionFilterOptions(String section) {
     switch (section) {
       case 'Trending Movies':
+        return const ['Hindi Dubbed', 'Bollywood', 'Hollywood'];
       case 'Popular Movies':
         return const ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
       case 'Trending TV Series':
@@ -3299,6 +3547,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   List<Movie> _filterSectionMovies(String section, List<Movie> source, String filter) {
     final items = _deduplicateMovies(source);
+
+    if (section == 'Trending Movies') {
+      switch (filter) {
+        case 'Bollywood':
+          return _trendingBollywoodMovies;
+        case 'Hollywood':
+          return _trendingHollywoodMovies;
+        default:
+          return _trendingHindiDubbedMovies;
+      }
+    }
 
     if (section.contains('TV Series')) {
       switch (filter) {
@@ -4019,10 +4278,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   bool _hasHindiAudio(Movie movie) {
-    return movie.audioLanguages.any((language) {
-      final value = language.trim().toLowerCase();
-      return value == 'hi' || value.contains('hindi');
-    }) || movie.originalLanguage.toLowerCase() == 'hi';
+    return TrendingMovieEligibility.hasHindiAudioVariant(movie.audioLanguages) ||
+        movie.originalLanguage.toLowerCase() == 'hi';
   }
 
   String _displayTitle(Movie movie) {
@@ -4744,7 +5001,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
-          _sectionBlock('Trending Movies', _homeTrendingMovies()),
+          _sectionBlock('Trending Movies', _trendingHindiDubbedMovies),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._movieBoxSections.expand((section) => section.items)
                 .where((title) => title.mediaType == 'tv'),
