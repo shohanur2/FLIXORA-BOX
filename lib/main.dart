@@ -3958,6 +3958,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  bool _hasCompletedLocalDownload(Movie movie) {
+    return _downloads.any((task) {
+      final matchesMovie = task.movieId == movie.id ||
+          (movie.tmdbId > 0 && task.movieId == movie.tmdbId);
+      return matchesMovie &&
+          task.status == 'Completed' &&
+          task.filePath != null &&
+          File(task.filePath!).existsSync();
+    });
+  }
+
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
@@ -3965,6 +3976,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           await InternetService.isOnline(forceRefresh: true);
       if (!mounted) return;
       if (!hasInternet) {
+        if (_hasCompletedLocalDownload(movie)) {
+          // Downloaded movies/episodes remain playable even when the
+          // catalogue itself is offline.
+          await _openResolvedPlayer(movie, movie);
+          return;
+        }
         setState(() {
           _online = false;
           _connectionKnown = true;
@@ -4041,6 +4058,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (!online && _allMovies().isEmpty) homeError = 'offline';
         });
         if (!online) {
+          if (_hasCompletedLocalDownload(movie)) {
+            await _openResolvedPlayer(movie, movie);
+            return;
+          }
           _showNoInternetScreen();
           return;
         }
