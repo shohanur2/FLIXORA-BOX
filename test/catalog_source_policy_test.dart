@@ -30,13 +30,24 @@ void main() {
       expect(selected, isNull);
     });
 
-    test('catalogue deduplication receives MovieBox records first', () {
-      final ordered = CatalogSourcePolicy.movieBoxFirst<String>(
-        ['admin', 'tmdb', 'moviebox'],
-        isMovieBox: (source) => source == 'moviebox',
+    test('MovieBox replaces only its duplicate and preserves other card order', () {
+      final ordered = CatalogSourcePolicy.preferMovieBoxDuplicates<String>(
+        [
+          'first',
+          'admin:interstellar',
+          'middle',
+          'moviebox:interstellar',
+          'last',
+        ],
+        isMovieBox: (source) => source.startsWith('moviebox:'),
+        matches: (movieBoxItem, candidate) =>
+            movieBoxItem.split(':').last == candidate.split(':').last,
       );
 
-      expect(ordered, ['moviebox', 'admin', 'tmdb']);
+      expect(
+        ordered,
+        ['first', 'middle', 'moviebox:interstellar', 'last'],
+      );
     });
 
     test('only Admin rows are sent to publication visibility checks', () {
