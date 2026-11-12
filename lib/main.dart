@@ -216,7 +216,7 @@ class Movie {
     if (stableId == 0) stableId = 1;
 
     final subjectType = _toInt(json['subjectType']);
-    final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 7;
+    final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 3 || subjectType == 7;
     final rawYear = (json['year'] ?? '').toString().trim();
     final genreText = (json['genre'] ?? '').toString();
     final genres = genreText
