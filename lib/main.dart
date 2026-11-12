@@ -26,6 +26,7 @@ import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
 import 'streaming/moviebox_service.dart';
+import 'streaming/moviebox_stream_policy.dart';
 import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
@@ -820,8 +821,52 @@ class MovieCache {
   }
 }
 
+class _TimedMovieListCacheEntry {
+  const _TimedMovieListCacheEntry({
+    required this.createdAt,
+    required this.future,
+  });
+
+  final DateTime createdAt;
+  final Future<List<Movie>> future;
+}
+
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
+  static const Duration _catalogueCacheDuration = Duration(minutes: 5);
+  static const Duration _searchCacheDuration = Duration(minutes: 2);
+  static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
+  static final Map<String, _TimedMovieListCacheEntry> _searchCache = {};
+
+  static Future<List<Movie>> _rememberMovies(
+    Map<String, _TimedMovieListCacheEntry> cache,
+    String key,
+    Duration ttl,
+    Future<List<Movie>> Function() load, {
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh) cache.remove(key);
+    final now = DateTime.now();
+    final existing = cache[key];
+    if (existing != null && now.difference(existing.createdAt) < ttl) {
+      return existing.future;
+    }
+
+    final future = load();
+    final entry = _TimedMovieListCacheEntry(
+      createdAt: now,
+      future: future,
+    );
+    cache[key] = entry;
+    future.then<void>((items) {
+      if (items.isEmpty && identical(cache[key], entry)) {
+        cache.remove(key);
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (identical(cache[key], entry)) cache.remove(key);
+    });
+    return future;
+  }
 
   /// Retries transient TMDB throttling and server errors instead of silently
   /// leaving a category with only one page of results.
@@ -848,6 +893,33 @@ class TmdbService {
   }
 
   static Future<List<Movie>> getMovies(
+    String endpoint, {
+    Map<String, String> extraParams = const {},
+    int pages = 1,
+    int startPage = 1,
+    bool forceRefresh = false,
+  }) {
+    final sortedParams = extraParams.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final paramsKey = sortedParams
+        .map((entry) => '${entry.key}=${entry.value}')
+        .join('&');
+    final key = '$endpoint|$paramsKey|$pages|$startPage';
+    return _rememberMovies(
+      _catalogueCache,
+      key,
+      _catalogueCacheDuration,
+      () => _fetchMovies(
+        endpoint,
+        extraParams: extraParams,
+        pages: pages,
+        startPage: startPage,
+      ),
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  static Future<List<Movie>> _fetchMovies(
     String endpoint, {
     Map<String, String> extraParams = const {},
     int pages = 1,
@@ -884,7 +956,6 @@ class TmdbService {
     );
     return _deduplicateCataloguePages(pageResults.expand((items) => items));
   }
-
   static List<Movie> _deduplicateCataloguePages(Iterable<Movie> movies) {
     final seen = <String>{};
     return movies.where((movie) {
@@ -895,25 +966,40 @@ class TmdbService {
     }).toList();
   }
 
-  static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
-    Future<List<Movie>> searchType(String type) async {
-      final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
-        'api_key': apiKey, 'query': query, 'language': 'en-US',
-        'page': '1', 'include_adult': 'false',
-      });
-      final response = await http.get(uri).timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200) return [];
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final results = data['results'] as List? ?? [];
-      return results.whereType<Map>().map((item) => Movie.fromJson(
-        Map<String, dynamic>.from(item), mediaType: type,
-      )).toList();
-    }
-    final results = await Future.wait([searchType('movie'), searchType('tv')]);
-    return [...results[0], ...results[1]];
+  static Future<List<Movie>> search(String query) {
+    final normalized = query.trim();
+    if (normalized.isEmpty) return Future<List<Movie>>.value(<Movie>[]);
+    final key = normalized.toLowerCase();
+    return _rememberMovies(
+      _searchCache,
+      key,
+      _searchCacheDuration,
+      () async {
+        if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
+        Future<List<Movie>> searchType(String type) async {
+          final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
+            'api_key': apiKey,
+            'query': normalized,
+            'language': 'en-US',
+            'page': '1',
+            'include_adult': 'false',
+          });
+          final response = await _getWithRetry(uri);
+          if (response.statusCode != 200) return [];
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          final results = data['results'] as List? ?? [];
+          return results.whereType<Map>().map((item) => Movie.fromJson(
+            Map<String, dynamic>.from(item), mediaType: type,
+          )).toList();
+        }
+        final results = await Future.wait([
+          searchType('movie'),
+          searchType('tv'),
+        ]);
+        return [...results[0], ...results[1]];
+      },
+    );
   }
-
   static Future<List<Map<String, dynamic>>> getCast(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -7513,11 +7599,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   bool get _validVideoUrl {
     if (widget.localFilePath != null) return true;
-    final url = _resolveInitialNetworkUrl();
-    final uri = Uri.tryParse(url);
-    return uri != null &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
+    final candidates = <String>[
+      _resolveInitialNetworkUrl(),
+      ..._availableQualities.map((item) => item['video_url'] ?? ''),
+      widget.movie.videoUrl,
+    ];
+    return candidates.any((url) {
+      final uri = Uri.tryParse(url.trim());
+      return uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty;
+    });
   }
 
   @override
