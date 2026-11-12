@@ -199,9 +199,9 @@ replace_once(
 replace_once(
     mobile_path,
     """        let url = format!(
-                    "{}/wefeed-mobile-bff/subject-api/season-info?subjectId={}",
-                    self.config.mobile_base, subject_id
-                );""",
+            "{}/wefeed-mobile-bff/subject-api/season-info?subjectId={}",
+            self.config.mobile_base, subject_id
+        );""",
     """        let base = self.config.mobile_base.trim_end_matches('/');
                 let host = base
                     .trim_start_matches("https://")
@@ -216,13 +216,13 @@ replace_once(
 replace_once(
     mobile_path,
     """        let text = self
-                    .http
-                    .get(&url)
-                    .headers(self.mobile_headers("GET", &url, None, false, token.as_deref()))
-                    .send()
-                    .await?
-                    .text()
-                    .await?;""",
+            .http
+            .get(&url)
+            .headers(self.mobile_headers("GET", &url, None, false, token.as_deref()))
+            .send()
+            .await?
+            .text()
+            .await?;""",
     """        let mut headers =
                     self.mobile_headers("GET", &url, None, false, token.as_deref());
                 ins(&mut headers, "x-play-mode", "2".into());
@@ -240,10 +240,10 @@ replace_once(
 replace_once(
     mobile_path,
     """    pub(crate) async fn detail_mobile(
-                &self,
-                id: &str,
-                path_hint: &str,
-            ) -> Result<crate::models::Detail> {""",
+        &self,
+        id: &str,
+        path_hint: &str,
+    ) -> Result<crate::models::Detail> {""",
     """    pub(crate) async fn detail_mobile(
                 &self,
                 id: &str,
@@ -256,9 +256,9 @@ replace_once(
 replace_once(
     mobile_path,
     """        let url = format!(
-                    "{}/wefeed-mobile-bff/subject-api/get?subjectId={}",
-                    self.config.mobile_base, id
-                );""",
+            "{}/wefeed-mobile-bff/subject-api/get?subjectId={}",
+            self.config.mobile_base, id
+        );""",
     """        let base = self.config.mobile_base.trim_end_matches('/');
                 let host = base
                     .trim_start_matches("https://")
