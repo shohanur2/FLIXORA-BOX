@@ -216,7 +216,7 @@ class Movie {
     if (stableId == 0) stableId = 1;
 
     final subjectType = _toInt(json['subjectType']);
-    final isSeries = json['isSeries'] == true || subjectType == 2;
+    final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 7;
     final rawYear = (json['year'] ?? '').toString().trim();
     final genreText = (json['genre'] ?? '').toString();
     final genres = genreText
@@ -418,20 +418,31 @@ class MovieBoxShortEpisode {
   static List<MovieBoxShortEpisode> fromSeasons(
     Iterable<Map<String, dynamic>> seasons,
   ) {
+    int seasonNumberOf(Map<String, dynamic> season) => _toInt(
+          season['se'] ??
+              season['season'] ??
+              season['seasonNumber'] ??
+              season['season_number'],
+        );
+
     final orderedSeasons = seasons.toList()
-      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+      ..sort((a, b) => seasonNumberOf(a).compareTo(seasonNumberOf(b)));
     final episodes = <MovieBoxShortEpisode>[];
     final seen = <String>{};
 
     for (final season in orderedSeasons) {
-      final seasonNumber = _toInt(season['se']);
+      final seasonNumber = seasonNumberOf(season);
       if (seasonNumber <= 0) continue;
-      final rawEpisodes = season['episodes'] as List? ?? const [];
+      final rawList = season['episodes'] ??
+          season['episodeList'] ??
+          season['list'];
+      final rawEpisodes = rawList is List ? rawList : const [];
       for (final rawEpisode in rawEpisodes) {
         final value = rawEpisode is Map
             ? (rawEpisode['ep'] ??
                 rawEpisode['episode'] ??
                 rawEpisode['episodeNumber'] ??
+                rawEpisode['episode_number'] ??
                 rawEpisode['number'])
             : rawEpisode;
         final episodeNumber = _toInt(value);
@@ -1944,12 +1955,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Keep the Home hero and Trending Movies row populated if a catalogue
   /// endpoint temporarily returns an empty response. MovieBox leads; published
   /// Admin entries remain available as a fallback when MovieBox has no match.
-  MovieBoxHomeSection? get _hotShortsSection {
-    for (final section in _movieBoxSections) {
-      if (section.isHotShorts && section.items.isNotEmpty) return section;
-    }
-    return null;
-  }
+  List<Movie> get _hotShortsItems => _deduplicateMovies(
+        _movieBoxSections
+            .where((section) => section.isHotShorts)
+            .expand((section) => section.items)
+            .toList(growable: false),
+      );
 
   List<Movie> get _regularMovieBoxItems => _movieBoxSections
       .where((section) => !section.isHotShorts)
@@ -2698,12 +2709,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(sections);
+      unawaited(_refreshHotShortsCatalog(forceRefresh: forceRefresh));
       unawaited(_refreshCatalogVisibility(
         candidates: sections.expand((section) => section.items).toList(),
         forceRefresh: true,
       ));
     } catch (error) {
       debugPrint('MovieBox/WeFeed home feed unavailable: $error');
+    }
+  }
+
+  Future<void> _refreshHotShortsCatalog({bool forceRefresh = false}) async {
+    if (!_online) return;
+    try {
+      final response = await MovieBoxService.shorts(
+        forceRefresh: forceRefresh,
+        perPage: 24,
+        maxPages: 10,
+      ).timeout(const Duration(seconds: 55));
+      final rawItems = response['items'] as List? ?? const [];
+      final fetchedShorts = rawItems
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(
+                Map<String, dynamic>.from(item),
+              ))
+          .where((movie) => movie.movieBoxId.isNotEmpty)
+          .toList(growable: false);
+      if (fetchedShorts.isEmpty || !mounted) return;
+
+      final homeShorts = _movieBoxSections
+          .where((section) => section.isHotShorts)
+          .expand((section) => section.items)
+          .toList(growable: false);
+      final mergedShorts = _deduplicateMovies([
+        ...fetchedShorts,
+        ...homeShorts,
+      ]);
+      if (mergedShorts.isEmpty) return;
+
+      final updatedSections = <MovieBoxHomeSection>[
+        ..._movieBoxSections.where((section) => !section.isHotShorts),
+        MovieBoxHomeSection(
+          title: 'Hot Shorts TV',
+          items: mergedShorts,
+        ),
+      ];
+      setState(() => _movieBoxSections = updatedSections);
+
+      for (final item in mergedShorts) {
+        _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
+      }
+      await MovieCache.saveMovieBoxSections(updatedSections);
+      unawaited(_refreshCatalogVisibility(
+        candidates: mergedShorts,
+        forceRefresh: true,
+      ));
+      debugPrint('Hot Shorts TV loaded ' + mergedShorts.length.toString() + ' titles.');
+    } catch (error) {
+      // Keep the Home preview row visible if the dedicated feed is unavailable.
+      debugPrint('Hot Shorts TV catalogue unavailable: $error');
     }
   }
 
@@ -6368,6 +6432,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
+    final hotShortsItems = _hotShortsItems;
     final movieBoxSections = _movieBoxSections
         .where((section) =>
             (!section.isBanner ||
@@ -6384,17 +6449,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       if (!hotShortsInserted &&
           section.title.toLowerCase().contains('coming soon')) {
-        if (_hotShortsSection != null) {
+        if (hotShortsItems.isNotEmpty) {
           movieBoxSectionWidgets.add(
-            _hotShortsBlock(_hotShortsSection!.items),
+            _hotShortsBlock(hotShortsItems),
           );
         }
         hotShortsInserted = true;
       }
     }
-    if (!hotShortsInserted && _hotShortsSection != null) {
+    if (!hotShortsInserted && hotShortsItems.isNotEmpty) {
       movieBoxSectionWidgets.add(
-        _hotShortsBlock(_hotShortsSection!.items),
+        _hotShortsBlock(hotShortsItems),
       );
     }
 
@@ -8043,6 +8108,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   Duration _duration = Duration.zero;
   int? _activeSeasonNumber;
   int? _activeEpisodeNumber;
+  List<MovieBoxShortEpisode> _availableEpisodes = [];
 
   @override
   void initState() {
@@ -8123,6 +8189,127 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     }
   }
 
+  Future<void> _showEpisodePicker() async {
+    if (!mounted || _disposed) return;
+    final episodes = _availableEpisodes;
+    if (episodes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _loading
+                ? 'Episodes are loading. Please wait.'
+                : 'No episodes are available for this short series.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final seasons = episodes.map((episode) => episode.season).toSet().toList()
+      ..sort();
+    final selectedEpisode =
+        await showModalBottomSheet<MovieBoxShortEpisode>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.of(sheetContext).size.height * 0.68,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Choose Episode',
+                        style: TextStyle(
+                          color: white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close_rounded, color: white),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final season in seasons)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Season $season',
+                                style: const TextStyle(
+                                  color: gold,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: episodes
+                                    .where((episode) =>
+                                        episode.season == season)
+                                    .map((episode) {
+                                  final selected =
+                                      episode.season == _activeSeasonNumber &&
+                                          episode.episode ==
+                                              _activeEpisodeNumber;
+                                  return ChoiceChip(
+                                    label: Text('EP ${episode.episode}'),
+                                    selected: selected,
+                                    onSelected: (_) =>
+                                        Navigator.of(sheetContext)
+                                            .pop(episode),
+                                    selectedColor: gold,
+                                    backgroundColor: panel2,
+                                    labelStyle: TextStyle(
+                                      color: selected
+                                          ? Colors.black
+                                          : Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    side: BorderSide(
+                                      color: selected ? gold : white24,
+                                    ),
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (selectedEpisode != null && mounted && !_disposed) {
+      await _loadShort(
+        _activeIndex,
+        requestedSeasonNumber: selectedEpisode.season,
+        requestedEpisodeNumber: selectedEpisode.episode,
+      );
+    }
+  }
+
   Map<String, String> _linkHeaders(Map<String, dynamic> link) {
     final rawHeaders = link['headers'];
     if (rawHeaders is! Map) return const <String, String>{};
@@ -8156,7 +8343,11 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     }
   }
 
-  Future<void> _loadShort(int index) async {
+  Future<void> _loadShort(
+    int index, {
+    int? requestedSeasonNumber,
+    int? requestedEpisodeNumber,
+  }) async {
     if (_disposed || index < 0 || index >= widget.items.length) return;
     final requestToken = ++_requestToken;
     final movie = widget.items[index];
@@ -8169,6 +8360,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
         _duration = Duration.zero;
         _activeSeasonNumber = null;
         _activeEpisodeNumber = null;
+        _availableEpisodes = [];
         _playing = false;
       });
     }
@@ -8200,45 +8392,47 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
 
       var seasonNumber = 0;
       var episodeNumber = 0;
+      var availableEpisodes = <MovieBoxShortEpisode>[];
       if (movie.movieBoxIsSeries) {
         final seasons = (resolved[1] as List)
             .whereType<Map>()
             .map((season) => Map<String, dynamic>.from(season))
-            .toList()
-          ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
-        final requestedSeason = index == widget.initialIndex
-            ? widget.initialSeasonNumber
-            : null;
-        final requestedEpisode = index == widget.initialIndex
-            ? widget.initialEpisodeNumber
-            : null;
-        for (final season in seasons) {
-          final currentSeason = _toInt(season['se']);
-          final episodes = (season['episodes'] as List? ?? const [])
-              .map(_toInt)
-              .where((number) => number > 0)
-              .toList(growable: false);
-          if (episodes.isEmpty || currentSeason <= 0) continue;
+            .toList(growable: false);
+        availableEpisodes = MovieBoxShortEpisode.fromSeasons(seasons);
+        if (availableEpisodes.isEmpty) {
+          throw StateError('No episodes were returned for this short series.');
+        }
 
-          if (requestedSeason == currentSeason &&
-              requestedEpisode != null &&
-              episodes.contains(requestedEpisode)) {
-            seasonNumber = currentSeason;
-            episodeNumber = requestedEpisode;
-            break;
-          }
-          if (seasonNumber <= 0) {
-            seasonNumber = currentSeason;
-            episodeNumber = episodes.first;
+        final wantedSeason = requestedSeasonNumber ??
+            (index == widget.initialIndex ? widget.initialSeasonNumber : null);
+        final wantedEpisode = requestedEpisodeNumber ??
+            (index == widget.initialIndex ? widget.initialEpisodeNumber : null);
+        MovieBoxShortEpisode? selectedEpisode;
+        if (wantedSeason != null && wantedEpisode != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason &&
+                episode.episode == wantedEpisode) {
+              selectedEpisode = episode;
+              break;
+            }
           }
         }
-        if (seasonNumber <= 0 || episodeNumber <= 0) {
-          throw StateError('No playable short episode was returned.');
+        if (selectedEpisode == null && wantedSeason != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason) {
+              selectedEpisode = episode;
+              break;
+            }
+          }
         }
+        selectedEpisode ??= availableEpisodes.first;
+        seasonNumber = selectedEpisode.season;
+        episodeNumber = selectedEpisode.episode;
       }
 
       if (mounted && requestToken == _requestToken) {
         setState(() {
+          _availableEpisodes = availableEpisodes;
           _activeSeasonNumber =
               movie.movieBoxIsSeries ? seasonNumber : null;
           _activeEpisodeNumber =
@@ -8430,7 +8624,11 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                   ),
                   const SizedBox(height: 14),
                   FilledButton.icon(
-                    onPressed: () => _loadShort(_activeIndex),
+                    onPressed: () => _loadShort(
+                      _activeIndex,
+                      requestedSeasonNumber: _activeSeasonNumber,
+                      requestedEpisodeNumber: _activeEpisodeNumber,
+                    ),
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Retry'),
                     style: FilledButton.styleFrom(
@@ -8473,6 +8671,21 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                             ),
                           ),
                         ),
+                        if (movie.movieBoxIsSeries)
+                          TextButton.icon(
+                            onPressed: _showEpisodePicker,
+                            icon: const Icon(
+                              Icons.list_alt_rounded,
+                              size: 17,
+                            ),
+                            label: const Text('EP'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: gold,
+                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                              minimumSize: const Size(0, 32),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
                         Text(
                           '${index + 1}/${widget.items.length}',
                           style: const TextStyle(
