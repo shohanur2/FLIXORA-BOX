@@ -545,13 +545,29 @@ class MovieBoxHomeSection {
 
 /// Displays network images online, but reads disk cache only while offline.
 /// A cache miss offline never starts a network request.
+class FlixoraImageCacheManager {
+  FlixoraImageCacheManager._();
+
+  // Reuse DefaultCacheManager's existing cache key so already-downloaded
+  // posters remain available, while allowing a larger catalogue cache.
+  static final CacheManager instance = CacheManager(
+    Config(
+      'libCachedImageData',
+      stalePeriod: const Duration(days: 30),
+      maxNrOfCacheObjects: 600,
+    ),
+  );
+}
+
+/// Displays network images online, but reads disk cache only while offline.
+/// A cache miss offline never starts a network request.
 class FlixoraCachedImage extends StatelessWidget {
   static final Map<String, Future<FileInfo?>> _offlineLookups = {};
 
   static Future<FileInfo?> _offlineFile(String url) {
     final existing = _offlineLookups[url];
     if (existing != null) return existing;
-    final future = DefaultCacheManager().getFileFromCache(url);
+    final future = FlixoraImageCacheManager.instance.getFileFromCache(url);
     _offlineLookups[url] = future;
     future.then<void>((info) {
       if (info == null || !info.file.existsSync()) _offlineLookups.remove(url);
@@ -580,13 +596,52 @@ class FlixoraCachedImage extends StatelessWidget {
     this.memCacheHeight,
   });
 
+  Widget _buildForSize(int? width, int? height) {
+    final empty = fallback ?? Container(color: panel);
+    if (isOnline) {
+      return CachedNetworkImage(
+        cacheManager: FlixoraImageCacheManager.instance,
+        imageUrl: imageUrl,
+        fit: fit,
+        memCacheWidth: width,
+        memCacheHeight: height,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        placeholder: (_, __) => placeholder ?? Container(color: panel),
+        errorWidget: (_, __, ___) => empty,
+      );
+    }
+
+    return FutureBuilder<FileInfo?>(
+      future: _offlineFile(imageUrl),
+      builder: (context, snapshot) {
+        final file = snapshot.data?.file;
+        if (file != null && file.existsSync()) {
+          return Image.file(
+            file,
+            fit: fit,
+            cacheWidth: width,
+            cacheHeight: height,
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return placeholder ?? Container(color: panel);
+        }
+        return empty;
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final empty = fallback ?? Container(color: panel);
-    if (imageUrl.isEmpty) return empty;
+    if (imageUrl.isEmpty) return fallback ?? Container(color: panel);
 
-    // Decode images close to their rendered size instead of retaining full
-    // poster/backdrop dimensions in memory. This reduces scroll-time jank.
+    // Most FLIXORA cards already know their decode dimensions. Skip an
+    // unnecessary LayoutBuilder/MediaQuery pass for those common cases.
+    if (memCacheWidth != null && memCacheHeight != null) {
+      return _buildForSize(memCacheWidth, memCacheHeight);
+    }
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final pixelRatio = MediaQuery.devicePixelRatioOf(context);
@@ -604,36 +659,7 @@ class FlixoraCachedImage extends StatelessWidget {
                     .clamp(1, 1600)
                     .toInt()
                 : null);
-
-        if (isOnline) {
-          return CachedNetworkImage(
-            imageUrl: imageUrl,
-            fit: fit,
-            memCacheWidth: resolvedWidth,
-            memCacheHeight: resolvedHeight,
-            placeholder: (_, __) => placeholder ?? Container(color: panel),
-            errorWidget: (_, __, ___) => empty,
-          );
-        }
-
-        return FutureBuilder<FileInfo?>(
-          future: _offlineFile(imageUrl),
-          builder: (context, snapshot) {
-            final file = snapshot.data?.file;
-            if (file != null && file.existsSync()) {
-              return Image.file(
-                file,
-                fit: fit,
-                cacheWidth: resolvedWidth,
-                cacheHeight: resolvedHeight,
-              );
-            }
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return placeholder ?? Container(color: panel);
-            }
-            return empty;
-          },
-        );
+        return _buildForSize(resolvedWidth, resolvedHeight);
       },
     );
   }
@@ -1594,6 +1620,20 @@ class FlixoraApp extends StatelessWidget {
   }
 }
 
+class _CachedHomeSection {
+  const _CachedHomeSection({
+    required this.fingerprint,
+    required this.deduplicatedMovies,
+    required this.filteredByOption,
+    required this.filters,
+  });
+
+  final int fingerprint;
+  final List<Movie> deduplicatedMovies;
+  final Map<String, List<Movie>> filteredByOption;
+  final List<String> filters;
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -1614,6 +1654,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _catalogueRefreshTimer;
   int _searchRequestToken = 0;
   bool _homeRefreshQueued = false;
+  List<Movie>? _allMoviesCache;
+  int? _allMoviesCacheFingerprint;
+  List<Movie>? _homeTrendingMoviesCache;
+  int? _homeTrendingMoviesCacheFingerprint;
+  List<Movie>? _webSeriesTitlesCache;
+  int? _webSeriesTitlesCacheFingerprint;
+  List<Movie>? _gemsForYouCache;
+  int? _gemsForYouCacheFingerprint;
+  final Map<String, _CachedHomeSection> _homeSectionCache = {};
   DateTime? _lastSecondaryCataloguesRefreshAt;
   DateTime? _lastCatalogVisibilityRefreshAt;
   final Set<String> _unpublishedCatalogKeys = {};
@@ -1913,6 +1962,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Iterable<String> _movieBoxDuplicateKeys(
+    Movie movie, {
+    required bool forMovieBoxIndex,
+  }) sync* {
+    final type = movie.mediaType;
+    if (movie.tmdbId > 0) {
+      yield 'tmdb:' + type + ':' + movie.tmdbId.toString();
+    }
+
+    final title = _normalizedMovieTitle(movie.title);
+    if (title.isEmpty) return;
+    final titleBase = 'title:' + type + ':' + title;
+    final year = movie.year.trim();
+
+    if (forMovieBoxIndex) {
+      // N/A candidates can match any MovieBox release, as before.
+      yield titleBase + ':any';
+      yield titleBase + ':year:' + year;
+      if (year == 'N/A') yield titleBase + ':unknown';
+      return;
+    }
+
+    if (year == 'N/A') {
+      yield titleBase + ':any';
+    } else {
+      yield titleBase + ':year:' + year;
+      yield titleBase + ':unknown';
+    }
+  }
+
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
     final seenTitleYears = <String>{};
@@ -1921,23 +2000,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final seenFallbackIds = <String>{};
 
     final orderedMovies =
-        CatalogSourcePolicy.preferMovieBoxDuplicates<Movie>(
+        CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<Movie>(
       movies,
       isMovieBox: (movie) => movie.isMovieBox,
-      matches: (movieBoxItem, candidate) {
-        if (movieBoxItem.mediaType != candidate.mediaType) return false;
-        if (movieBoxItem.tmdbId > 0 &&
-            candidate.tmdbId > 0 &&
-            movieBoxItem.tmdbId == candidate.tmdbId) {
-          return true;
-        }
-        final sameTitle = _normalizedMovieTitle(movieBoxItem.title) ==
-            _normalizedMovieTitle(candidate.title);
-        final sameYear = movieBoxItem.year == candidate.year ||
-            movieBoxItem.year == 'N/A' ||
-            candidate.year == 'N/A';
-        return sameTitle && sameYear;
-      },
+      movieBoxKeys: (movie) => _movieBoxDuplicateKeys(
+        movie,
+        forMovieBoxIndex: true,
+      ),
+      candidateKeys: (movie) => _movieBoxDuplicateKeys(
+        movie,
+        forMovieBoxIndex: false,
+      ),
     );
     return orderedMovies.where((movie) {
       if (CatalogSourcePolicy.isAdminBlocked(
@@ -1948,7 +2021,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return false;
       }
       if (movie.tmdbId > 0 &&
-          !seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}')) {
+          !seenTmdbIds.add(movie.mediaType + ':' + movie.tmdbId.toString())) {
         return false;
       }
 
@@ -1957,10 +2030,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ? movie.year.trim().substring(0, 4)
           : '';
       if (normalizedTitle.isNotEmpty) {
-        final titleBase = '${movie.mediaType}:$normalizedTitle';
+        final titleBase = movie.mediaType + ':' + normalizedTitle;
         if (year.isNotEmpty && year != 'N/A') {
           if (seenTitleBasesWithoutYear.contains(titleBase)) return false;
-          final titleYearKey = '$titleBase:$year';
+          final titleYearKey = titleBase + ':' + year;
           if (!seenTitleYears.add(titleYearKey)) return false;
           seenTitleBasesWithYear.add(titleBase);
         } else {
@@ -1972,11 +2045,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (movie.tmdbId <= 0) {
-        final fallbackKey = '${movie.mediaType}:${movie.source}:${movie.id}';
+        final fallbackKey = movie.mediaType + ':' + movie.source + ':' + movie.id.toString();
         return seenFallbackIds.add(fallbackKey);
       }
       return true;
-    }).toList();
+    }).toList(growable: false);
   }
 
   /// Keep the Home hero and Trending Movies row populated if TMDB's
@@ -1997,6 +2070,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Build a mixed hero from Trending Movies plus the strongest TV categories.
   /// Movies and Web Series lead; Drama, Anime and general TV appear regularly.
   List<Movie> _homeTrendingMovies() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _homeTrendingMoviesCache;
+    if (cached != null && _homeTrendingMoviesCacheFingerprint == fingerprint) {
+      return cached;
+    }
     List<Movie> preferMovieBoxRecords(Iterable<Movie> titles) {
       return _deduplicateMovies(
         titles
@@ -2058,7 +2136,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ))
         .toList(growable: false);
 
-    return HeroSliderMixer.mix<Movie>(
+    final result = HeroSliderMixer.mix<Movie>(
       movies: movieTitles,
       webSeries: webSeries,
       dramas: dramaTitles,
@@ -2069,6 +2147,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ).where((title) =>
         title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
       .toList(growable: false);
+    _homeTrendingMoviesCacheFingerprint = fingerprint;
+    _homeTrendingMoviesCache = result;
+    return result;
   }
 
   String _trendingMovieCategory(Movie movie) {
@@ -2298,6 +2379,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// tagged by FLIXORA Admin; if none exist yet, show the available non-anime
   /// TV catalogue instead of leaving the Home section blank.
   List<Movie> _webSeriesTitles() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _webSeriesTitlesCache;
+    if (cached != null && _webSeriesTitlesCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final catalogue = _deduplicateMovies([
       ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
@@ -2312,13 +2399,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final tagged = catalogue.where((title) => title.genres.any((genre) {
       final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
       return normalized == 'web series' || normalized == 'webseries';
-    })).toList();
+    })).toList(growable: false);
 
-    if (tagged.isNotEmpty) return tagged;
-
-    final fallback = catalogue.where((title) => !_isAnimeTitle(title)).toList()
-      ..sort((a, b) => b.rating.compareTo(a.rating));
-    return fallback;
+    final result = tagged.isNotEmpty
+        ? tagged
+        : (catalogue.where((title) => !_isAnimeTitle(title)).toList()
+          ..sort((a, b) => b.rating.compareTo(a.rating)));
+    _webSeriesTitlesCacheFingerprint = fingerprint;
+    _webSeriesTitlesCache = result;
+    return result;
   }
 
   @override
@@ -3254,7 +3343,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  int _catalogueFingerprint() => Object.hashAll([
+        identityHashCode(_movieBoxSections), _movieBoxSections.length,
+        identityHashCode(flixoraMovies), flixoraMovies.length,
+        identityHashCode(_trendingMovies), _trendingMovies.length,
+        identityHashCode(_tmdbTrendingMovies), _tmdbTrendingMovies.length,
+        identityHashCode(trending), trending.length,
+        identityHashCode(popular), popular.length,
+        identityHashCode(latest), latest.length,
+        identityHashCode(topRated), topRated.length,
+        identityHashCode(trendingTv), trendingTv.length,
+        identityHashCode(popularTv), popularTv.length,
+        identityHashCode(topRatedTv), topRatedTv.length,
+        identityHashCode(anime), anime.length,
+        identityHashCode(koreanDrama), koreanDrama.length,
+        identityHashCode(bengaliMovies), bengaliMovies.length,
+        identityHashCode(bengaliTv), bengaliTv.length,
+        identityHashCode(bollywoodMovies), bollywoodMovies.length,
+        identityHashCode(hollywoodMovies), hollywoodMovies.length,
+        identityHashCode(southIndianMovies), southIndianMovies.length,
+        identityHashCode(indianDramaTv), indianDramaTv.length,
+        Object.hashAll(_unpublishedCatalogKeys),
+      ]);
+
   List<Movie> _allMovies() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _allMoviesCache;
+    if (cached != null && _allMoviesCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final combined = <Movie>[
       ..._regularMovieBoxItems,
       ...flixoraMovies,
@@ -3276,7 +3394,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...indianDramaTv,
     ];
 
-    return _deduplicateMovies(combined);
+    final result = _deduplicateMovies(combined);
+    _allMoviesCacheFingerprint = fingerprint;
+    _allMoviesCache = result;
+    return result;
   }
 
   Future<void> searchMovies(String query) async {
@@ -5131,29 +5252,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  int _movieListFingerprint(List<Movie> movies) => Object.hashAll([
+        Object.hashAll(movies.map((movie) => Object.hash(
+              movie.id,
+              movie.tmdbId,
+              movie.sourceId,
+              movie.source,
+              movie.title,
+              movie.year,
+              movie.rating,
+              movie.mediaType,
+              movie.originalLanguage,
+              movie.originCountry,
+              movie.movieBoxId,
+              movie.movieBoxDetailPath,
+              movie.movieBoxIsSeries,
+              movie.movieBoxSubjectType,
+              movie.poster,
+              movie.backdrop,
+              Object.hashAll(movie.genres),
+              Object.hashAll(movie.audioLanguages),
+            ))),
+        Object.hashAll(_unpublishedCatalogKeys),
+        _catalogueFingerprint(),
+      ]);
+
   Widget _sectionBlock(String title, List<Movie> movies) {
-    final allFilters = _sectionFilterOptions(title);
-    // Deduplicate the source once per section build. The old implementation
-    // repeated this O(n*m) work for every filter pill, delaying taps/rebuilds.
-    final deduplicatedMovies = _deduplicateMovies(movies);
-    final filteredByOption = <String, List<Movie>>{
-      for (final filter in allFilters)
-        filter: _filterSectionMovies(
-          title,
-          deduplicatedMovies,
-          filter,
-          sourceIsDeduplicated: true,
-        ),
-    };
-    final filters = allFilters
-        .where((filter) => filteredByOption[filter]!.isNotEmpty)
-        .toList(growable: false);
+    final fingerprint = _movieListFingerprint(movies);
+    final cacheKey = title + ':' + fingerprint.toString();
+    var cached = _homeSectionCache[cacheKey];
+    if (cached == null) {
+      final allFilters = _sectionFilterOptions(title);
+      final deduplicatedMovies = _deduplicateMovies(movies);
+      final filteredByOption = <String, List<Movie>>{
+        for (final filter in allFilters)
+          filter: _filterSectionMovies(
+            title,
+            deduplicatedMovies,
+            filter,
+            sourceIsDeduplicated: true,
+          ),
+      };
+      final filters = allFilters
+          .where((filter) => filteredByOption[filter]!.isNotEmpty)
+          .toList(growable: false);
+      cached = _CachedHomeSection(
+        fingerprint: fingerprint,
+        deduplicatedMovies: deduplicatedMovies,
+        filteredByOption: filteredByOption,
+        filters: filters,
+      );
+      if (_homeSectionCache.length >= 64) _homeSectionCache.clear();
+      _homeSectionCache[cacheKey] = cached;
+    }
+
+    final filters = cached.filters;
     final selected = filters.contains(_sectionFilters[title])
         ? _sectionFilters[title]!
         : (filters.isNotEmpty ? filters.first : '');
     final visibleMovies = filters.isEmpty
-        ? deduplicatedMovies
-        : filteredByOption[selected] ?? const <Movie>[];
+        ? cached.deduplicatedMovies
+        : cached.filteredByOption[selected] ?? const <Movie>[];
 
     // A category with no matching catalogue items is omitted instead of
     // leaving an empty strip on the Home page.
@@ -6550,6 +6709,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _gemsForYou() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _gemsForYouCache;
+    if (cached != null && _gemsForYouCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final titles = _deduplicateMovies([
       ...flixoraMovies,
       ...trending,
@@ -6562,7 +6727,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ..._regularMovieBoxItems,
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
-    return titles.take(14).toList(growable: false);
+    final result = titles.take(14).toList(growable: false);
+    _gemsForYouCacheFingerprint = fingerprint;
+    _gemsForYouCache = result;
+    return result;
   }
 
   Widget _homeContent() {
@@ -10203,7 +10371,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           episode: episode,
           isSeries: widget.movie.movieBoxIsSeries,
           forceRefresh: attempt > 0,
-        ).timeout(const Duration(seconds: 25));
+        ).timeout(const Duration(seconds: 15));
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
 
         final rawLinks = result['links'] as List? ?? const [];
