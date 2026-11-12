@@ -2392,7 +2392,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initializeApp() async {
-    await _loadCachedMovies();
+    try {
+      await _loadCachedMovies();
     if (!mounted) return;
 
     // Cached Home is the first priority. Independent settings/history/network
@@ -2423,7 +2424,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .where((key) => key.startsWith('admin:id:')),
       );
     final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
-    final savedDownloads = await savedDownloadsFuture;
     if (mounted) {
       setState(() {
         _watchHistory
@@ -2438,11 +2438,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 .take(20),
           );
         _studyMode = savedStudyMode;
+      });
+    }
+    // Download file verification can touch many local files; keep it off the
+    // Home startup path and populate the Library as soon as the scan finishes.
+    unawaited(savedDownloadsFuture.then((savedDownloads) {
+      if (!mounted) return;
+      setState(() {
         _downloads
           ..clear()
           ..addAll(savedDownloads);
       });
-    }
+    }).catchError((_) {}));
 
     if (!mounted) return;
 
@@ -2462,7 +2469,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         loading = false;
         if (_allMovies().isEmpty) homeError = 'offline';
       });
-    }  }
+    }
+    } catch (error) {
+      debugPrint('FLIXORA startup failed: $error');
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        _connectionKnown = true;
+        if (_allMovies().isEmpty) {
+          homeError = _online
+              ? 'Unable to load movies. Pull down to retry.'
+              : 'offline';
+        }
+      });
+    }
+  }
 
   Future<void> _loadAppSettings() async {
     try {
@@ -2793,6 +2814,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('Background catalogue coordinator failed: $error');
     } finally {
       _backgroundCatalogueWorkRunning = false;
+      if (_backgroundCatalogueWorkPending &&
+          _canRunBackgroundCatalogueWork) {
+        unawaited(_runBackgroundCatalogueWork());
+      }
     }
   }
 
