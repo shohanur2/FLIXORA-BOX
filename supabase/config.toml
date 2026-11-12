@@ -1,2 +1,5 @@
 [functions.external-catalog]
 verify_jwt = true
+
+[functions.catalog-visibility]
+verify_jwt = true
