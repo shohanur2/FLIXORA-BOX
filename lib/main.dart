@@ -7844,12 +7844,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       final rawItem = widget.movie.toMovieBoxMap();
       final pendingRequests = <Future<dynamic>>[
         MovieBoxService.playDetail(rawItem)
-            .timeout(const Duration(seconds: 12)),
+            .timeout(const Duration(seconds: 18)),
       ];
       if (widget.movie.movieBoxIsSeries) {
         pendingRequests.add(
           MovieBoxService.seasons(widget.movie.movieBoxId)
-              .timeout(const Duration(seconds: 12)),
+              .timeout(const Duration(seconds: 18)),
         );
       }
 
@@ -8209,6 +8209,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               _tvEpisodeError = null;
             });
           }
+          await _restoreResumePosition();
+          _startHideTimer();
           _prewarmNextMovieBoxEpisode();
           return;
         } catch (error) {
@@ -8366,7 +8368,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _prepareMovieBoxPlayback();
       if (!mounted || _isDisposed) return;
       if (_availableQualities.isNotEmpty) {
-        await _initializePlayer();
+        // MovieBox sources may expose several qualities. Try them in order
+        // so one stale CDN URL does not force the user to press Retry.
+        await _openMovieBoxEpisode(
+          _availableQualities.first,
+          _movieBoxPlaybackRequestToken,
+        );
       }
       return;
     }
