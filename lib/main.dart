@@ -1639,10 +1639,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList(growable: false);
 
     return _deduplicateMovies([
-      ..._tmdbTrendingMovies.take(30),
+      // Mix regional catalogues near the top so global titles cannot fill
+      // the entire rail before South Indian, Bengali and other regions appear.
+      ..._tmdbTrendingMovies.take(12),
       ...regionalFallbacks,
       ...movieBoxBanners,
-      ..._tmdbTrendingMovies.skip(30),
+      ..._tmdbTrendingMovies.skip(12),
       ...popular,
       ...latest,
       ...topRated,
@@ -1650,7 +1652,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((movie) =>
         movie.mediaType == 'movie' &&
         (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
-      .take(72)
+      .take(84)
       .toList(growable: false);
   }
 
@@ -1726,30 +1728,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _refreshingPlayableTrendingMovies = true;
     try {
       final unpublishedAdminKeys = <String>{};
+      final unpublishedAdminTitleYears = <String>{};
+      final unpublishedAdminTitleUnknownYears = <String>{};
+      final unpublishedAdminTitleBases = <String>{};
       final client = supabaseClient;
       final tmdbIds = candidates
           .map((movie) => movie.tmdbId)
           .where((id) => id > 0)
           .toSet()
           .toList(growable: false);
+      final noTmdbTitles = candidates
+          .where((movie) => movie.tmdbId <= 0 && movie.title.trim().isNotEmpty)
+          .map((movie) => movie.title.trim())
+          .toSet()
+          .toList(growable: false);
 
-      if (client != null && tmdbIds.isNotEmpty) {
+      if (client != null &&
+          (tmdbIds.isNotEmpty || noTmdbTitles.isNotEmpty)) {
         try {
-          final rows = await client
-              .from('movies')
-              .select('tmdb_id, media_type, is_published, created_at')
-              .inFilter('tmdb_id', tmdbIds)
-              .order('created_at', ascending: false);
-          final seenAdminKeys = <String>{};
-          for (final item in (rows as List).whereType<Map>()) {
-            final row = Map<String, dynamic>.from(item);
-            final id = _toInt(row['tmdb_id']);
-            if (id <= 0) continue;
-            final mediaType = (row['media_type'] ?? 'movie').toString();
-            final key = '$mediaType:$id';
-            if (!seenAdminKeys.add(key)) continue;
-            if (row['is_published'] != true) {
-              unpublishedAdminKeys.add(key);
+          if (tmdbIds.isNotEmpty) {
+            final rows = await client
+                .from('movies')
+                .select('tmdb_id, media_type, is_published, created_at')
+                .inFilter('tmdb_id', tmdbIds)
+                .order('created_at', ascending: false);
+            final seenAdminKeys = <String>{};
+            for (final item in (rows as List).whereType<Map>()) {
+              final row = Map<String, dynamic>.from(item);
+              final id = _toInt(row['tmdb_id']);
+              if (id <= 0) continue;
+              final mediaType = (row['media_type'] ?? 'movie').toString();
+              final key = '$mediaType:$id';
+              if (!seenAdminKeys.add(key)) continue;
+              if (row['is_published'] != true) {
+                unpublishedAdminKeys.add(key);
+              }
+            }
+          }
+
+          // MovieBox banner entries may not carry TMDB IDs. Check exact
+          // Admin titles too, so an unpublished Admin record still wins.
+          if (noTmdbTitles.isNotEmpty) {
+            final rows = await client
+                .from('movies')
+                .select('title, release_date, media_type, is_published, created_at')
+                .inFilter('title', noTmdbTitles)
+                .order('created_at', ascending: false);
+            final seenTitleKeys = <String>{};
+            for (final item in (rows as List).whereType<Map>()) {
+              final row = Map<String, dynamic>.from(item);
+              final title = _normalizedMovieTitle(
+                (row['title'] ?? '').toString(),
+              );
+              if (title.isEmpty) continue;
+              final mediaType = (row['media_type'] ?? 'movie').toString();
+              final date = (row['release_date'] ?? '').toString();
+              final year = date.length >= 4 ? date.substring(0, 4) : 'N/A';
+              final base = '$mediaType:$title';
+              final key = '$base:$year';
+              if (!seenTitleKeys.add(key)) continue;
+              if (row['is_published'] != true) {
+                unpublishedAdminTitleBases.add(base);
+                if (year == 'N/A') {
+                  unpublishedAdminTitleUnknownYears.add(base);
+                } else {
+                  unpublishedAdminTitleYears.add(key);
+                }
+              }
             }
           }
         } catch (error) {
@@ -1760,13 +1805,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final verifiedAll = <Movie>[];
       for (var start = 0;
-          start < candidates.length && verifiedAll.length < 30;
+          start < candidates.length && verifiedAll.length < 36;
           start += 6) {
         final batch = candidates.skip(start).take(6);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map((candidate) async {
             final key = '${candidate.mediaType}:${candidate.tmdbId}';
-            if (candidate.tmdbId > 0 && unpublishedAdminKeys.contains(key)) {
+            final titleBase =
+                '${candidate.mediaType}:${_normalizedMovieTitle(candidate.title)}';
+            final year = candidate.year.trim().length >= 4
+                ? candidate.year.trim().substring(0, 4)
+                : 'N/A';
+            final unpublishedByTitle = year == 'N/A'
+                ? unpublishedAdminTitleBases.contains(titleBase)
+                : unpublishedAdminTitleYears.contains('$titleBase:$year') ||
+                    unpublishedAdminTitleUnknownYears.contains(titleBase);
+            if ((candidate.tmdbId > 0 && unpublishedAdminKeys.contains(key)) ||
+                unpublishedByTitle) {
               return null;
             }
             return _verifyPlayableTrendingMovie(candidate);
@@ -1774,13 +1829,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
 
         for (final entry in resolved.whereType<MapEntry<String, Movie>>()) {
-          if (verifiedAll.length >= 30) break;
+          if (verifiedAll.length >= 36) break;
           verifiedAll.add(entry.value);
         }
       }
 
       final verified = _deduplicateMovies(verifiedAll)
-          .take(30)
+          .take(36)
           .toList(growable: false);
       final verifiedHindi = verified.where(_hasHindiAudio).toList();
       final verifiedBollywood = verified
