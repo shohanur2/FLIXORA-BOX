@@ -11,17 +11,19 @@ class CatalogSourcePolicy {
     return movieBoxMatch ?? publishedAdminFallback;
   }
 
-  /// Keep MovieBox records before duplicate Admin/TMDB records so all
-  /// first-match catalogue deduplication paths preserve the primary source.
-  static List<T> movieBoxFirst<T>(
+  /// Remove duplicate Admin/TMDB cards when the same title is present in
+  /// MovieBox, while preserving the order of every unrelated catalogue item.
+  static List<T> preferMovieBoxDuplicates<T>(
     Iterable<T> items, {
     required bool Function(T item) isMovieBox,
+    required bool Function(T movieBoxItem, T candidate) matches,
   }) {
     final values = items.toList(growable: false);
-    return <T>[
-      ...values.where(isMovieBox),
-      ...values.where((item) => !isMovieBox(item)),
-    ];
+    final movieBoxItems = values.where(isMovieBox).toList(growable: false);
+    return values.where((item) {
+      if (isMovieBox(item)) return true;
+      return !movieBoxItems.any((movieBoxItem) => matches(movieBoxItem, item));
+    }).toList(growable: false);
   }
 
   /// Admin publication status must never be applied to MovieBox or TMDB rows.
