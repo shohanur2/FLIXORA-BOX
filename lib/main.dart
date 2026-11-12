@@ -2760,10 +2760,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(updatedSections);
-      unawaited(_refreshCatalogVisibility(
-        candidates: mergedShorts,
-        forceRefresh: true,
-      ));
       debugPrint('Hot Shorts TV loaded ' + mergedShorts.length.toString() + ' titles.');
     } catch (error) {
       // Keep the Home preview row visible if the dedicated feed is unavailable.
