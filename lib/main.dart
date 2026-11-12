@@ -2331,7 +2331,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _refreshingSecondaryCatalogues = true;
     try {
       final loaders = <Future<List<Movie>> Function()>[
-        // Fetch pages 2-3 after first paint; page 1 is already on screen.
+        // TV and ongoing releases are loaded after the first movie rows appear.
+        () => TmdbService.getMovies('trending/tv/week')
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/popular')
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/top_rated')
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/on_the_air')
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/airing_today')
+            .catchError((_) => <Movie>[]),
+
+        // Fetch pages 2-3 without downloading page 1 again.
         () => TmdbService.getMovies(
           'trending/movie/week', pages: 2, startPage: 2,
         ).catchError((_) => <Movie>[]),
@@ -2352,9 +2364,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'tv/top_rated', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
-        () => TmdbService.getMovies(
-          'tv/on_the_air', pages: 2, startPage: 2,
         ).catchError((_) => <Movie>[]),
 
         () => TmdbService.getMovies('discover/tv', extraParams: {
@@ -2427,8 +2436,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ];
 
       final results = <List<Movie>>[];
-      // Limit concurrent background requests so image loading and active
-      // playback retain network capacity.
+      // Four requests at a time keeps the background catalogue refresh from
+      // competing heavily with posters or a stream the user just selected.
       for (var start = 0; start < loaders.length; start += 4) {
         final batch = await Future.wait<List<Movie>>(
           loaders.skip(start).take(4).map((load) => load()),
@@ -2438,56 +2447,66 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
       setState(() {
-        _tmdbTrendingMovies = _deduplicateMovies([
-          ..._tmdbTrendingMovies,
-          ...results[0],
-        ]);
-        trending = _deduplicateMovies([...trending, ...results[0]]);
-        popular = _deduplicateMovies([...popular, ...results[1]]);
-        latest = _deduplicateMovies([...latest, ...results[2]]);
-        topRated = _deduplicateMovies([...topRated, ...results[3]]);
         trendingTv = _deduplicateMovies([
           ...trendingTv,
+          ...results[0],
+          ...results[3],
           ...results[4],
-          ...results[7],
+          ...results[9],
         ]);
-        popularTv = _deduplicateMovies([...popularTv, ...results[5]]);
-        topRatedTv = _deduplicateMovies([...topRatedTv, ...results[6]]);
+        popularTv = _deduplicateMovies([
+          ...popularTv,
+          ...results[1],
+          ...results[10],
+        ]);
+        topRatedTv = _deduplicateMovies([
+          ...topRatedTv,
+          ...results[2],
+          ...results[11],
+        ]);
 
-        final onAirAnime = [...results[4], ...results[7]]
-            .where(_isAnimeTitle)
-            .toList(growable: false);
-        anime = _deduplicateMovies([...anime, ...results[8], ...onAirAnime]);
+        trending = _deduplicateMovies([...trending, ...results[5]]);
+        popular = _deduplicateMovies([...popular, ...results[6]]);
+        latest = _deduplicateMovies([...latest, ...results[7]]);
+        topRated = _deduplicateMovies([...topRated, ...results[8]]);
+
+        final onAirAnime = [
+          ...results[0],
+          ...results[3],
+          ...results[4],
+          ...results[9],
+        ].where(_isAnimeTitle);
+        anime = _deduplicateMovies([...anime, ...results[12], ...onAirAnime]);
 
         final asianDrama = [
-          ...results[9],
-          ...results[19],
-          ...results[20],
-          ...results[21],
+          ...results[13],
+          ...results[23],
+          ...results[24],
+          ...results[25],
         ];
         if (asianDrama.isNotEmpty) {
           koreanDrama = _deduplicateMovies([...koreanDrama, ...asianDrama]);
         }
-        if (results[10].isNotEmpty) {
-          bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[10]]);
+        if (results[14].isNotEmpty) {
+          bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[14]]);
         }
-        if (results[11].isNotEmpty) {
-          bengaliTv = _deduplicateMovies([...bengaliTv, ...results[11]]);
+        if (results[15].isNotEmpty) {
+          bengaliTv = _deduplicateMovies([...bengaliTv, ...results[15]]);
         }
 
-        final bollywood = [...results[12], ...results[22]];
+        final bollywood = [...results[16], ...results[26]];
         if (bollywood.isNotEmpty) {
           bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...bollywood]);
         }
-        if (results[13].isNotEmpty) {
-          hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[13]]);
+        if (results[17].isNotEmpty) {
+          hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[17]]);
         }
 
         final southIndian = [
-          ...results[14],
-          ...results[15],
-          ...results[16],
-          ...results[17],
+          ...results[18],
+          ...results[19],
+          ...results[20],
+          ...results[21],
         ];
         if (southIndian.isNotEmpty) {
           southIndianMovies = _deduplicateMovies([
@@ -2495,10 +2514,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...southIndian,
           ]);
         }
-        if (results[18].isNotEmpty) {
+        if (results[22].isNotEmpty) {
           indianDramaTv = _deduplicateMovies([
             ...indianDramaTv,
-            ...results[18],
+            ...results[22],
           ]);
         }
       });
@@ -2554,88 +2573,98 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         homeError = null;
       });
 
-      // MovieBox home is independent of TMDB and must not block the first paint.
+      // MovieBox sections can render independently while TMDB is loading.
       unawaited(_refreshMovieBoxHome());
 
-      // Load only the sections needed for the first Home screen. Regional
-      // catalogues and extra pages arrive in the background after first paint.
-      final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/popular')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/now_playing')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/top_rated')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('trending/tv/week')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/popular')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/top_rated')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/on_the_air')
-            .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/airing_today')
-            .catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies()
-            .catchError((_) => <Movie>[]),
+      var completedRequests = 0;
+      const primaryRequestCount = 5;
+
+      Future<void> loadPrimarySection(
+        Future<List<Movie>> request,
+        void Function(List<Movie>) apply,
+        Future<void> Function() persist,
+      ) async {
+        List<Movie> movies;
+        try {
+          movies = await request;
+        } catch (error) {
+          debugPrint('Home section request failed: $error');
+          movies = <Movie>[];
+        }
+        completedRequests++;
+
+        if (!mounted) return;
+        if (movies.isNotEmpty) {
+          setState(() {
+            apply(movies);
+            loading = false;
+            homeError = null;
+          });
+          _syncFeaturedCarouselAfterDataChange();
+          await persist();
+        } else if (completedRequests == primaryRequestCount &&
+            _allMovies().isEmpty) {
+          setState(() {
+            loading = false;
+            homeError = 'Unable to load movies.';
+          });
+        }
+      }
+
+      // Each section is painted and cached as soon as its own request finishes;
+      // the slowest endpoint no longer blocks every Home card.
+      await Future.wait([
+        loadPrimarySection(
+          TmdbService.getMovies('trending/movie/week'),
+          (movies) {
+            _tmdbTrendingMovies = movies;
+            trending = movies;
+            final composed = _homeTrendingMovies();
+            if (composed.isNotEmpty) trending = composed;
+          },
+          () async {
+            await Future.wait([
+              MovieCache.saveList(MovieCache.trendingKey, trending),
+              MovieCache.saveList(
+                MovieCache.tmdbTrendingMoviesKey,
+                _tmdbTrendingMovies,
+              ),
+            ]);
+          },
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/popular'),
+          (movies) => popular = movies,
+          () => MovieCache.saveList(MovieCache.popularKey, popular),
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/now_playing'),
+          (movies) => latest = movies,
+          () => MovieCache.saveList(MovieCache.latestKey, latest),
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/top_rated'),
+          (movies) => topRated = movies,
+          () => MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        ),
+        loadPrimarySection(
+          FlixoraMovieService.getPublishedMovies(),
+          (movies) {
+            flixoraMovies = movies;
+            final composed = _homeTrendingMovies();
+            if (composed.isNotEmpty) trending = composed;
+          },
+          () async {
+            await Future.wait([
+              MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+              MovieCache.saveList(MovieCache.trendingKey, trending),
+            ]);
+          },
+        ),
       ]);
 
       _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
-      setState(() {
-        _tmdbTrendingMovies = results[0].isNotEmpty
-            ? results[0]
-            : _tmdbTrendingMovies;
-        trending = results[0].isNotEmpty ? results[0] : trending;
-        popular = results[1].isNotEmpty ? results[1] : popular;
-        latest = results[2].isNotEmpty ? results[2] : latest;
-        topRated = results[3].isNotEmpty ? results[3] : topRated;
-
-        trendingTv = _deduplicateMovies([
-          ...results[4],
-          ...results[7],
-          ...results[8],
-        ]).isNotEmpty
-            ? _deduplicateMovies([...results[4], ...results[7], ...results[8]])
-            : trendingTv;
-        popularTv = results[5].isNotEmpty ? results[5] : popularTv;
-        topRatedTv = results[6].isNotEmpty ? results[6] : topRatedTv;
-        flixoraMovies = results[9].isNotEmpty ? results[9] : flixoraMovies;
-
-        final refreshedTrendingMovies = _homeTrendingMovies();
-        if (refreshedTrendingMovies.isNotEmpty) {
-          trending = refreshedTrendingMovies;
-        }
-
-        loading = false;
-        homeError = _allMovies().isEmpty ? 'Unable to load movies.' : null;
-
-        final visibleCount = _homeTrendingMovies().length;
-        if (visibleCount == 0) {
-          _slide = 0;
-        } else if (_slide >= visibleCount) {
-          _slide = 0;
-        }
-      });
-
-      _syncFeaturedCarouselAfterDataChange();
-
-      // Cache first-paint sections without delaying the visible Home screen.
-      unawaited(() async {
-        await Future.wait([
-          MovieCache.saveList(MovieCache.trendingKey, trending),
-          MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
-          MovieCache.saveList(MovieCache.popularKey, popular),
-          MovieCache.saveList(MovieCache.latestKey, latest),
-          MovieCache.saveList(MovieCache.topRatedKey, topRated),
-          MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
-          MovieCache.saveList(MovieCache.popularTvKey, popularTv),
-          MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
-          MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
-        ]);
-      }());
 
       unawaited(_refreshSecondaryCatalogues());
       unawaited(_refreshPlayableTrendingMovies());
