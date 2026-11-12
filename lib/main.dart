@@ -2174,7 +2174,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       await _refreshCatalogVisibility(candidates: candidates);
       final visibleCandidates = candidates
-          .where((candidate) => candidate.isMovieBox ||
+          .where((candidate) =>
+              candidate.isMovieBox ||
               !_unpublishedCatalogKeys.contains(_catalogVisibilityKey(candidate)))
           .toList(growable: false);
 
@@ -3939,17 +3940,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return matching.isEmpty ? <dynamic>[] : [matching.first];
   }
 
-  /// Resolve every entry point to the same Admin-managed movie record.
-  /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
+  /// Resolve every entry point to MovieBox first, then an Admin fallback.
+  /// TMDB IDs are external IDs; Admin video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
     final client = supabaseClient;
 
     if (!_online || client == null) {
       return requested.isMovieBox
-            ? requested
-            : (_cachedMovieBoxMatch(requested) ??
-                _cachedFlixoraMatch(requested) ??
-                requested);
+          ? requested
+          : (_cachedMovieBoxMatch(requested) ??
+              _cachedFlixoraMatch(requested) ??
+              requested);
     }
 
     final visibilityKey = _catalogVisibilityKey(requested);
@@ -4028,7 +4029,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (response is List && response.isNotEmpty) {
         final row = Map<String, dynamic>.from(response.first as Map);
-        // Admin publication status remains authoritative over every catalogue.
+        // Admin publication status controls this Admin fallback record.
         if (row['is_published'] != true) return null;
 
         final playable = await FlixoraMovieService.mapPlayableRows(
