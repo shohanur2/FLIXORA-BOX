@@ -1,9 +1,12 @@
 /// Builds a balanced Home hero feed without letting one catalogue crowd out
-/// every other type. Movies and web series receive the strongest weighting.
+/// every other type. Trending Movies and Web Series receive the strongest
+/// weighting, with Web Series appearing slightly more often.
 class HeroSliderMixer {
   HeroSliderMixer._();
 
-  static const List<int> _schedule = <int>[0, 0, 1, 1, 0, 1, 2, 3, 4];
+  static const List<int> _schedule = <int>[
+    0, 0, 1, 1, 0, 1, 1, 2, 3, 4,
+  ];
 
   static List<T> mix<T>({
     required List<T> movies,

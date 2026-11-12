@@ -3,7 +3,7 @@ import 'package:flixora/streaming/hero_slider_mixer.dart';
 
 void main() {
   group('HeroSliderMixer', () {
-    test('gives Trending Movies and Web Series the strongest weighting', () {
+    test('prioritizes Trending Movies and shows Web Series most often', () {
       final mixed = HeroSliderMixer.mix<String>(
         movies: List<String>.generate(6, (index) => 'movie-$index'),
         webSeries: List<String>.generate(6, (index) => 'series-$index'),
@@ -11,7 +11,7 @@ void main() {
         anime: List<String>.generate(3, (index) => 'anime-$index'),
         tvShows: List<String>.generate(3, (index) => 'tv-$index'),
         keyOf: (item) => item,
-        limit: 9,
+        limit: 10,
       );
 
       expect(
@@ -23,6 +23,7 @@ void main() {
           'series-1',
           'movie-2',
           'series-2',
+          'series-3',
           'drama-0',
           'anime-0',
           'tv-0',
