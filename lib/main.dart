@@ -2214,20 +2214,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Connectivity().onConnectivityChanged.listen(
       (results) async {
         InternetService.invalidateCache();
-        final hasNetwork = !results.contains(ConnectivityResult.none);
-
-        if (!hasNetwork) {
-          if (!mounted) return;
-
-          setState(() {
-            _online = false;
-            _connectionKnown = true;
-            if (_allMovies().isEmpty) homeError = 'offline';
-          });
-          return;
-        }
-
-        final online = await InternetService.isOnline();
+        // Connectivity events can briefly report "none" during Wi-Fi/mobile
+        // hand-offs. Confirm real internet reachability before showing Offline.
+        final online = await InternetService.isOnline(forceRefresh: true);
 
         if (!mounted) return;
 
@@ -2260,7 +2249,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted || _checkingConnection) return;
     _checkingConnection = true;
     try {
-      final online = await InternetService.isOnline();
+      final online = await InternetService.isOnline(forceRefresh: true);
       if (!mounted || online == _online) return;
 
       final wasOffline = !_online;
