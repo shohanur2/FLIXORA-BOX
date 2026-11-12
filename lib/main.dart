@@ -7542,7 +7542,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  if (movie.downloadUrl.trim().isNotEmpty)
+                  if (movie.canAttemptPlayback)
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
