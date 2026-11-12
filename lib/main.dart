@@ -12252,14 +12252,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         width: 48,
         height: 48,
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.42),
+          color: Colors.black.withValues(alpha: 0.48),
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0x33FFFFFF)),
+          border: Border.all(color: const Color(0x55FFFFFF)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.24),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: IconButton(
           tooltip: tooltip,
           onPressed: onPressed,
-          icon: Icon(icon, color: playerWhite, size: 27),
+          icon: Icon(icon, color: playerWhite, size: 26),
         ),
       );
     }
@@ -12272,18 +12279,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           tooltip: 'Back 10 seconds',
           onPressed: () => _seekBy(-10),
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 24),
         Container(
-          width: 72,
-          height: 72,
+          width: 76,
+          height: 76,
           decoration: BoxDecoration(
-            color: playerGold,
             shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [playerGoldLight, playerGold],
+            ),
+            border: Border.all(
+              color: const Color(0xCCFFFFFF),
+              width: 1.2,
+            ),
             boxShadow: [
               BoxShadow(
-                color: playerGold.withValues(alpha: 0.35),
-                blurRadius: 24,
-                spreadRadius: 2,
+                color: playerGold.withValues(alpha: 0.34),
+                blurRadius: 28,
+                spreadRadius: 1,
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.28),
+                blurRadius: 12,
+                offset: const Offset(0, 5),
               ),
             ],
           ),
@@ -12299,7 +12319,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ),
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 24),
         skipControl(
           icon: Icons.forward_10_rounded,
           tooltip: 'Forward 10 seconds',
@@ -12314,130 +12334,164 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ValueListenableBuilder<Duration>(
-            valueListenable: _positionNotifier,
-            builder: (context, position, _) {
-              final current = position.inMilliseconds
-                  .toDouble()
-                  .clamp(0.0, max > 0 ? max : 1.0)
-                  .toDouble();
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              const Color(0xD9101117),
+              Colors.black.withValues(alpha: 0.76),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0x2EFFFFFF)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.22),
+              blurRadius: 18,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 7, 12, 5),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<Duration>(
+                valueListenable: _positionNotifier,
+                builder: (context, position, _) {
+                  final current = position.inMilliseconds
+                      .toDouble()
+                      .clamp(0.0, max > 0 ? max : 1.0)
+                      .toDouble();
 
-              return Row(
+                  return Row(
+                    children: [
+                      Text(
+                        _formatDuration(position),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            activeTrackColor: playerGold,
+                            inactiveTrackColor: const Color(0x55FFFFFF),
+                            thumbColor: playerWhite,
+                            overlayColor: playerGold.withValues(alpha: 0.16),
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 5.5,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 10,
+                            ),
+                          ),
+                          child: Slider(
+                            value: current,
+                            min: 0,
+                            max: max > 0 ? max : 1,
+                            onChanged: max > 0
+                                ? (value) => _updatePosition(
+                                      Duration(milliseconds: value.round()),
+                                    )
+                                : null,
+                            onChangeEnd: max > 0 ? _seekTo : null,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _formatDuration(_duration),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              Row(
                 children: [
-                  Text(
-                    _formatDuration(position),
-                    style: const TextStyle(
+                  IconButton(
+                    constraints: const BoxConstraints(
+                      minWidth: 34,
+                      minHeight: 38,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onPressed: () => _changeVolume(_volume - 10),
+                    icon: const Icon(
+                      Icons.volume_down_rounded,
                       color: playerWhite,
-                      fontSize: 11,
+                      size: 19,
                     ),
                   ),
-                  Expanded(
+                  SizedBox(
+                    width: 58,
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
-                        trackHeight: 2.5,
+                        trackHeight: 3,
                         activeTrackColor: playerGold,
                         inactiveTrackColor: const Color(0x4DFFFFFF),
                         thumbColor: playerWhite,
                         overlayColor: playerGold.withValues(alpha: 0.16),
                         thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 5.5,
+                          enabledThumbRadius: 5,
                         ),
                         overlayShape: const RoundSliderOverlayShape(
                           overlayRadius: 10,
                         ),
                       ),
                       child: Slider(
-                        value: current,
+                        value: _volume.clamp(0.0, 100.0),
                         min: 0,
-                        max: max > 0 ? max : 1,
-                        onChanged: max > 0
-                            ? (value) => _updatePosition(
-                                  Duration(milliseconds: value.round()),
-                                )
-                            : null,
-                        onChangeEnd: max > 0 ? _seekTo : null,
+                        max: 100,
+                        onChanged: _changeVolume,
                       ),
                     ),
                   ),
-                  Text(
-                    _formatDuration(_duration),
-                    style: const TextStyle(
+                  IconButton(
+                    constraints: const BoxConstraints(
+                      minWidth: 34,
+                      minHeight: 38,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onPressed: () => _changeVolume(_volume + 10),
+                    icon: const Icon(
+                      Icons.volume_up_rounded,
                       color: playerWhite,
-                      fontSize: 11,
+                      size: 19,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    style: TextButton.styleFrom(
+                      foregroundColor: playerGoldLight,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(42, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _showSettings,
+                    child: Text(
+                      '${_speed}x',
+                      style: const TextStyle(
+                        color: playerGoldLight,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                 ],
-              );
-            },
-          ),
-          Row(
-            children: [
-              IconButton(
-                constraints: const BoxConstraints(
-                  minWidth: 34,
-                  minHeight: 40,
-                ),
-                padding: EdgeInsets.zero,
-                onPressed: () => _changeVolume(_volume - 10),
-                icon: const Icon(
-                  Icons.volume_down,
-                  color: playerWhite,
-                  size: 20,
-                ),
-              ),
-              SizedBox(
-                width: 52,
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    activeTrackColor: playerGold,
-                    inactiveTrackColor: const Color(0x3DFFFFFF),
-                    thumbColor: playerWhite,
-                    overlayColor: playerGold.withValues(alpha: 0.16),
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 5,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 10,
-                    ),
-                  ),
-                  child: Slider(
-                    value: _volume.clamp(0.0, 100.0),
-                    min: 0,
-                    max: 100,
-                    onChanged: _changeVolume,
-                  ),
-                ),
-              ),
-              IconButton(
-                constraints: const BoxConstraints(
-                  minWidth: 34,
-                  minHeight: 40,
-                ),
-                padding: EdgeInsets.zero,
-                onPressed: () => _changeVolume(_volume + 10),
-                icon: const Icon(
-                  Icons.volume_up,
-                  color: playerWhite,
-                  size: 20,
-                ),
-              ),
-              TextButton(
-                onPressed: _showSettings,
-                child: Text(
-                  '${_speed}x',
-                  style: const TextStyle(
-                    color: playerGold,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -12754,15 +12808,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ),
         ),
         if ((_isBuffering || !_initialized) && _errorMessage == null)
-          const IgnorePointer(
+          IgnorePointer(
             child: Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  color: playerGold,
-                  strokeWidth: 2.2,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 25,
+                    height: 25,
+                    child: CircularProgressIndicator(
+                      color: playerGold,
+                      strokeWidth: 2.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _initialized ? 'Buffering...' : 'Starting playback...',
+                    style: const TextStyle(
+                      color: Color(0xD9FFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.25,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
