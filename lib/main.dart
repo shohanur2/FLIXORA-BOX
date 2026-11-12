@@ -9600,7 +9600,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   StreamSubscription<Tracks>? _tracksSubscription;
   StreamSubscription<bool>? _completedSubscription;
 
-  Duration _updatePosition(Duration.zero);
+  Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   final ValueNotifier<Duration> _positionNotifier =
       ValueNotifier<Duration>(Duration.zero);
@@ -11219,7 +11219,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _player.seek(savedPosition);
 
       if (mounted && !_isDisposed) {
-        setState(() => _position = savedPosition);
+        setState(() => _updatePosition(savedPosition));
       }
     } catch (_) {}
   }
@@ -11420,7 +11420,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.seek(clamped);
 
     if (mounted && !_isDisposed) {
-      setState(() => _position = clamped);
+      setState(() => _updatePosition(clamped));
     }
 
     _startHideTimer();
@@ -11432,7 +11432,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.seek(target);
 
     if (mounted && !_isDisposed) {
-      setState(() => _position = target);
+      setState(() => _updatePosition(target));
     }
   }
 
