@@ -445,7 +445,7 @@ jobs:
 
           ffi_path = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
           ffi = ffi_path.read_text()
-          ffi_anchor = "/// Search suggestions → Vec<String>.\n"
+          ffi_anchor = "/// Search suggestions → `Vec<String>`.\n"
           ffi_function = """/// Dedicated Short TV catalogue returning items and a hasMore flag.
           #[no_mangle]
           pub extern "C" fn sparkbox_shorts(per_page: c_int, max_pages: c_int) -> *mut c_char {
