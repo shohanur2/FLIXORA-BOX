@@ -8123,7 +8123,6 @@ class HotShortsScreen extends StatefulWidget {
 class _HotShortsScreenState extends State<HotShortsScreen> {
   late List<Movie> _items;
   bool _catalogueRequested = false;
-  bool _catalogueLoading = false;
   late final Player _player;
   late final VideoController _videoController;
   late final PageController _pageController;
@@ -8207,7 +8206,6 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     final loader = widget.loadCatalogue;
     if (_catalogueRequested || loader == null || _disposed) return;
     _catalogueRequested = true;
-    if (mounted) setState(() => _catalogueLoading = true);
     try {
       final loaded = await loader();
       if (!mounted || _disposed || loaded.isEmpty) return;
@@ -8226,10 +8224,6 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
       }
     } catch (error) {
       debugPrint('Hot Shorts background catalogue load failed: $error');
-    } finally {
-      if (mounted && !_disposed) {
-        setState(() => _catalogueLoading = false);
-      }
     }
   }
 
