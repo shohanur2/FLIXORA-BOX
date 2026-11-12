@@ -440,6 +440,29 @@ jobs:
               raise SystemExit("SparkBoxCore season-info URL changed; review Short TV episode support.")
           mobile = mobile.replace(old_seasons, new_seasons, 1)
 
+          old_season_headers = """        let text = self
+                      .http
+                      .get(&url)
+                      .headers(self.mobile_headers("GET", &url, None, false, token.as_deref()))
+                      .send()
+                      .await?
+                      .text()
+                      .await?;"""
+          new_season_headers = """        let mut headers =
+                      self.mobile_headers("GET", &url, None, false, token.as_deref());
+                  ins(&mut headers, "x-play-mode", "2".into());
+                  let text = self
+                      .http
+                      .get(&url)
+                      .headers(headers)
+                      .send()
+                      .await?
+                      .text()
+                      .await?;"""
+          if old_season_headers not in mobile:
+              raise SystemExit("SparkBoxCore season-info headers changed; review Short TV episode support.")
+          mobile = mobile.replace(old_season_headers, new_season_headers, 1)
+
           old_signature = """    pub(crate) async fn detail_mobile(
                   &self,
                   id: &str,
