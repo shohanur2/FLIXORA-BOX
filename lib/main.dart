@@ -2212,7 +2212,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _listenToConnectivity() {
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen(
-      (results) async {
+      (_) async {
         InternetService.invalidateCache();
         // Connectivity events can briefly report "none" during Wi-Fi/mobile
         // hand-offs. Confirm real internet reachability before showing Offline.
