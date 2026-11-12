@@ -130,7 +130,7 @@ class MovieBoxService {
     Map<String, dynamic> item,
   ) {
     final id = _subjectId(item);
-    if (id.isEmpty) return SparkBoxCore.playDetail(item);
+    if (id.isEmpty) return _retry(() => SparkBoxCore.playDetail(item));
     return _remember(
       _playDetailCache,
       id,
