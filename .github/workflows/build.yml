@@ -413,7 +413,7 @@ jobs:
                       "subjectType": 7,
                       "cover": { "url": "https://cdn.example.test/poster.jpg" }
                   });
-                  let item = parse_short_subject(&raw, false).expect("short TV item parses");
+                  let item = parse_short_subject(raw.as_object().unwrap(), false).expect("short TV item parses");
                   assert!(item.is_series);
                   assert_eq!(item.subject_type, 7);
               }
