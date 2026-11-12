@@ -3972,6 +3972,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
+      if (!_online && _hasCompletedLocalDownload(movie)) {
+        await _openResolvedPlayer(movie, movie);
+        return;
+      }
       final hasInternet = _online ||
           await InternetService.isOnline(forceRefresh: true);
       if (!mounted) return;
@@ -4047,6 +4051,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (closeCurrentPlayer) {
         if (!mounted) return;
         Navigator.of(context).pop();
+      }
+
+      if (!_online && _hasCompletedLocalDownload(movie)) {
+        await _openResolvedPlayer(movie, movie);
+        return;
       }
 
       if (!_online) {
