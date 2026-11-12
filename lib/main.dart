@@ -403,6 +403,57 @@ class Movie {
   }
 }
 
+class MovieBoxShortEpisode {
+  const MovieBoxShortEpisode({
+    required this.season,
+    required this.episode,
+  });
+
+  final int season;
+  final int episode;
+
+  String get label => 'S$season · E$episode';
+
+  static List<MovieBoxShortEpisode> fromSeasons(
+    Iterable<Map<String, dynamic>> seasons,
+  ) {
+    final orderedSeasons = seasons.toList()
+      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+    final episodes = <MovieBoxShortEpisode>[];
+    final seen = <String>{};
+
+    for (final season in orderedSeasons) {
+      final seasonNumber = _toInt(season['se']);
+      if (seasonNumber <= 0) continue;
+      final rawEpisodes = season['episodes'] as List? ?? const [];
+      for (final rawEpisode in rawEpisodes) {
+        final value = rawEpisode is Map
+            ? (rawEpisode['ep'] ??
+                rawEpisode['episode'] ??
+                rawEpisode['episodeNumber'] ??
+                rawEpisode['number'])
+            : rawEpisode;
+        final episodeNumber = _toInt(value);
+        final key = '$seasonNumber:$episodeNumber';
+        if (episodeNumber > 0 && seen.add(key)) {
+          episodes.add(MovieBoxShortEpisode(
+            season: seasonNumber,
+            episode: episodeNumber,
+          ));
+        }
+      }
+    }
+
+    episodes.sort((a, b) {
+      final seasonOrder = a.season.compareTo(b.season);
+      return seasonOrder != 0
+          ? seasonOrder
+          : a.episode.compareTo(b.episode);
+    });
+    return episodes;
+  }
+}
+
 class MovieBoxHomeSection {
   final String title;
   final List<Movie> items;
@@ -1521,6 +1572,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static const String _searchHistoryPrefsKey = 'flixora_search_history';
   final PageController _sliderController = PageController();
   final ScrollController _featuredCardsController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
@@ -1556,6 +1608,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _search = '';
   bool _searchLoading = false;
   String? _searchError;
+  List<String> _searchHistory = [];
 
   bool loading = true;
   bool _online = false;
@@ -1596,6 +1649,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<MovieBoxHomeSection> _movieBoxSections = [];
   final Map<String, Movie> _movieBoxMatchCache = {};
   final Set<String> _downloadPreparationKeys = <String>{};
+  String? _expandedHotShortId;
+  final Map<String, List<MovieBoxShortEpisode>> _hotShortEpisodesById = {};
+  final Set<String> _hotShortEpisodeLoading = <String>{};
+  final Map<String, String> _hotShortEpisodeErrors = {};
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -2265,6 +2322,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _loadAppSettings();
     final savedHistory = await MovieCache.getList(MovieCache.historyKey);
     final prefs = await SharedPreferences.getInstance();
+    final savedSearchHistory =
+        prefs.getStringList(_searchHistoryPrefsKey) ?? const <String>[];
     _unpublishedCatalogKeys
       ..clear()
       ..addAll(prefs.getStringList('flixora_unpublished_catalog_keys') ?? const []);
@@ -2278,6 +2337,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _watchHistory
           ..clear()
           ..addAll(savedHistory);
+        _searchHistory
+          ..clear()
+          ..addAll(
+            savedSearchHistory
+                .map((query) => query.trim())
+                .where((query) => query.isNotEmpty)
+                .take(20),
+          );
         _studyMode = savedStudyMode;
         _downloads
           ..clear()
@@ -4388,7 +4455,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return items;
   }
 
-  void _openHotShorts(List<Movie> source, {int initialIndex = 0}) {
+  void _openHotShorts(
+    List<Movie> source, {
+    int initialIndex = 0,
+    int? initialSeasonNumber,
+    int? initialEpisodeNumber,
+  }) {
     final shorts = _deduplicateMovies(
       source.where((movie) => movie.isMovieBox).toList(growable: false),
     );
@@ -4398,6 +4470,178 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (_) => HotShortsScreen(
           items: shorts,
           initialIndex: initialIndex.clamp(0, shorts.length - 1).toInt(),
+          initialSeasonNumber: initialSeasonNumber,
+          initialEpisodeNumber: initialEpisodeNumber,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadHotShortEpisodes(
+    Movie movie, {
+    bool forceRefresh = false,
+  }) async {
+    final subjectId = movie.movieBoxId;
+    if (subjectId.isEmpty || !movie.movieBoxIsSeries) return;
+    if (_hotShortEpisodeLoading.contains(subjectId)) return;
+    if (!forceRefresh && _hotShortEpisodesById.containsKey(subjectId)) return;
+
+    if (mounted) {
+      setState(() {
+        _hotShortEpisodeLoading.add(subjectId);
+        _hotShortEpisodeErrors.remove(subjectId);
+        if (forceRefresh) _hotShortEpisodesById.remove(subjectId);
+      });
+    }
+
+    try {
+      final seasons = await MovieBoxService.seasons(subjectId)
+          .timeout(const Duration(seconds: 18));
+      final episodes = MovieBoxShortEpisode.fromSeasons(seasons);
+      if (!mounted) return;
+      setState(() {
+        _hotShortEpisodesById[subjectId] = episodes;
+        if (episodes.isEmpty) {
+          _hotShortEpisodeErrors[subjectId] =
+              'No episodes are available for this short.';
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _hotShortEpisodeErrors[subjectId] =
+            'Could not load episodes. Please try again.';
+      });
+      debugPrint('Hot Shorts episode list failed for ${movie.title}: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _hotShortEpisodeLoading.remove(subjectId));
+      }
+    }
+  }
+
+  void _toggleHotShortEpisodes(Movie movie) {
+    if (!movie.movieBoxIsSeries) return;
+    final subjectId = movie.movieBoxId;
+    if (_expandedHotShortId == subjectId) {
+      setState(() => _expandedHotShortId = null);
+      return;
+    }
+    setState(() => _expandedHotShortId = subjectId);
+    unawaited(_loadHotShortEpisodes(movie));
+  }
+
+  void _openHotShortEpisode(
+    List<Movie> shorts,
+    Movie movie,
+    MovieBoxShortEpisode episode,
+  ) {
+    final index = shorts.indexWhere(
+      (item) => item.movieBoxId == movie.movieBoxId,
+    );
+    if (index < 0) return;
+    _openHotShorts(
+      shorts,
+      initialIndex: index,
+      initialSeasonNumber: episode.season,
+      initialEpisodeNumber: episode.episode,
+    );
+  }
+
+  Widget _hotShortEpisodesPanel(Movie movie, List<Movie> shorts) {
+    final subjectId = movie.movieBoxId;
+    final episodes = _hotShortEpisodesById[subjectId] ??
+        const <MovieBoxShortEpisode>[];
+    final loading = _hotShortEpisodeLoading.contains(subjectId);
+    final error = _hotShortEpisodeErrors[subjectId];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 3),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ink12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${movie.title} · Episodes',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Hide episodes',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() => _expandedHotShortId = null),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: ink60,
+                    size: 19,
+                  ),
+                ),
+              ],
+            ),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: LinearProgressIndicator(
+                  minHeight: 2,
+                  color: gold,
+                  backgroundColor: ink12,
+                ),
+              )
+            else if (error != null)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      error,
+                      style: const TextStyle(color: ink60, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => unawaited(
+                      _loadHotShortEpisodes(movie, forceRefresh: true),
+                    ),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: episodes.map((episode) {
+                  return ActionChip(
+                    backgroundColor: const Color(0xFF303030),
+                    side: const BorderSide(color: ink12),
+                    label: Text(
+                      episode.label,
+                      style: const TextStyle(
+                        color: white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    onPressed: () =>
+                        _openHotShortEpisode(shorts, movie, episode),
+                  );
+                }).toList(growable: false),
+              ),
+          ],
         ),
       ),
     );
@@ -4408,6 +4652,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       source.where((movie) => movie.isMovieBox).toList(growable: false),
     );
     if (shorts.isEmpty) return const SizedBox.shrink();
+
+    Movie? expandedShort;
+    for (final short in shorts) {
+      if (short.movieBoxId == _expandedHotShortId) {
+        expandedShort = short;
+        break;
+      }
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4466,102 +4718,156 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final imageUrl = movie.posterUrl.isNotEmpty
                   ? movie.posterUrl
                   : movie.backdropUrl;
+              final expanded = _expandedHotShortId == movie.movieBoxId;
               return SizedBox(
                 width: 132,
-                child: Material(
-                  color: panel,
-                  borderRadius: BorderRadius.circular(13),
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () => _openHotShorts(shorts, initialIndex: index),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        if (imageUrl.isNotEmpty)
-                          FlixoraCachedImage(
-                            imageUrl: imageUrl,
-                            isOnline: _online,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 396,
-                            memCacheHeight: 714,
-                            placeholder: const ColoredBox(color: panel),
-                            fallback: const ColoredBox(color: panel),
-                          )
-                        else
-                          const ColoredBox(color: panel),
-                        const DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [
-                                Color(0x55000000),
-                                Colors.transparent,
-                                Color(0xDD000000),
-                              ],
-                            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Material(
+                        color: panel,
+                        borderRadius: BorderRadius.circular(13),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => _openHotShorts(
+                            shorts,
+                            initialIndex: index,
+                          ),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (imageUrl.isNotEmpty)
+                                FlixoraCachedImage(
+                                  imageUrl: imageUrl,
+                                  isOnline: _online,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 396,
+                                  memCacheHeight: 714,
+                                  placeholder: const ColoredBox(color: panel),
+                                  fallback: const ColoredBox(color: panel),
+                                )
+                              else
+                                const ColoredBox(color: panel),
+                              const DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Color(0x55000000),
+                                      Colors.transparent,
+                                      Color(0xDD000000),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 9,
+                                left: 9,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 7,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: gold,
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: const Text(
+                                    'SHORTS',
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.6,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const Center(
+                                child: CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: Color(0xAA000000),
+                                  child: Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 28,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                left: 9,
+                                right: 9,
+                                bottom: 10,
+                                child: Text(
+                                  movie.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black,
+                                        blurRadius: 8,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Positioned(
-                          top: 9,
-                          left: 9,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 7,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: gold,
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                            child: const Text(
-                              'SHORTS',
-                              style: TextStyle(
-                                color: Colors.black,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 0.6,
+                      ),
+                    ),
+                    SizedBox(
+                      height: 32,
+                      child: movie.movieBoxIsSeries
+                          ? TextButton.icon(
+                              onPressed: () => _toggleHotShortEpisodes(movie),
+                              icon: Icon(
+                                expanded
+                                    ? Icons.expand_less_rounded
+                                    : Icons.list_alt_rounded,
+                                size: 16,
+                              ),
+                              label: Text(
+                                expanded ? 'Hide Episodes' : 'Episodes',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              style: TextButton.styleFrom(
+                                foregroundColor: gold,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 30),
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            )
+                          : const Center(
+                              child: Text(
+                                'Single Part',
+                                style: TextStyle(
+                                  color: ink60,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                        const Center(
-                          child: CircleAvatar(
-                            radius: 20,
-                            backgroundColor: Color(0xAA000000),
-                            child: Icon(
-                              Icons.play_arrow_rounded,
-                              color: Colors.white,
-                              size: 28,
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: 9,
-                          right: 9,
-                          bottom: 10,
-                          child: Text(
-                            movie.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
-                              shadows: [
-                                Shadow(color: Colors.black, blurRadius: 8),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
                     ),
-                  ),
+                  ],
                 ),
               );
             },
           ),
         ),
+        if (expandedShort != null)
+          _hotShortEpisodesPanel(expandedShort, shorts),
       ],
     );
   }
@@ -5322,9 +5628,100 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _saveSearchHistory(String value) async {
+    final query = value.trim();
+    if (query.isEmpty) return;
+
+    final updated = <String>[
+      query,
+      ..._searchHistory.where(
+        (item) => item.toLowerCase() != query.toLowerCase(),
+      ),
+    ].take(20).toList(growable: false);
+
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
+  Future<void> _removeSearchHistory(String value) async {
+    final updated = _searchHistory
+        .where((item) => item.toLowerCase() != value.toLowerCase())
+        .toList(growable: false);
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
+  Widget _searchHistoryBlock() {
+    final items = _searchHistory.take(10).toList(growable: false);
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 7),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 3, bottom: 5),
+            child: Text(
+              'Search History',
+              style: TextStyle(
+                color: white,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          ...items.map((query) => SizedBox(
+                height: 39,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.history_rounded,
+                      color: ink60,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _searchForTitle(query),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            query,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Remove search history item',
+                      onPressed: () => _removeSearchHistory(query),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: ink60,
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
   Future<void> _searchForTitle(String title) async {
     if (!_searchOpen) await _openSearch();
     if (!mounted) return;
+    unawaited(_saveSearchHistory(title));
     _searchController.text = title;
     _searchController.selection = TextSelection.collapsed(
       offset: title.length,
@@ -5523,6 +5920,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       padding: const EdgeInsets.only(bottom: 20),
       children: [
+        _searchHistoryBlock(),
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 18, 16, 10),
           child: Text(
@@ -5660,6 +6058,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onSubmitted: (value) {
                 _searchTimer?.cancel();
                 FocusScope.of(context).unfocus();
+                unawaited(_saveSearchHistory(value));
                 searchMovies(value);
               },
               style: const TextStyle(color: white, fontSize: 14),
@@ -5711,7 +6110,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
             _searchTimer?.cancel();
             FocusScope.of(context).unfocus();
-            _onSearchChanged(_searchController.text);
+            final query = _searchController.text;
+            unawaited(_saveSearchHistory(query));
+            _onSearchChanged(query);
           },
           style: TextButton.styleFrom(
             foregroundColor: gold,
@@ -5922,6 +6323,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
+    final movieBoxSections = _movieBoxSections
+        .where((section) =>
+            (!section.isBanner ||
+                section.title.toLowerCase().contains('coming soon')) &&
+            !section.title.toLowerCase().contains('trending') &&
+            !section.isFlixoraOriginal &&
+            !section.isHotShorts)
+        .toList(growable: false);
+    final movieBoxSectionWidgets = <Widget>[];
+    var hotShortsInserted = false;
+    for (final section in movieBoxSections) {
+      movieBoxSectionWidgets.add(
+        _sectionBlock(section.title, _movieBoxSectionItems(section)),
+      );
+      if (!hotShortsInserted &&
+          section.title.toLowerCase().contains('coming soon')) {
+        if (_hotShortsSection != null) {
+          movieBoxSectionWidgets.add(
+            _hotShortsBlock(_hotShortsSection!.items),
+          );
+        }
+        hotShortsInserted = true;
+      }
+    }
+    if (!hotShortsInserted && _hotShortsSection != null) {
+      movieBoxSectionWidgets.add(
+        _hotShortsBlock(_hotShortsSection!.items),
+      );
+    }
+
     return RefreshIndicator(
       color: gold,
       backgroundColor: panel,
@@ -5944,8 +6375,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
-          if (_hotShortsSection != null)
-            _hotShortsBlock(_hotShortsSection!.items),
           _sectionBlock('Trending Movies', _trendingMovies),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._regularMovieBoxItems
@@ -5953,15 +6382,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
-          ..._movieBoxSections
-              .where((section) => !section.isBanner &&
-                  !section.title.toLowerCase().contains('trending') &&
-                  !section.isFlixoraOriginal &&
-                  !section.isHotShorts)
-              .map((section) => _sectionBlock(
-                    section.title,
-                    _movieBoxSectionItems(section),
-                  )),
+          ...movieBoxSectionWidgets,
           _homeCategoryCards(),
           _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
@@ -7538,11 +7959,15 @@ class DownloadsScreen extends StatelessWidget {
 class HotShortsScreen extends StatefulWidget {
   final List<Movie> items;
   final int initialIndex;
+  final int? initialSeasonNumber;
+  final int? initialEpisodeNumber;
 
   const HotShortsScreen({
     super.key,
     required this.items,
     this.initialIndex = 0,
+    this.initialSeasonNumber,
+    this.initialEpisodeNumber,
   });
 
   @override
@@ -7571,6 +7996,8 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   String? _error;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  int? _activeSeasonNumber;
+  int? _activeEpisodeNumber;
 
   @override
   void initState() {
@@ -7695,6 +8122,8 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
         _error = null;
         _position = Duration.zero;
         _duration = Duration.zero;
+        _activeSeasonNumber = null;
+        _activeEpisodeNumber = null;
         _playing = false;
       });
     }
@@ -7732,19 +8161,44 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
             .map((season) => Map<String, dynamic>.from(season))
             .toList()
           ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+        final requestedSeason = index == widget.initialIndex
+            ? widget.initialSeasonNumber
+            : null;
+        final requestedEpisode = index == widget.initialIndex
+            ? widget.initialEpisodeNumber
+            : null;
         for (final season in seasons) {
+          final currentSeason = _toInt(season['se']);
           final episodes = (season['episodes'] as List? ?? const [])
               .map(_toInt)
               .where((number) => number > 0)
               .toList(growable: false);
-          if (episodes.isEmpty) continue;
-          seasonNumber = _toInt(season['se']);
-          episodeNumber = episodes.first;
-          if (seasonNumber > 0) break;
+          if (episodes.isEmpty || currentSeason <= 0) continue;
+
+          if (requestedSeason == currentSeason &&
+              requestedEpisode != null &&
+              episodes.contains(requestedEpisode)) {
+            seasonNumber = currentSeason;
+            episodeNumber = requestedEpisode;
+            break;
+          }
+          if (seasonNumber <= 0) {
+            seasonNumber = currentSeason;
+            episodeNumber = episodes.first;
+          }
         }
         if (seasonNumber <= 0 || episodeNumber <= 0) {
           throw StateError('No playable short episode was returned.');
         }
+      }
+
+      if (mounted && requestToken == _requestToken) {
+        setState(() {
+          _activeSeasonNumber =
+              movie.movieBoxIsSeries ? seasonNumber : null;
+          _activeEpisodeNumber =
+              movie.movieBoxIsSeries ? episodeNumber : null;
+        });
       }
 
       final streamResult = await MovieBoxService.streams(
@@ -8008,9 +8462,13 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                         ),
                         const SizedBox(height: 5),
                         Text(
-                          movie.movieBoxIsSeries
-                              ? 'Short Series · First Episode'
-                              : 'MovieBox Shorts',
+                          movie.movieBoxIsSeries &&
+                                  _activeSeasonNumber != null &&
+                                  _activeEpisodeNumber != null
+                              ? 'Short Series · S$_activeSeasonNumber · E$_activeEpisodeNumber'
+                              : (movie.movieBoxIsSeries
+                                  ? 'Short Series'
+                                  : 'MovieBox Shorts'),
                           style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 11,
