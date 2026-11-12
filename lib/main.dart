@@ -1622,13 +1622,11 @@ class FlixoraApp extends StatelessWidget {
 
 class _CachedHomeSection {
   const _CachedHomeSection({
-    required this.fingerprint,
     required this.deduplicatedMovies,
     required this.filteredByOption,
     required this.filters,
   });
 
-  final int fingerprint;
   final List<Movie> deduplicatedMovies;
   final Map<String, List<Movie>> filteredByOption;
   final List<String> filters;
@@ -5297,7 +5295,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .where((filter) => filteredByOption[filter]!.isNotEmpty)
           .toList(growable: false);
       cached = _CachedHomeSection(
-        fingerprint: fingerprint,
         deduplicatedMovies: deduplicatedMovies,
         filteredByOption: filteredByOption,
         filters: filters,
@@ -10365,13 +10362,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     try {
       for (var attempt = 0; attempt < 2; attempt++) {
-        final result = await MovieBoxService.streams(
-          detail,
-          season: season,
-          episode: episode,
-          isSeries: widget.movie.movieBoxIsSeries,
-          forceRefresh: attempt > 0,
-        ).timeout(const Duration(seconds: 15));
+        Map<String, dynamic> result;
+        try {
+          result = await MovieBoxService.streams(
+            detail,
+            season: season,
+            episode: episode,
+            isSeries: widget.movie.movieBoxIsSeries,
+            forceRefresh: attempt > 0,
+          ).timeout(const Duration(seconds: 15));
+        } catch (error) {
+          if (attempt == 0) {
+            debugPrint('MovieBox stream request failed; refreshing once: $error');
+            continue;
+          }
+          rethrow;
+        }
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
 
         final rawLinks = result['links'] as List? ?? const [];
