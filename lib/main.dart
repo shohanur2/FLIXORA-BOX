@@ -216,6 +216,11 @@ class Movie {
     if (stableId == 0) stableId = 1;
 
     final subjectType = _toInt(json['subjectType']);
+    final tmdbRaw = json['tmdbId'] ??
+        json['tmdb_id'] ??
+        json['tmdbID'] ??
+        (json['tmdb'] is Map ? (json['tmdb'] as Map)['id'] : null);
+    final tmdbId = _toInt(tmdbRaw);
     final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 3 || subjectType == 7;
     final rawYear = (json['year'] ?? '').toString().trim();
     final genreText = (json['genre'] ?? '').toString();
@@ -227,6 +232,7 @@ class Movie {
 
     return Movie(
       id: -stableId,
+      tmdbId: tmdbId,
       source: 'moviebox',
       title: (json['title'] ?? 'Unknown Title').toString(),
       year: rawYear.length >= 4 ? rawYear.substring(0, 4) : 'N/A',
@@ -250,6 +256,7 @@ class Movie {
 
   Map<String, dynamic> toMovieBoxMap() => {
         'id': movieBoxId,
+        'tmdbId': tmdbId,
         'title': title,
         'isSeries': movieBoxIsSeries,
         'detailPath': movieBoxDetailPath,
@@ -1638,6 +1645,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _connectionKnown = false;
   bool _refreshing = false;
   bool _refreshingSecondaryCatalogues = false;
+  bool _backgroundCatalogueWorkRunning = false;
+  bool _backgroundCatalogueWorkPending = false;
+  int _secondaryCatalogueNextIndex = 0;
   DateTime? _lastHomeRefreshAt;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
@@ -2012,11 +2022,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((title) => title.mediaType == 'movie').toList(growable: false);
 
     final seriesCatalog = preferMovieBoxRecords([
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
-      ..._movieBoxSections
-          .where((section) => !section.isHotShorts)
-          .expand((section) => section.items)
-          .where((title) => title.mediaType == 'tv'),
       ...trendingTv,
       ...popularTv,
       ...topRatedTv,
@@ -2107,11 +2114,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toList(growable: false);
 
     return _deduplicateMovies([
+      // MovieBox is canonical when the same title exists in both sources.
+      ...movieBoxBanners,
       // Mix regional catalogues near the top so global titles cannot fill
       // the entire rail before South Indian, Bengali and other regions appear.
       ..._tmdbTrendingMovies.take(12),
       ...regionalFallbacks,
-      ...movieBoxBanners,
       ..._tmdbTrendingMovies.skip(12),
       ...popular,
       ...latest,
@@ -2128,7 +2136,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final result = await MovieBoxService.prewarmStreams(
       movie.toMovieBoxMap(),
       isSeries: false,
-    ).timeout(const Duration(seconds: 18));
+    ).timeout(const Duration(seconds: 6));
     if (result == null || !MovieBoxStreamPolicy.hasPlayableLinks(result)) {
       return <String>[];
     }
@@ -2174,8 +2182,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
         return MapEntry(category, verifiedMovie);
       }
-      // The MovieBox title exists but has no playable links. Continue to the
-      // published Admin fallback rather than marking this trending item dead.
+      // A matching MovieBox title remains canonical even if its current
+      // stream is unavailable. Do not replace it with an Admin duplicate.
+      return null;
     }
 
     final adminMatch = _cachedFlixoraMatch(candidate) ??
@@ -2203,19 +2212,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _playableTrendingRefreshQueued = true;
       return;
     }
-    final candidates = _trendingMovieCandidates();
+    final candidates = _trendingMovieCandidates().take(8).toList(growable: false);
     if (candidates.isEmpty) return;
 
     _refreshingPlayableTrendingMovies = true;
     try {
-      await _refreshCatalogVisibility(candidates: candidates);
-      // Do not pre-filter unpublished Admin candidates here: a matching
-      // MovieBox title must still be searched and may remain visible/playable.
+      // Admin visibility is checked once by the background coordinator.
       final verifiedAll = <Movie>[];
       for (var start = 0;
-          start < candidates.length && verifiedAll.length < 16;
-          start += 3) {
-        final batch = candidates.skip(start).take(3);
+          start < candidates.length && verifiedAll.length < 8;
+          start += 2) {
+        if (!_canRunBackgroundCatalogueWork) {
+          _backgroundCatalogueWorkPending = true;
+          break;
+        }
+        final batch = candidates.skip(start).take(2);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map(_verifyPlayableTrendingMovie),
         );
@@ -2227,7 +2238,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       final verified = _deduplicateMovies(verifiedAll)
-          .take(16)
+          .take(8)
           .toList(growable: false);
       final verifiedHindi = verified.where(_hasHindiAudio).toList();
       final verifiedBollywood = verified
@@ -2382,10 +2393,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _initializeApp() async {
     await _loadCachedMovies();
-    await _loadSavedPreferences();
-    await _loadAppSettings();
-    final savedHistory = await MovieCache.getList(MovieCache.historyKey);
-    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    // Cached Home is the first priority. Independent settings/history/network
+    // reads start together instead of serially delaying the first data refresh.
+    unawaited(_loadSavedPreferences().catchError((_) {}));
+    unawaited(_loadAppSettings());
+    final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
+    final prefsFuture = SharedPreferences.getInstance();
+    final savedDownloadsFuture = MovieCache.getDownloads();
+    final onlineFuture = InternetService.isOnline();
+
+    final savedHistory = await savedHistoryFuture;
+    final prefs = await prefsFuture;
     final savedSearchHistory =
         prefs.getStringList(_searchHistoryPrefsKey) ?? const <String>[];
     // Discard legacy TMDB/title-wide visibility keys. Publication state is
@@ -2403,7 +2423,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .where((key) => key.startsWith('admin:id:')),
       );
     final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
-    final savedDownloads = await MovieCache.getDownloads();
+    final savedDownloads = await savedDownloadsFuture;
     if (mounted) {
       setState(() {
         _watchHistory
@@ -2426,7 +2446,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    final online = await InternetService.isOnline();
+    final online = await onlineFuture;
 
     if (!mounted) return;
 
@@ -2570,16 +2590,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
-    final cachedMovieBoxSections = (await MovieCache.getMovieBoxSections())
-        .where((section) => !section.isFlixoraOriginal)
-        .toList(growable: false);
-    final cachedTrendingData = await Future.wait<List<Movie>>([
+    final cachedMovieBoxSectionsFuture = MovieCache.getMovieBoxSections();
+    final cachedTrendingDataFuture = Future.wait<List<Movie>>([
       MovieCache.getList(MovieCache.playableTrendingMoviesKey),
       MovieCache.getList(MovieCache.tmdbTrendingMoviesKey),
       MovieCache.getList(MovieCache.trendingHindiDubbedKey),
       MovieCache.getList(MovieCache.trendingBollywoodKey),
       MovieCache.getList(MovieCache.trendingHollywoodKey),
     ]);
+    final cachedMovieBoxSections = (await cachedMovieBoxSectionsFuture)
+        .where((section) => !section.isFlixoraOriginal)
+        .toList(growable: false);
+    final cachedTrendingData = await cachedTrendingDataFuture;
     if (!mounted) return;
     final cachedPlayableTrending = cachedTrendingData[0].isNotEmpty
         ? cachedTrendingData[0]
@@ -2667,7 +2689,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _checkingConnection = true;
     try {
       final online = await InternetService.isOnline(forceRefresh: true);
-      if (!mounted || online == _online) return;
+      if (!mounted) return;
+      if (online == _online) {
+        if (_backgroundCatalogueWorkPending &&
+            _canRunBackgroundCatalogueWork) {
+          unawaited(_runBackgroundCatalogueWork());
+        }
+        return;
+      }
 
       final wasOffline = !_online;
       setState(() {
@@ -2701,6 +2730,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _searchController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  bool get _canRunBackgroundCatalogueWork {
+    if (!mounted ||
+        !_online ||
+        _tab != 0 ||
+        _searchOpen ||
+        _showRanking ||
+        _isOpeningTitle) {
+      return false;
+    }
+    final now = DateTime.now();
+    if (_lastHomeScrollAt != null &&
+        now.difference(_lastHomeScrollAt!) < const Duration(seconds: 6)) {
+      return false;
+    }
+    if (_lastCarouselInteractionAt != null &&
+        now.difference(_lastCarouselInteractionAt!) <
+            const Duration(seconds: 8)) {
+      return false;
+    }
+    return ModalRoute.of(context)?.isCurrent ?? true;
+  }
+
+  Future<void> _runBackgroundCatalogueWork({
+    bool forceRefresh = false,
+  }) async {
+    if (_backgroundCatalogueWorkRunning) {
+      _backgroundCatalogueWorkPending = true;
+      return;
+    }
+    _backgroundCatalogueWorkRunning = true;
+    _backgroundCatalogueWorkPending = false;
+    try {
+      // Let the first Home frame and immediate user interaction take priority.
+      await Future.delayed(const Duration(seconds: 5));
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshCatalogVisibility(forceRefresh: true);
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshSecondaryCatalogues(forceRefresh: forceRefresh);
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshPlayableTrendingMovies();
+      if (!_canRunBackgroundCatalogueWork ||
+          _secondaryCatalogueNextIndex > 0) {
+        _backgroundCatalogueWorkPending = true;
+      }
+    } catch (error) {
+      _backgroundCatalogueWorkPending = true;
+      debugPrint('Background catalogue coordinator failed: $error');
+    } finally {
+      _backgroundCatalogueWorkRunning = false;
+    }
   }
 
   Future<void> _refreshMovieBoxHome({bool forceRefresh = false}) async {
@@ -2743,6 +2836,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (_refreshingSecondaryCatalogues || !_online) return;
     final lastRefresh = _lastSecondaryCataloguesRefreshAt;
     if (!forceRefresh &&
+        _secondaryCatalogueNextIndex == 0 &&
         lastRefresh != null &&
         DateTime.now().difference(lastRefresh) < const Duration(minutes: 15)) {
       return;
@@ -2861,14 +2955,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
       ];
 
-      final results = <List<Movie>>[];
-      // Four requests at a time keeps the background catalogue refresh from
-      // competing heavily with posters or a stream the user just selected.
-      for (var start = 0; start < loaders.length; start += 2) {
+      final results = List<List<Movie>>.generate(
+        loaders.length,
+        (_) => <Movie>[],
+        growable: false,
+      );
+      var completedAll = true;
+      // Keep the background workload small and pause between batches whenever
+      // the user starts scrolling, searching, changing tabs or opening a title.
+      for (var start = _secondaryCatalogueNextIndex;
+          start < loaders.length;
+          start += 2) {
+        if (!_canRunBackgroundCatalogueWork) {
+          completedAll = false;
+          break;
+        }
         final batch = await Future.wait<List<Movie>>(
           loaders.skip(start).take(2).map((load) => load()),
         );
-        results.addAll(batch);
+        for (var offset = 0; offset < batch.length; offset++) {
+          results[start + offset] = batch[offset];
+        }
+        _secondaryCatalogueNextIndex = start + batch.length;
+        if (_secondaryCatalogueNextIndex < loaders.length) {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
       }
 
       if (!mounted) return;
@@ -2948,7 +3059,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       });
 
-      _lastSecondaryCataloguesRefreshAt = DateTime.now();
+      if (completedAll) {
+        _secondaryCatalogueNextIndex = 0;
+        _lastSecondaryCataloguesRefreshAt = DateTime.now();
+      } else {
+        _backgroundCatalogueWorkPending = true;
+      }
       await Future.wait([
         MovieCache.saveList(MovieCache.trendingKey, trending),
         MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
@@ -2967,11 +3083,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
         MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
-      unawaited(_refreshCatalogVisibility(
-        candidates: results.expand((items) => items).toList(),
-        forceRefresh: true,
-      ));
-      unawaited(_refreshPlayableTrendingMovies());
+      // Visibility refresh and playable-stream verification are coordinated
+      // by _runBackgroundCatalogueWork; do not launch duplicate jobs here.
     } catch (error) {
       debugPrint('Background catalogue refresh failed: $error');
     } finally {
@@ -3100,9 +3213,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
 
-      unawaited(_refreshCatalogVisibility(forceRefresh: true));
-      unawaited(_refreshSecondaryCatalogues(forceRefresh: forceRefresh));
-      unawaited(_refreshPlayableTrendingMovies());
+      unawaited(_runBackgroundCatalogueWork(forceRefresh: forceRefresh));
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -3120,9 +3231,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   List<Movie> _allMovies() {
     final combined = <Movie>[
+      ..._regularMovieBoxItems,
       ...flixoraMovies,
       ..._trendingMovies,
-      ..._regularMovieBoxItems,
       ...trending,
       ...popular,
       ...latest,
@@ -3908,12 +4019,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ];
     for (final candidate in candidates) {
       if (candidate.mediaType != movie.mediaType) continue;
+      final sameTmdbId = movie.tmdbId > 0 &&
+          candidate.tmdbId > 0 &&
+          candidate.tmdbId == movie.tmdbId;
       final sameTitle = _normalizedMovieTitle(candidate.title) ==
           _normalizedMovieTitle(movie.title);
       final sameYear = candidate.year == movie.year ||
           candidate.year == 'N/A' ||
           movie.year == 'N/A';
-      if (sameTitle && sameYear) {
+      if (sameTmdbId || (sameTitle && sameYear)) {
         final resolved = candidate.withFallbackMetadata(movie);
         _movieBoxMatchCache[key] = resolved;
         return resolved;
@@ -3938,11 +4052,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .toList(growable: false);
       final wantedTitle = _normalizedMovieTitle(movie.title);
       for (final candidate in items) {
+        final sameTmdbId = movie.tmdbId > 0 &&
+            candidate.tmdbId > 0 &&
+            candidate.tmdbId == movie.tmdbId;
         final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
         final sameYear = candidate.year == movie.year ||
             candidate.year == 'N/A' ||
             movie.year == 'N/A';
-        if (sameTitle && sameYear) {
+        if (sameTmdbId || (sameTitle && sameYear)) {
           final resolved = candidate.withFallbackMetadata(movie);
           _movieBoxMatchCache[_movieBoxMatchKey(movie)] = resolved;
           return resolved;
@@ -4377,43 +4494,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!_online) setState(() => _online = true);
 
-    var movieToPlay = selectedMovie;
-    if (selectedMovie.isMovieBox) {
-      Map<String, dynamic>? prewarmedStreams;
-      try {
-        prewarmedStreams = await MovieBoxService.prewarmStreams(
-          selectedMovie.toMovieBoxMap(),
-          isSeries: selectedMovie.movieBoxIsSeries,
-        ).timeout(const Duration(seconds: 6));
-      } catch (error) {
-        debugPrint('MovieBox stream preflight failed: $error');
-      }
-
-      if (prewarmedStreams == null ||
-          !MovieBoxStreamPolicy.hasPlayableLinks(prewarmedStreams)) {
-        final adminFallback =
-            await _resolvePublishedAdminFallback(selectedMovie);
-        if (adminFallback != null) {
-          movieToPlay = adminFallback;
-          _showMessage('MovieBox stream unavailable. Using published Admin source.');
-        }
-      }
-    }
-
-    if (!movieToPlay.canAttemptPlayback) {
+    if (!selectedMovie.canAttemptPlayback) {
       _showMessage('This title has no supported FLIXORA playback source.');
       return;
     }
-    _recordWatch(movieToPlay);
+    // Open the player immediately. MoviePlayerScreen resolves MovieBox
+    // streams itself and shows its loading/error state without blocking Home.
+    _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
-        movie: movieToPlay,
+        movie: selectedMovie,
         recommendedMovies: _allMovies(),
         onMovieSelected: _playMovieFromPlayer,
-        onSave: () => _toggleSaved(movieToPlay),
-        onDownload: () => addDownload(movieToPlay),
+        onSave: () => _toggleSaved(selectedMovie),
+        onDownload: () => addDownload(selectedMovie),
         onDownloadEpisode: (season, episode) => addDownload(
-          movieToPlay,
+          selectedMovie,
           seasonNumber: season,
           episodeNumber: episode,
         ),

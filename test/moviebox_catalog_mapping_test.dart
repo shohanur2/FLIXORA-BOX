@@ -18,6 +18,7 @@ void main() {
       'description': 'A sample series description.',
       'durationMin': 48,
       'subjectType': 2,
+      'tmdb_id': 9001,
     };
 
     test('maps MovieBox series fields and playback identity', () {
@@ -25,6 +26,7 @@ void main() {
 
       expect(movie.source, 'moviebox');
       expect(movie.isMovieBox, isTrue);
+      expect(movie.tmdbId, 9001);
       expect(movie.canAttemptPlayback, isTrue);
       expect(movie.mediaType, 'tv');
       expect(movie.movieBoxId, 'mb-9001');
@@ -42,6 +44,7 @@ void main() {
 
       expect(restored.source, 'moviebox');
       expect(restored.movieBoxId, original.movieBoxId);
+      expect(restored.tmdbId, original.tmdbId);
       expect(restored.movieBoxDetailPath, original.movieBoxDetailPath);
       expect(restored.movieBoxIsSeries, isTrue);
       expect(restored.toMovieBoxMap(), original.toMovieBoxMap());

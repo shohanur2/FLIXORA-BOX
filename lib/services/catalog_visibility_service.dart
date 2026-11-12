@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../streaming/catalog_source_policy.dart';
+
 /// Checks catalogue candidates against the latest FLIXORA Admin publication
 /// state without exposing unpublished rows or any video/source URLs.
 class CatalogVisibilityService {
@@ -9,9 +11,30 @@ class CatalogVisibilityService {
   }) async {
     if (candidates.isEmpty) return <String>{};
 
+    // Only exact Admin row IDs are sent to the function. This protects
+    // MovieBox cards even if an older deployed function returns broad keys.
+    final safeCandidates = <Map<String, dynamic>>[];
+    for (final candidate in candidates) {
+      final sourceId = int.tryParse(
+            (candidate['sourceId'] ?? '').toString(),
+          ) ??
+          0;
+      final expectedKey = CatalogSourcePolicy.adminVisibilityKey(
+        isAdmin: candidate['source']?.toString() == 'admin',
+        sourceId: sourceId,
+      );
+      if (expectedKey != null &&
+          candidate['key']?.toString() == expectedKey) {
+        safeCandidates.add(Map<String, dynamic>.from(candidate));
+      }
+    }
+    if (safeCandidates.isEmpty) return <String>{};
+
+    final requestedKeys =
+        safeCandidates.map((item) => item['key'].toString()).toSet();
     final response = await client.functions.invoke(
       'catalog-visibility',
-      body: {'candidates': candidates},
+      body: {'candidates': safeCandidates},
     );
 
     final data = response.data;
@@ -27,9 +50,9 @@ class CatalogVisibilityService {
       throw const FormatException('Admin publication response has no blockedKeys list.');
     }
 
-    return rawKeys
-        .map((value) => value.toString().trim())
-        .where((value) => value.isNotEmpty)
-        .toSet();
+    return CatalogSourcePolicy.filterBlockedAdminKeys(
+      requestedKeys: requestedKeys,
+      blockedKeys: rawKeys.map((value) => value.toString()),
+    );
   }
 }

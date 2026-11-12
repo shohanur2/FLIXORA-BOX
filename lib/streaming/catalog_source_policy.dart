@@ -44,6 +44,23 @@ class CatalogSourcePolicy {
     return 'admin:id:$sourceId';
   }
 
+  /// A visibility response may only affect exact Admin row keys that were
+  /// requested. Legacy TMDB/title-year keys from an older function are ignored.
+  static Set<String> filterBlockedAdminKeys({
+    required Iterable<String> requestedKeys,
+    required Iterable<String> blockedKeys,
+  }) {
+    final validRequested = requestedKeys.where((key) {
+      if (!key.startsWith('admin:id:')) return false;
+      final id = int.tryParse(key.substring('admin:id:'.length));
+      return id != null && id > 0;
+    }).toSet();
+    return blockedKeys
+        .map((key) => key.trim())
+        .where(validRequested.contains)
+        .toSet();
+  }
+
   static bool isAdminBlocked({
     required bool isAdmin,
     required String? visibilityKey,

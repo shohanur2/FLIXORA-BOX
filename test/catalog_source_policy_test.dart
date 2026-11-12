@@ -76,7 +76,30 @@ void main() {
       );
     });
 
-    test('unpublishing Admin does not block a matching MovieBox title', () {
+    test('only requested exact Admin keys are accepted from visibility results', () {
+      expect(
+        CatalogSourcePolicy.filterBlockedAdminKeys(
+          requestedKeys: const ['admin:id:42'],
+          blockedKeys: const [
+            'admin:id:42',
+            'admin:id:99',
+            'tmdb:157336',
+            'title:interstellar:2014',
+          ],
+        ),
+        {'admin:id:42'},
+      );
+    });
+
+    test('MovieBox remains canonical even when a published Admin duplicate exists', () {
+      final selected = CatalogSourcePolicy.preferMovieBox<String>(
+        movieBoxMatch: 'moviebox-stream-unavailable',
+        publishedAdminFallback: 'admin',
+      );
+      expect(selected, 'moviebox-stream-unavailable');
+    });
+
+    test('unpublishing Admin does not block a matching MovieBox title',
       final blockedKeys = {'admin:id:42'};
 
       expect(
