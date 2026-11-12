@@ -1763,7 +1763,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..addAll(checked);
         _lastCatalogVisibilityRefreshAt = DateTime.now();
       } else {
-        _unpublishedCatalogKeys.addAll(blocked);
+        // A targeted refresh can also recognize an Admin republish and clear
+        // an earlier cached unpublished flag for the checked candidates.
+        _unpublishedCatalogKeys
+          ..removeAll(checked.difference(blocked))
+          ..addAll(blocked);
         _checkedCatalogVisibilityKeys.addAll(checked);
       }
 
