@@ -191,6 +191,244 @@ jobs:
           h5_source.write_text(h5_content)
           PY
 
+          # Add the dedicated paginated Short TV catalogue. The regular home feed
+          # only supplies a small preview row; this uses the same signed MovieBox
+          # client and keeps the app independent of extra providers.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          client_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/client.rs")
+          client = client_path.read_text()
+          client_anchor = "    // ---------------------------------------------------------------- search"
+          client_method = """    // -------------------------------------------------------------- shorts
+
+              /// Paginated Short TV catalogue from the dedicated WeFeed endpoint.
+              pub async fn shorts_catalog(&self, max_pages: i64, per_page: i64) -> Result<SearchResult> {
+                  self.shorts_catalog_impl(max_pages, per_page).await
+              }
+
+          """
+          if client_anchor not in client:
+              raise SystemExit("SparkBoxCore client search anchor changed; review Short TV integration.")
+          client = client.replace(client_anchor, client_method + client_anchor, 1)
+          client_path.write_text(client)
+
+          mobile_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/mobile.rs")
+          mobile = mobile_path.read_text()
+          old_models = "use crate::models::{HomeSection, SearchItem, Season};"
+          new_models = "use crate::models::{HomeSection, MediaItem, SearchItem, SearchResult, Season};"
+          if old_models not in mobile:
+              raise SystemExit("SparkBoxCore mobile model imports changed; review Short TV integration.")
+          mobile = mobile.replace(old_models, new_models, 1)
+
+          helper_anchor = "impl MovieBoxClient {\n"
+          helper = """fn parse_short_subject(raw: &Value, block_adult: bool) -> Option<MediaItem> {
+              let mut subject = raw.as_object()?.clone();
+              if !subject.contains_key("stills") {
+                  if let Some(pre_video_cover) = subject.get("preVideoCover").cloned() {
+                      subject.insert("stills".into(), pre_video_cover);
+                  }
+              }
+              let mut item = parse_subject(&subject, "", block_adult)?;
+              // Short TV catalogue entries can use the Short TV subject type
+              // instead of the normal series type; they still expose seasons.
+              item.is_series = item.is_series
+                  || item.subject_type == 7
+                  || raw.get("isSeries").and_then(Value::as_bool).unwrap_or(false);
+              Some(item)
+          }
+
+          """
+          if helper_anchor not in mobile:
+              raise SystemExit("SparkBoxCore mobile impl anchor changed; review Short TV integration.")
+          mobile = mobile.replace(helper_anchor, helper + helper_anchor, 1)
+
+          method_anchor = "    /// Mobile detail call: gives detailPath/detailUrl and the guest token used\n"
+          method = """    /// Dedicated Short TV catalogue with the same channel/default filters as
+              /// the app's Short TV tab. Fetches multiple pages in one signed session.
+              pub(crate) async fn shorts_catalog_impl(
+                  &self,
+                  max_pages: i64,
+                  per_page: i64,
+              ) -> Result<SearchResult> {
+                  let base = self.config.mobile_base.trim_end_matches('/');
+                  let host = base
+                      .trim_start_matches("https://")
+                      .trim_start_matches("http://")
+                      .trim_end_matches('/');
+                  let token = self.guest_token().await?;
+
+                  let filter_url = format!(
+                      "{base}/wefeed-fm-bff/shorts/subject/filter-items?host={host}&tabId=7&filterItemVer=v3"
+                  );
+                  let mut filter_headers =
+                      self.mobile_headers("GET", &filter_url, None, false, token.as_deref());
+                  ins(&mut filter_headers, "x-play-mode", "2".into());
+                  let filter_response = self.http.get(&filter_url).headers(filter_headers).send().await?;
+                  if !filter_response.status().is_success() {
+                      return Err(CoreError::Api(format!(
+                          "Short TV filter request failed ({})",
+                          filter_response.status()
+                      )));
+                  }
+                  let filter_text = filter_response.text().await?;
+                  let filter_root = try_json(&filter_text)
+                      .ok_or_else(|| CoreError::Api("Short TV filters returned invalid JSON".into()))?;
+                  let filter_data = filter_root
+                      .get("data")
+                      .and_then(Value::as_object)
+                      .ok_or_else(|| CoreError::Api("Short TV filters are unavailable".into()))?;
+                  let channel = get_arr(filter_data.get("typeList"))
+                      .into_iter()
+                      .next()
+                      .ok_or_else(|| CoreError::Api("Short TV has no available channel".into()))?;
+                  let channel_id = s(channel, "channelId");
+                  if channel_id.is_empty() {
+                      return Err(CoreError::Api("Short TV channel id is missing".into()));
+                  }
+
+                  let mut default_filters = Map::new();
+                  for filter in get_arr(channel.get("items")) {
+                      let filter_type = s(filter, "filterType");
+                      if filter_type.is_empty() {
+                          continue;
+                      }
+                      if let Some(range) = filter.get("rangeVals").and_then(Value::as_object) {
+                          let min = as_i64(range.get("minVal")).unwrap_or(0);
+                          let max = as_i64(range.get("maxVal")).unwrap_or(0);
+                          default_filters.insert(
+                              filter_type,
+                              Value::Array(vec![
+                                  Value::String(min.to_string()),
+                                  Value::String(max.to_string()),
+                              ]),
+                          );
+                      } else if let Some(first) =
+                          get_arr(filter.get("filterValsV2")).into_iter().next()
+                      {
+                          if let Some(id) = first.get("id") {
+                              default_filters.insert(filter_type, id.clone());
+                          }
+                      }
+                  }
+
+                  let safe_per_page = per_page.clamp(1, 50);
+                  let safe_max_pages = max_pages.clamp(1, 12);
+                  let list_url = format!(
+                      "{base}/wefeed-fm-bff/shorts/subject/list?host={host}"
+                  );
+                  let block_adult = self.block_adult();
+                  let mut all_items = Vec::new();
+                  let mut has_more = false;
+
+                  for page in 1..=safe_max_pages {
+                      let mut payload = Map::new();
+                      payload.insert("page".into(), Value::from(page));
+                      payload.insert("perPage".into(), Value::from(safe_per_page));
+                      payload.insert("channelId".into(), Value::String(channel_id.clone()));
+                      for (key, value) in &default_filters {
+                          payload.insert(key.clone(), value.clone());
+                      }
+                      let body = Value::Object(payload).to_string();
+                      let mut headers =
+                          self.mobile_headers("POST", &list_url, Some(&body), false, token.as_deref());
+                      ins(&mut headers, "x-play-mode", "2".into());
+                      let response = self
+                          .http
+                          .post(&list_url)
+                          .headers(headers)
+                          .body(body)
+                          .send()
+                          .await?;
+                      if !response.status().is_success() {
+                          return Err(CoreError::Api(format!(
+                              "Short TV page {page} failed ({})",
+                              response.status()
+                          )));
+                      }
+                      let text = response.text().await?;
+                      let root = try_json(&text)
+                          .ok_or_else(|| CoreError::Api("Short TV page returned invalid JSON".into()))?;
+                      let data = root
+                          .get("data")
+                          .and_then(Value::as_object)
+                          .ok_or_else(|| CoreError::Api("Short TV catalogue is unavailable".into()))?;
+                      let raw_items = get_arr(data.get("items"));
+                      let item_count = raw_items.len();
+                      for raw in raw_items {
+                          if let Some(item) = parse_short_subject(raw, block_adult) {
+                              all_items.push(item);
+                          }
+                      }
+                      has_more = data
+                          .get("pager")
+                          .and_then(Value::as_object)
+                          .and_then(|pager| pager.get("hasMore"))
+                          .and_then(Value::as_bool)
+                          .unwrap_or(item_count as i64 >= safe_per_page);
+                      if item_count == 0 || !has_more {
+                          break;
+                      }
+                  }
+
+                  Ok(SearchResult {
+                      items: all_items,
+                      has_more,
+                  })
+              }
+
+          """
+          if method_anchor not in mobile:
+              raise SystemExit("SparkBoxCore mobile detail anchor changed; review Short TV integration.")
+          mobile = mobile.replace(method_anchor, method + method_anchor, 1)
+
+          # Keep a regression test for Short TV's alternate series subject type.
+          test_module = """#[cfg(test)]
+          mod shorts_catalog_tests {
+              use super::*;
+              use serde_json::json;
+
+              #[test]
+              fn short_tv_subject_type_seven_is_episode_based_series() {
+                  let raw = json!({
+                      "subjectId": "short-series-1",
+                      "title": "Example Short Series",
+                      "subjectType": 7,
+                      "releaseDate": "2026-01-01",
+                      "cover": { "url": "https://cdn.example.test/poster.jpg" },
+                      "preVideoCover": { "url": "https://cdn.example.test/backdrop.jpg" }
+                  });
+                  let item = parse_short_subject(&raw, false).expect("short TV item parses");
+                  assert!(item.is_series);
+                  assert_eq!(item.subject_type, 7);
+                  assert_eq!(item.backdrop, "https://cdn.example.test/backdrop.jpg");
+              }
+          }
+
+          """
+          if "mod shorts_catalog_tests" not in mobile:
+              mobile += "\n" + test_module
+          mobile_path.write_text(mobile)
+
+          ffi_path = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
+          ffi = ffi_path.read_text()
+          ffi_anchor = "/// Search suggestions → Vec<String>.\n"
+          ffi_function = """/// Dedicated Short TV catalogue returning items and a hasMore flag.
+          #[no_mangle]
+          pub extern "C" fn sparkbox_shorts(per_page: c_int, max_pages: c_int) -> *mut c_char {
+              guard(|| match rt().block_on(client().shorts_catalog(max_pages as i64, per_page as i64)) {
+                  Ok(res) => ok(&res),
+                  Err(e) => err(&e),
+              })
+          }
+
+          """
+          if ffi_anchor not in ffi:
+              raise SystemExit("SparkBoxCore FFI search anchor changed; review Short TV integration.")
+          ffi = ffi.replace(ffi_anchor, ffi_function + ffi_anchor, 1)
+          ffi_path.write_text(ffi)
+          PY
+
           cd /tmp/SparkBoxCore
           cargo test --workspace --locked
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
