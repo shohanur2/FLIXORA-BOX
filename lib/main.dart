@@ -636,7 +636,7 @@ class InternetService {
   static bool? _cachedOnline;
   static DateTime? _lastCheck;
   static Future<bool>? _checkInFlight;
-  static const Duration _cacheDuration = Duration(seconds: 10);
+  static const Duration _cacheDuration = Duration(seconds: 20);
 
   static void invalidateCache() {
     _cachedOnline = null;
@@ -668,9 +668,12 @@ class InternetService {
   }
 
   static Future<bool> _performCheck() async {
+    // Do not tie app connectivity to the MovieBox host: its API can be
+    // temporarily unavailable while the device still has internet access.
+    // GET is used because some networks/CDNs reject HEAD requests.
     final endpoints = <Uri>[
+      Uri.parse('https://www.google.com/generate_204'),
       Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
-      Uri.parse('https://movie-box.co/robots.txt'),
       if (apiKey.isNotEmpty)
         Uri.parse(
           'https://api.themoviedb.org/3/configuration?api_key=$apiKey',
@@ -684,8 +687,11 @@ class InternetService {
         var reachable = false;
         try {
           final response = await http
-              .head(endpoint)
-              .timeout(const Duration(seconds: 3));
+              .get(
+                endpoint,
+                headers: const {'Cache-Control': 'no-cache'},
+              )
+              .timeout(const Duration(seconds: 4));
           reachable = response.statusCode >= 200 && response.statusCode < 500;
         } catch (_) {}
 
@@ -700,7 +706,7 @@ class InternetService {
     }
 
     return completer.future.timeout(
-      const Duration(seconds: 3),
+      const Duration(seconds: 4),
       onTimeout: () => false,
     );
   }
@@ -2323,7 +2329,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _initializeApp();
     _listenToConnectivity();
     _networkTimer = Timer.periodic(
-      const Duration(seconds: 12),
+      const Duration(seconds: 30),
       (_) => _refreshConnectionStatus(),
     );
     _catalogueRefreshTimer = Timer.periodic(
@@ -3923,7 +3929,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
     try {
       final result = await MovieBoxService.search(movie.title, perPage: 20)
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 5));
       final items = (result['items'] as List? ?? const [])
           .whereType<Map>()
           .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
@@ -3978,23 +3984,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
     final client = supabaseClient;
-
-    // Resolve MovieBox first for every entry point, including Admin cards.
-    // A matching MovieBox title is canonical even if its Admin duplicate has
-    // been unpublished or has a different direct video URL.
     final cachedMovieBox = _cachedMovieBoxMatch(requested);
-    final movieBoxMatch = cachedMovieBox ??
-        (_online ? await _searchMovieBoxMatch(requested) : null);
-    if (movieBoxMatch != null && movieBoxMatch.isMovieBox) {
-      final metadataFallback = _cachedFlixoraMatch(requested) ?? requested;
+    final cachedAdmin = _cachedFlixoraMatch(requested);
+
+    if (cachedMovieBox != null && cachedMovieBox.isMovieBox) {
       return CatalogSourcePolicy.preferMovieBox<Movie>(
-        movieBoxMatch: movieBoxMatch.withFallbackMetadata(metadataFallback),
+        movieBoxMatch: cachedMovieBox.withFallbackMetadata(
+          cachedAdmin ?? requested,
+        ),
         publishedAdminFallback: null,
       );
     }
 
-    final cachedAdmin = _cachedFlixoraMatch(requested);
-    if (!_online || client == null) {
+    if (!_online) {
       if (requested.isFlixora &&
           !CatalogSourcePolicy.isAdminBlocked(
             isAdmin: true,
@@ -4010,63 +4012,50 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return null;
     }
 
-    try {
-      dynamic response;
-      if (requested.isFlixora && _catalogVisibilitySourceId(requested) > 0) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('id', _catalogVisibilitySourceId(requested))
-            .limit(1);
-      } else if (requested.tmdbId > 0 &&
-          (requested.mediaType == 'movie' || requested.mediaType == 'tv')) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('tmdb_id', requested.tmdbId)
-            .eq('media_type', requested.mediaType)
-            .order('created_at', ascending: false)
-            .limit(1);
-        if (response is! List || response.isEmpty) {
-          response = await _findAdminRowsByTitleYear(client, requested);
-        }
-      } else if (requested.title.trim().isNotEmpty &&
-          (requested.mediaType == 'movie' || requested.mediaType == 'tv')) {
-        response = await _findAdminRowsByTitleYear(client, requested);
-      }
+    // Start MovieBox and Admin resolution together. The previous sequential
+    // flow waited for MovieBox search (up to 10s) before even asking Supabase.
+    final movieBoxLookup = _searchMovieBoxMatch(requested)
+        .timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => null,
+        )
+        .catchError((_) => null);
+    final adminLookup = client == null
+        ? Future<Movie?>.value(null)
+        : _resolvePublishedAdminFallback(requested)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => null,
+            )
+            .catchError((_) => null);
 
-      if (response is List && response.isNotEmpty) {
-        final row = Map<String, dynamic>.from(response.first as Map);
-        // Admin publication status applies only to this Admin fallback row.
-        // It must never veto a MovieBox result resolved above.
-        if (row['is_published'] != true) return null;
-
-        final playable = await FlixoraMovieService.mapPlayableRows(
-          client,
-          [row],
-          includeWithoutVideo: true,
-        );
-        if (playable.isEmpty) return null;
-
-        final adminMovie = playable.first.withFallbackMetadata(requested);
-        if (adminMovie.hasPlayableVideoUrl) {
-          return CatalogSourcePolicy.preferMovieBox<Movie>(
-            movieBoxMatch: null,
-            publishedAdminFallback: adminMovie,
-          );
-        }
-        return null;
-      }
-
-      // A stale Admin card must not remain playable after its row is deleted.
-      if (requested.isFlixora) return null;
-      if (requested.hasPlayableVideoUrl) return requested;
-      return null;
-    } catch (error) {
-      debugPrint('Could not resolve MovieBox/Admin playback source: $error');
-      // Do not trust a cached Admin URL after a failed publication check.
-      return null;
+    final resolved = await Future.wait<Movie?>([
+      movieBoxLookup,
+      adminLookup,
+    ]);
+    final movieBoxMatch = resolved[0];
+    if (movieBoxMatch != null && movieBoxMatch.isMovieBox) {
+      return CatalogSourcePolicy.preferMovieBox<Movie>(
+        movieBoxMatch: movieBoxMatch.withFallbackMetadata(
+          cachedAdmin ?? requested,
+        ),
+        publishedAdminFallback: null,
+      );
     }
+
+    final adminMatch = resolved[1] ?? cachedAdmin;
+    if (adminMatch != null) {
+      return CatalogSourcePolicy.preferMovieBox<Movie>(
+        movieBoxMatch: null,
+        publishedAdminFallback: adminMatch,
+      );
+    }
+
+    // A stale Admin card must not remain playable after its row is deleted
+    // or unpublished. Non-Admin direct sources remain valid fallbacks.
+    if (requested.isFlixora) return null;
+    if (requested.hasPlayableVideoUrl) return requested;
+    return null;
   }
 
   int _archiveMovieId(String identifier) {
@@ -4393,7 +4382,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         prewarmedStreams = await MovieBoxService.prewarmStreams(
           selectedMovie.toMovieBoxMap(),
           isSeries: selectedMovie.movieBoxIsSeries,
-        ).timeout(const Duration(seconds: 18));
+        ).timeout(const Duration(seconds: 6));
       } catch (error) {
         debugPrint('MovieBox stream preflight failed: $error');
       }
