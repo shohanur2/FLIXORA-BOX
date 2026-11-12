@@ -40,12 +40,21 @@ void main() {
       );
       expect(
         TrendingMovieEligibility.category(
-          originalLanguage: 'ta',
+          originalLanguage: 'hi',
           originCountry: 'India',
           inBollywoodCatalogue: false,
           inHollywoodCatalogue: false,
         ),
         'Bollywood',
+      );
+      expect(
+        TrendingMovieEligibility.category(
+          originalLanguage: 'ta',
+          originCountry: 'India',
+          inBollywoodCatalogue: false,
+          inHollywoodCatalogue: false,
+        ),
+        isEmpty,
       );
     });
 
