@@ -233,6 +233,7 @@ jobs:
               // Short TV catalogue entries can use the Short TV subject type
               // instead of the normal series type; they still expose seasons.
               item.is_series = item.is_series
+                  || item.subject_type == 3
                   || item.subject_type == 7
                   || raw.get("isSeries").and_then(Value::as_bool).unwrap_or(false);
               Some(item)
@@ -389,19 +390,32 @@ jobs:
               use serde_json::json;
 
               #[test]
-              fn short_tv_subject_type_seven_is_episode_based_series() {
+              fn short_tv_subject_type_three_is_episode_based_series() {
                   let raw = json!({
                       "subjectId": "short-series-1",
                       "title": "Example Short Series",
-                      "subjectType": 7,
+                      "subjectType": 3,
                       "releaseDate": "2026-01-01",
                       "cover": { "url": "https://cdn.example.test/poster.jpg" },
                       "preVideoCover": { "url": "https://cdn.example.test/backdrop.jpg" }
                   });
                   let item = parse_short_subject(&raw, false).expect("short TV item parses");
                   assert!(item.is_series);
-                  assert_eq!(item.subject_type, 7);
+                  assert_eq!(item.subject_type, 3);
                   assert_eq!(item.backdrop, "https://cdn.example.test/backdrop.jpg");
+              }
+
+              #[test]
+              fn short_tv_subject_type_seven_is_also_episode_based_series() {
+                  let raw = json!({
+                      "subjectId": "short-series-7",
+                      "title": "Example Short Series 7",
+                      "subjectType": 7,
+                      "cover": { "url": "https://cdn.example.test/poster.jpg" }
+                  });
+                  let item = parse_short_subject(&raw, false).expect("short TV item parses");
+                  assert!(item.is_series);
+                  assert_eq!(item.subject_type, 7);
               }
           }
 
