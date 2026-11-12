@@ -191,6 +191,8 @@ jobs:
           h5_source.write_text(h5_content)
           PY
 
+          python3 "$GITHUB_WORKSPACE/scripts/patch_sparkbox_short_tv.py" /tmp/SparkBoxCore
+
           cd /tmp/SparkBoxCore
           cargo test --workspace --locked
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
