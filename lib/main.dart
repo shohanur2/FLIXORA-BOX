@@ -838,12 +838,14 @@ class TmdbService {
     String endpoint, {
     Map<String, String> extraParams = const {},
     int pages = 1,
+    int startPage = 1,
   }) async {
     if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
     final isTv = TmdbMediaType.isTvEndpoint(endpoint);
     final pageCount = pages.clamp(1, 3).toInt();
+    final firstPage = startPage.clamp(1, 500).toInt();
     final pageResults = await Future.wait<List<Movie>>(
-      List<int>.generate(pageCount, (index) => index + 1).map((page) async {
+      List<int>.generate(pageCount, (index) => index + firstPage).map((page) async {
         try {
           final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
             'api_key': apiKey,
@@ -2321,6 +2323,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _refreshingSecondaryCatalogues = true;
     try {
       final loaders = <Future<List<Movie>> Function()>[
+        // Fetch pages 2-3 after first paint; page 1 is already on screen.
+        () => TmdbService.getMovies(
+          'trending/movie/week', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/popular', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/now_playing', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/top_rated', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'trending/tv/week', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'tv/popular', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'tv/top_rated', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'tv/on_the_air', pages: 2, startPage: 2,
+        ).catchError((_) => <Movie>[]),
+
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16',
           'with_origin_country': 'JP',
@@ -2391,8 +2419,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ];
 
       final results = <List<Movie>>[];
-      // Keep the radio of background catalogue requests low so image loading
-      // and a user-started stream are not competing with a large API burst.
+      // Limit concurrent background requests so image loading and active
+      // playback retain network capacity.
       for (var start = 0; start < loaders.length; start += 4) {
         final batch = await Future.wait<List<Movie>>(
           loaders.skip(start).take(4).map((load) => load()),
@@ -2402,37 +2430,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
       setState(() {
-        if (results[0].isNotEmpty) anime = results[0];
-        if (results[2].isNotEmpty) bengaliMovies = results[2];
-        if (results[3].isNotEmpty) bengaliTv = results[3];
-
-        final bollywood = [...results[4], ...results[14]];
-        if (bollywood.isNotEmpty) {
-          bollywoodMovies = _deduplicateMovies(bollywood);
-        }
-        if (results[5].isNotEmpty) hollywoodMovies = results[5];
-
-        final southIndian = [
-          ...results[6],
+        _tmdbTrendingMovies = _deduplicateMovies([
+          ..._tmdbTrendingMovies,
+          ...results[0],
+        ]);
+        trending = _deduplicateMovies([...trending, ...results[0]]);
+        popular = _deduplicateMovies([...popular, ...results[1]]);
+        latest = _deduplicateMovies([...latest, ...results[2]]);
+        topRated = _deduplicateMovies([...topRated, ...results[3]]);
+        trendingTv = _deduplicateMovies([
+          ...trendingTv,
+          ...results[4],
           ...results[7],
-          ...results[8],
-          ...results[9],
-        ];
-        if (southIndian.isNotEmpty) {
-          southIndianMovies = _deduplicateMovies(southIndian);
-        }
-        if (results[10].isNotEmpty) indianDramaTv = results[10];
+        ]);
+        popularTv = _deduplicateMovies([...popularTv, ...results[5]]);
+        topRatedTv = _deduplicateMovies([...topRatedTv, ...results[6]]);
+
+        final onAirAnime = [...results[4], ...results[7]]
+            .where(_isAnimeTitle)
+            .toList(growable: false);
+        anime = _deduplicateMovies([...anime, ...results[8], ...onAirAnime]);
 
         final asianDrama = [
-          ...results[1],
-          ...results[11],
-          ...results[12],
-          ...results[13],
+          ...results[9],
+          ...results[19],
+          ...results[20],
+          ...results[21],
         ];
-        if (asianDrama.isNotEmpty) koreanDrama = _deduplicateMovies(asianDrama);
+        if (asianDrama.isNotEmpty) {
+          koreanDrama = _deduplicateMovies([...koreanDrama, ...asianDrama]);
+        }
+        if (results[10].isNotEmpty) {
+          bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[10]]);
+        }
+        if (results[11].isNotEmpty) {
+          bengaliTv = _deduplicateMovies([...bengaliTv, ...results[11]]);
+        }
+
+        final bollywood = [...results[12], ...results[22]];
+        if (bollywood.isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...bollywood]);
+        }
+        if (results[13].isNotEmpty) {
+          hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[13]]);
+        }
+
+        final southIndian = [
+          ...results[14],
+          ...results[15],
+          ...results[16],
+          ...results[17],
+        ];
+        if (southIndian.isNotEmpty) {
+          southIndianMovies = _deduplicateMovies([
+            ...southIndianMovies,
+            ...southIndian,
+          ]);
+        }
+        if (results[18].isNotEmpty) {
+          indianDramaTv = _deduplicateMovies([
+            ...indianDramaTv,
+            ...results[18],
+          ]);
+        }
       });
 
       await Future.wait([
+        MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
+        MovieCache.saveList(MovieCache.popularKey, popular),
+        MovieCache.saveList(MovieCache.latestKey, latest),
+        MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
+        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
         MovieCache.saveList(MovieCache.animeKey, anime),
         MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
         MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
@@ -2442,8 +2513,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
         MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
+      unawaited(_refreshPlayableTrendingMovies());
     } catch (error) {
-      debugPrint('Background regional catalogue refresh failed: $error');
+      debugPrint('Background catalogue refresh failed: $error');
     } finally {
       _refreshingSecondaryCatalogues = false;
     }
