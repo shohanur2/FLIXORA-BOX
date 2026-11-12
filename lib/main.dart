@@ -1721,7 +1721,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    final source = candidates ?? _allCatalogVisibilityCandidates();
+    final source = candidates == null
+        ? _allCatalogVisibilityCandidates()
+        : (forceRefresh
+            ? candidates
+            : candidates.where((movie) => !_checkedCatalogVisibilityKeys
+                .contains(_catalogVisibilityKey(movie))));
     final payloadByKey = <String, Map<String, dynamic>>{};
     for (final movie in source) {
       if (movie.title.trim().isEmpty) continue;
@@ -2011,10 +2016,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _refreshingPlayableTrendingMovies = true;
     try {
-      await _refreshCatalogVisibility(
-        candidates: candidates,
-        forceRefresh: true,
-      );
+      await _refreshCatalogVisibility(candidates: candidates);
       final visibleCandidates = candidates
           .where((candidate) => !_unpublishedCatalogKeys
               .contains(_catalogVisibilityKey(candidate)))
@@ -2549,107 +2551,107 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       final loaders = <Future<List<Movie>> Function()>[
         // TV and ongoing releases are loaded after the first movie rows appear.
-        () => TmdbService.getMovies('trending/tv/week')
+        () => TmdbService.getMovies('trending/tv/week', forceRefresh: forceRefresh)
             .catchError((_) => <Movie>[]),
-        () => TmdbService.getMovies('tv/popular')
+        () => TmdbService.getMovies('tv/popular', forceRefresh: forceRefresh)
             .catchError((_) => <Movie>[]),
-        () => TmdbService.getMovies('tv/top_rated')
+        () => TmdbService.getMovies('tv/top_rated', forceRefresh: forceRefresh)
             .catchError((_) => <Movie>[]),
-        () => TmdbService.getMovies('tv/on_the_air')
+        () => TmdbService.getMovies('tv/on_the_air', forceRefresh: forceRefresh)
             .catchError((_) => <Movie>[]),
-        () => TmdbService.getMovies('tv/airing_today')
+        () => TmdbService.getMovies('tv/airing_today', forceRefresh: forceRefresh)
             .catchError((_) => <Movie>[]),
 
         // Fetch pages 2-3 without downloading page 1 again.
         () => TmdbService.getMovies(
           'trending/movie/week', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/popular', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/now_playing', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'movie/top_rated', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'trending/tv/week', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'tv/popular', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies(
           'tv/top_rated', pages: 2, startPage: 2,
-        ).catchError((_) => <Movie>[]),
+        , forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
 
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_genres': '16',
           'with_origin_country': 'JP',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ko',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'bn',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'bn',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi',
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'en',
           'with_origin_country': 'US',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ta',
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'te',
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'ml',
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'kn',
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'IN',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'ja',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'zh',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_original_language': 'th',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
           'with_original_language': 'hi',
           'sort_by': 'popularity.desc',
-        }).catchError((_) => <Movie>[]),
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
       ];
 
       final results = <List<Movie>>[];
@@ -3061,7 +3063,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     await _refreshCatalogVisibility(
       candidates: [...adminResults, ...movieBoxItems, ...tmdbResults],
-      forceRefresh: true,
     );
     final unique = _deduplicateMovies([
       ...adminResults,
@@ -3096,6 +3097,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {
       _search = query;
       _searchCategory = 'All';
+      searchResults = [];
       _searchLoading = true;
       _searchError = null;
     });
