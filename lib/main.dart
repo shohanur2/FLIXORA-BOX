@@ -11616,7 +11616,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   String _subtitleBackgroundValue() {
     final alpha = (_subtitleBackgroundOpacity * 255).round()
-        .clamp(0, 255).toRadixString(16).padLeft(2, '0');
+        .clamp(0, 255).toInt().toRadixString(16).padLeft(2, '0');
     return '#$alpha${_subtitleBackgroundColor.replaceFirst('#', '')}';
   }
 
@@ -11695,7 +11695,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   Expanded(child: Text(label, style: const TextStyle(color: playerWhite, fontSize: 12))),
                   Text(display, style: const TextStyle(color: playerGoldLight, fontSize: 12, fontWeight: FontWeight.w700)),
                 ]),
-                Slider(value: value.clamp(min, max), min: min, max: max,
+                Slider(value: value.clamp(min, max).toDouble(), min: min, max: max,
                   divisions: divisions, activeColor: playerGold,
                   inactiveColor: const Color(0x33FFFFFF), onChanged: onChanged),
               ],
