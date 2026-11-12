@@ -7557,6 +7557,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   StreamSubscription<bool>? _playingSubscription;
   StreamSubscription<Duration>? _positionSubscription;
   StreamSubscription<Duration>? _durationSubscription;
+  StreamSubscription<String>? _errorSubscription;
   StreamSubscription<bool>? _completedSubscription;
 
   Future<void> _playerOperation = Future<void>.value();
@@ -7604,6 +7605,11 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     _durationSubscription = _player.stream.duration.listen((value) {
       if (!mounted || _disposed) return;
       setState(() => _duration = value);
+    });
+    _errorSubscription = _player.stream.error.listen((value) {
+      if (!mounted || _disposed || _loading || _playing) return;
+      setState(() => _error = 'This short stream could not be played. Tap retry.');
+      debugPrint('Hot Shorts player error: $value');
     });
     _completedSubscription = _player.stream.completed.listen((completed) {
       if (!completed || _disposed || _loading) return;
@@ -8048,6 +8054,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     _playingSubscription?.cancel();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
+    _errorSubscription?.cancel();
     _completedSubscription?.cancel();
     _pageController.dispose();
     unawaited(_player.dispose());
