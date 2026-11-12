@@ -63,7 +63,8 @@ class TrendingMovieEligibility {
         country == 'canada' ||
         country == 'australia';
 
-    if (inBollywoodCatalogue || language == 'hi' || isIndia) {
+    if (inBollywoodCatalogue ||
+        (language == 'hi' && (country.isEmpty || isIndia))) {
       return 'Bollywood';
     }
     if (inHollywoodCatalogue ||
