@@ -8,6 +8,7 @@ on:
       - main
       - design/white-gold-cinematic
       - feature/**
+      - feat/**
       - fix/**
   pull_request:
     branches:
@@ -17,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: flixora-apk-${{ github.event.pull_request.number || github.ref }}
+  group: flixora-apk-recovery-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -55,6 +56,152 @@ jobs:
           cargo test --manifest-path rust/flixora_core/Cargo.toml
           cd rust/flixora_core
           cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o ../../android/app/src/main/jniLibs build --release
+
+      - name: Build SparkBoxCore MovieBox/WeFeed client
+        env:
+          SPARKBOX_CORE_REV: f4bc3c561a3eb723bf9c466159e04aae98f45d3c
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -n "$ANDROID_NDK_HOME"
+
+          git init /tmp/SparkBoxCore
+          git -C /tmp/SparkBoxCore remote add origin https://github.com/devfahim00/SparkBoxCore.git
+          git -C /tmp/SparkBoxCore fetch --depth 1 origin "$SPARKBOX_CORE_REV"
+          git -C /tmp/SparkBoxCore checkout --detach FETCH_HEAD
+
+          # Keep the upstream core's guest-client region aligned with FLIXORA's
+          # Bangladesh audience while retaining its built-in H5 fallback.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ffi_source = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
+          ffi_content = ffi_source.read_text()
+          old_import = "use sparkbox_core::{CoreError, MediaItem, MovieBoxClient, StreamKind};"
+          new_import = "use sparkbox_core::{Config, CoreError, MediaItem, MovieBoxClient, StreamKind};"
+          old_client = "CLIENT.get_or_init(MovieBoxClient::new)"
+          new_client = """CLIENT.get_or_init(|| {
+                  let mut config = Config::default();
+                  config.region = "BD".to_string();
+                  config.timezone = "Asia/Dhaka".to_string();
+                  MovieBoxClient::with_config(config)
+              })"""
+          if old_import not in ffi_content or old_client not in ffi_content:
+              raise SystemExit("SparkBoxCore FFI source changed; review the Bangladesh config patch.")
+          ffi_content = ffi_content.replace(old_import, new_import, 1)
+          ffi_content = ffi_content.replace(old_client, new_client, 1)
+          ffi_source.write_text(ffi_content)
+
+          # The upstream signer hard-codes India in x-client-info. Apply the
+          # Config region/timezone to the signed mobile header as well.
+          mobile_source = Path("/tmp/SparkBoxCore/sparkbox-core/src/mobile.rs")
+          mobile_content = mobile_source.read_text()
+          old_info = """        ins(
+                      &mut h,
+                      "x-client-info",
+                      client_info(
+                          v4,
+                          &self.device_id,
+                          if v4 {
+                              self.config.client_info_v4.as_deref()
+                          } else {
+                              self.config.client_info_v3.as_deref()
+                          },
+                      ),
+                  );"""
+          new_info = """        let mut client_info_json: Value = serde_json::from_str(&client_info(
+                      v4,
+                      &self.device_id,
+                      if v4 {
+                          self.config.client_info_v4.as_deref()
+                      } else {
+                          self.config.client_info_v3.as_deref()
+                      },
+                  ))
+                  .unwrap_or_else(|_| serde_json::json!({}));
+                  if let Some(info) = client_info_json.as_object_mut() {
+                      info.insert("region".into(), Value::String(self.config.region.clone()));
+                      info.insert("timezone".into(), Value::String(self.config.timezone.clone()));
+                  }
+                  ins(&mut h, "x-client-info", client_info_json.to_string());"""
+          if old_info not in mobile_content:
+              raise SystemExit("SparkBoxCore mobile header source changed; review the Bangladesh header patch.")
+          mobile_content = mobile_content.replace(old_info, new_info, 1)
+          mobile_source.write_text(mobile_content)
+
+          # Refresh expired H5 guest tokens on the actual play endpoint.
+          # The upstream play call previously reused the token captured when
+          # details opened, even after other calls had already refreshed it.
+          h5_source = Path("/tmp/SparkBoxCore/sparkbox-core/src/h5.rs")
+          h5_content = h5_source.read_text()
+          old_play_request = """            if let Some(t) = &d.h5_token {
+                          if !t.trim().is_empty() {
+                              ins(&mut h, "authorization", format!("Bearer {t}"));
+                          }
+                      }
+                      let r = self.http.get(&url).headers(h).send().await?;
+                      let status = r.status().as_u16();
+                      let text = r.text().await?;
+                      let root = try_json(&text).unwrap_or_default();
+                      let data = root.get("data").and_then(Value::as_object);"""
+          new_play_request = """            let cached_token = self.h5_guest.lock().await.clone().or_else(|| d.h5_token.clone());
+                      if let Some(t) = &cached_token {
+                          if !t.trim().is_empty() {
+                              ins(&mut h, "authorization", format!("Bearer {t}"));
+                          }
+                      }
+                      let response = self.http.get(&url).headers(h.clone())
+                          .timeout(std::time::Duration::from_secs(12))
+                          .send().await?;
+                      let mut status = response.status().as_u16();
+                      let mut text = response.text().await?;
+                      let mut root = try_json(&text).unwrap_or_default();
+                      let has_streams = |value: &Map<String, Value>| {
+                          let data = value.get("data").and_then(Value::as_object);
+                          ["dash", "hls", "streams"].iter().any(|key| {
+                              !get_arr(data.and_then(|d| d.get(*key))).is_empty()
+                          })
+                      };
+                      if matches!(status, 400 | 401 | 441) || (status == 200 && !has_streams(&root)) {
+                          if let Some(fresh_token) = self.h5_token(true).await? {
+                              let mut retry_headers = h;
+                              retry_headers.remove(reqwest::header::AUTHORIZATION);
+                              ins(&mut retry_headers, "authorization", format!("Bearer {fresh_token}"));
+                              let retry_response = self.http.get(&url).headers(retry_headers)
+                                  .timeout(std::time::Duration::from_secs(12))
+                                  .send().await?;
+                              status = retry_response.status().as_u16();
+                              text = retry_response.text().await?;
+                              root = try_json(&text).unwrap_or_default();
+                          }
+                      }
+                      let data = root.get("data").and_then(Value::as_object);"""
+          if old_play_request not in h5_content:
+              raise SystemExit("SparkBoxCore play request source changed; review the token-refresh patch.")
+          h5_content = h5_content.replace(old_play_request, new_play_request, 1)
+
+          # Stream URLs are required before playback; external caption lookups
+          # are optional and could block the player for several extra requests.
+          # Keep captions returned inline by the play endpoint.
+          old_captions = "        let _ = self.load_captions(&cap_keys, &mut subtitles).await;"
+          new_captions = "        // External caption enrichment is deferred; inline captions remain available."
+          if old_captions not in h5_content:
+              raise SystemExit("SparkBoxCore caption enrichment call changed; review the playback fast-path patch.")
+          h5_content = h5_content.replace(old_captions, new_captions, 1)
+          h5_source.write_text(h5_content)
+          PY
+
+          python3 "$GITHUB_WORKSPACE/scripts/patch_sparkbox_short_tv.py" /tmp/SparkBoxCore
+
+          cd /tmp/SparkBoxCore
+          cargo test --workspace --locked
+          cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o "$GITHUB_WORKSPACE/android/app/src/main/jniLibs" \
+            build --release -p sparkbox-ffi --locked
+
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a/libsparkbox_ffi.so"
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/armeabi-v7a/libsparkbox_ffi.so"
+          test -s "$GITHUB_WORKSPACE/android/app/src/main/jniLibs/x86_64/libsparkbox_ffi.so"
 
       - name: Check environment
         run: |
@@ -190,9 +337,10 @@ jobs:
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --print-certs "$APK"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: FLIXORA-APK
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
+          compression-level: 0

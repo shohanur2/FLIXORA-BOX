@@ -2,7 +2,7 @@ name: flixora
 description: Flixora - Premium All-in-One Entertainment App
 publish_to: 'none'
 
-version: 1.0.10+13
+version: 1.0.12+15
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

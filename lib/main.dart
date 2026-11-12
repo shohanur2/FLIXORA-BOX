@@ -8,29 +8,30 @@ import 'package:flutter/services.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
-import 'streaming/anilist_service.dart';
-import 'streaming/provider_catalog.dart';
 import 'streaming/featured_carousel_layout.dart';
+import 'streaming/hero_slider_mixer.dart';
+import 'streaming/catalog_source_policy.dart';
 import 'streaming/tmdb_media_type.dart';
-import 'streaming/provider_embed_player.dart';
-import 'streaming/ott_catalog_service.dart';
-import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
+import 'streaming/moviebox_service.dart';
+import 'streaming/moviebox_stream_policy.dart';
+import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
+import 'player/playback_error_policy.dart';
+import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -130,6 +131,10 @@ class Movie {
   final String originalLanguage;
   final String originCountry;
   final List<String> audioLanguages;
+  final String movieBoxId;
+  final String movieBoxDetailPath;
+  final bool movieBoxIsSeries;
+  final int movieBoxSubjectType;
 
   const Movie({
     required this.id,
@@ -151,9 +156,14 @@ class Movie {
     this.originalLanguage = '',
     this.originCountry = '',
     this.audioLanguages = const [],
+    this.movieBoxId = '',
+    this.movieBoxDetailPath = '',
+    this.movieBoxIsSeries = false,
+    this.movieBoxSubjectType = 1,
   });
 
   bool get isFlixora => source == 'flixora';
+  bool get isMovieBox => source == 'moviebox' && movieBoxId.isNotEmpty;
 
   bool get hasPlayableVideoUrl {
     final uri = Uri.tryParse(videoUrl.trim());
@@ -162,16 +172,14 @@ class Movie {
         uri.host.isNotEmpty;
   }
 
-  /// Movie and TV titles can use their matching provider route when no
-  /// Admin-managed direct MP4/HLS source is attached.
-  bool get canAttemptPlayback =>
-      hasPlayableVideoUrl ||
-      ((mediaType == 'movie' || mediaType == 'tv') && tmdbId > 0);
+  /// Only Admin-managed direct media and MovieBox/WeFeed-resolved titles
+  /// are playable. A TMDB ID alone is metadata, not a video source.
+  bool get canAttemptPlayback => hasPlayableVideoUrl || isMovieBox;
 
   Movie withFallbackMetadata(Movie fallback) => Movie(
         id: id,
         tmdbId: tmdbId > 0 ? tmdbId : fallback.tmdbId,
-        sourceId: sourceId,
+        sourceId: sourceId > 0 ? sourceId : fallback.sourceId,
         source: source,
         title: title.trim().isNotEmpty && title != 'Unknown Title'
             ? title
@@ -193,7 +201,75 @@ class Movie {
         originalLanguage: originalLanguage.isNotEmpty ? originalLanguage : fallback.originalLanguage,
         originCountry: originCountry.isNotEmpty ? originCountry : fallback.originCountry,
         audioLanguages: audioLanguages.isNotEmpty ? audioLanguages : fallback.audioLanguages,
+        movieBoxId: movieBoxId.isNotEmpty ? movieBoxId : fallback.movieBoxId,
+        movieBoxDetailPath: movieBoxDetailPath.isNotEmpty ? movieBoxDetailPath : fallback.movieBoxDetailPath,
+        movieBoxIsSeries: movieBoxId.isNotEmpty ? movieBoxIsSeries : fallback.movieBoxIsSeries,
+        movieBoxSubjectType: movieBoxId.isNotEmpty ? movieBoxSubjectType : fallback.movieBoxSubjectType,
       );
+
+  factory Movie.fromMovieBox(Map<String, dynamic> json) {
+    final subjectId = (json['id'] ?? '').toString().trim();
+    var stableId = 0;
+    for (final unit in subjectId.codeUnits) {
+      stableId = ((stableId * 31) + unit) & 0x7fffffff;
+    }
+    if (stableId == 0) stableId = 1;
+
+    final subjectType = _toInt(json['subjectType']);
+    final tmdbRaw = json['tmdbId'] ??
+        json['tmdb_id'] ??
+        json['tmdbID'] ??
+        (json['tmdb'] is Map ? (json['tmdb'] as Map)['id'] : null);
+    final tmdbId = _toInt(tmdbRaw);
+    final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 3 || subjectType == 7;
+    final rawYear = (json['year'] ?? '').toString().trim();
+    final genreText = (json['genre'] ?? '').toString();
+    final genres = genreText
+        .split(',')
+        .map((genre) => genre.trim())
+        .where((genre) => genre.isNotEmpty)
+        .toList(growable: false);
+
+    return Movie(
+      id: -stableId,
+      tmdbId: tmdbId,
+      source: 'moviebox',
+      title: (json['title'] ?? 'Unknown Title').toString(),
+      year: rawYear.length >= 4 ? rawYear.substring(0, 4) : 'N/A',
+      overview: (json['description'] ?? 'No description available.').toString(),
+      poster: (json['cover'] ?? '').toString(),
+      backdrop: (json['backdrop'] ?? '').toString(),
+      rating: double.tryParse((json['rating'] ?? '').toString()) ?? 0,
+      releaseDate: '',
+      genres: genres,
+      runtime: _toInt(json['durationMin']) > 0
+          ? _toInt(json['durationMin']).toDouble()
+          : null,
+      mediaType: isSeries ? 'tv' : 'movie',
+      originCountry: (json['country'] ?? '').toString(),
+      movieBoxId: subjectId,
+      movieBoxDetailPath: (json['detailPath'] ?? '').toString(),
+      movieBoxIsSeries: isSeries,
+      movieBoxSubjectType: subjectType > 0 ? subjectType : (isSeries ? 2 : 1),
+    );
+  }
+
+  Map<String, dynamic> toMovieBoxMap() => {
+        'id': movieBoxId,
+        'tmdbId': tmdbId,
+        'title': title,
+        'isSeries': movieBoxIsSeries,
+        'detailPath': movieBoxDetailPath,
+        'cover': poster,
+        'backdrop': backdrop,
+        'rating': rating.toString(),
+        'year': year,
+        'genre': genres.join(', '),
+        'country': originCountry,
+        'description': overview,
+        'durationMin': runtime?.round() ?? 0,
+        'subjectType': movieBoxSubjectType,
+      };
 
   factory Movie.fromJson(Map<String, dynamic> json, {String? mediaType}) {
     final date = (json['release_date'] ?? json['first_air_date'] ?? '').toString();
@@ -280,6 +356,12 @@ class Movie {
       originalLanguage: (json['originalLanguage'] ?? '').toString(),
       originCountry: (json['originCountry'] ?? '').toString(),
       audioLanguages: (json['audioLanguages'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      movieBoxId: (json['movieBoxId'] ?? '').toString(),
+      movieBoxDetailPath: (json['movieBoxDetailPath'] ?? '').toString(),
+      movieBoxIsSeries: json['movieBoxIsSeries'] == true,
+      movieBoxSubjectType: _toInt(json['movieBoxSubjectType']) > 0
+          ? _toInt(json['movieBoxSubjectType'])
+          : 1,
     );
   }
 
@@ -303,6 +385,10 @@ class Movie {
         'originalLanguage': originalLanguage,
         'originCountry': originCountry,
         'audioLanguages': audioLanguages,
+        'movieBoxId': movieBoxId,
+        'movieBoxDetailPath': movieBoxDetailPath,
+        'movieBoxIsSeries': movieBoxIsSeries,
+        'movieBoxSubjectType': movieBoxSubjectType,
       };
 
   bool _isFullUrl(String value) {
@@ -319,15 +405,178 @@ class Movie {
   }
 
   String get backdropUrl {
-    if (backdrop.isEmpty) return posterUrl;
+    if (backdrop.isEmpty) return '';
     if (_isFullUrl(backdrop)) return backdrop;
     return '${imageBase}w1280$backdrop';
   }
 }
 
+class MovieBoxShortEpisode {
+  const MovieBoxShortEpisode({
+    required this.season,
+    required this.episode,
+  });
+
+  final int season;
+  final int episode;
+
+  String get label => 'S$season · E$episode';
+
+  static List<MovieBoxShortEpisode> fromSeasons(
+    Iterable<Map<String, dynamic>> seasons,
+  ) {
+    int seasonNumberOf(Map<String, dynamic> season) => _toInt(
+          season['se'] ?? season['season'] ?? season['seasonNumber'],
+        );
+
+    final orderedSeasons = seasons.toList()
+      ..sort((a, b) => seasonNumberOf(a).compareTo(seasonNumberOf(b)));
+    final episodes = <MovieBoxShortEpisode>[];
+    final seen = <String>{};
+
+    for (final season in orderedSeasons) {
+      final seasonNumber = seasonNumberOf(season);
+      if (seasonNumber <= 0) continue;
+
+      final rawEpisodes = season['episodes'] ??
+          season['episodeList'] ??
+          season['eps'];
+      final episodeValues = rawEpisodes is List
+          ? rawEpisodes
+          : (season['allEp'] is String
+              ? (season['allEp'] as String)
+                  .split(RegExp(r'[,; ]+'))
+                  .where((value) => value.isNotEmpty)
+                  .toList()
+              : const <dynamic>[]);
+
+      for (final rawEpisode in episodeValues) {
+        final value = rawEpisode is Map
+            ? (rawEpisode['ep'] ??
+                rawEpisode['episode'] ??
+                rawEpisode['episodeNumber'] ??
+                rawEpisode['number'])
+            : rawEpisode;
+        final episodeNumber = _toInt(value);
+        final key = '$seasonNumber:$episodeNumber';
+        if (episodeNumber > 0 && seen.add(key)) {
+          episodes.add(MovieBoxShortEpisode(
+            season: seasonNumber,
+            episode: episodeNumber,
+          ));
+        }
+      }
+    }
+
+    episodes.sort((a, b) {
+      final seasonOrder = a.season.compareTo(b.season);
+      return seasonOrder != 0
+          ? seasonOrder
+          : a.episode.compareTo(b.episode);
+    });
+    return episodes;
+  }
+}
+
+class MovieBoxHomeSection {
+  final String title;
+  final List<Movie> items;
+  final bool ranked;
+  final bool isBanner;
+
+  const MovieBoxHomeSection({
+    required this.title,
+    required this.items,
+    this.ranked = false,
+    this.isBanner = false,
+  });
+
+  bool get isFlixoraOriginal {
+    final normalizedTitle = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return normalizedTitle.contains('flixora original');
+  }
+
+  bool get isHotShorts {
+    final normalizedTitle = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return normalizedTitle.contains('hot short') ||
+        (normalizedTitle.contains('short') && normalizedTitle.contains('tv'));
+  }
+
+  factory MovieBoxHomeSection.fromApi(Map<String, dynamic> json) {
+    final rawItems = json['items'] as List? ?? const [];
+    return MovieBoxHomeSection(
+      title: (json['title'] ?? 'MovieBox').toString(),
+      items: rawItems
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((movie) => movie.movieBoxId.isNotEmpty)
+          .toList(growable: false),
+      ranked: json['ranked'] == true,
+      isBanner: json['isBanner'] == true,
+    );
+  }
+
+  factory MovieBoxHomeSection.fromCache(Map<String, dynamic> json) {
+    final rawItems = json['items'] as List? ?? const [];
+    return MovieBoxHomeSection(
+      title: (json['title'] ?? 'MovieBox').toString(),
+      items: rawItems
+          .whereType<Map>()
+          .map((item) => Movie.fromCache(Map<String, dynamic>.from(item)))
+          .toList(growable: false),
+      ranked: json['ranked'] == true,
+      isBanner: json['isBanner'] == true,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'ranked': ranked,
+        'isBanner': isBanner,
+        'items': items.map((movie) => movie.toJson()).toList(),
+      };
+}
+
+/// Displays network images online, but reads disk cache only while offline.
+/// A cache miss offline never starts a network request.
+class FlixoraImageCacheManager {
+  FlixoraImageCacheManager._();
+
+  // Reuse DefaultCacheManager's existing cache key so already-downloaded
+  // posters remain available, while allowing a larger catalogue cache.
+  static final cache_manager.CacheManager instance = cache_manager.CacheManager(
+    cache_manager.Config(
+      'libCachedImageData',
+      stalePeriod: const Duration(days: 30),
+      maxNrOfCacheObjects: 600,
+    ),
+  );
+}
+
 /// Displays network images online, but reads disk cache only while offline.
 /// A cache miss offline never starts a network request.
 class FlixoraCachedImage extends StatelessWidget {
+  static final Map<String, Future<cache_manager.FileInfo?>> _offlineLookups = {};
+
+  static Future<cache_manager.FileInfo?> _offlineFile(String url) {
+    final existing = _offlineLookups[url];
+    if (existing != null) return existing;
+    final future = FlixoraImageCacheManager.instance.getFileFromCache(url);
+    _offlineLookups[url] = future;
+    future.then<void>((info) {
+      if (info == null || !info.file.existsSync()) _offlineLookups.remove(url);
+    }, onError: (Object error, StackTrace stackTrace) {
+      _offlineLookups.remove(url);
+    });
+    return future;
+  }
+
   final String imageUrl;
   final BoxFit fit;
   final bool isOnline;
@@ -347,27 +596,33 @@ class FlixoraCachedImage extends StatelessWidget {
     this.memCacheHeight,
   });
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildForSize(int? width, int? height) {
     final empty = fallback ?? Container(color: panel);
-    if (imageUrl.isEmpty) return empty;
     if (isOnline) {
       return CachedNetworkImage(
+        cacheManager: FlixoraImageCacheManager.instance,
         imageUrl: imageUrl,
         fit: fit,
-        memCacheWidth: memCacheWidth,
-        memCacheHeight: memCacheHeight,
+        memCacheWidth: width,
+        memCacheHeight: height,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
         placeholder: (_, __) => placeholder ?? Container(color: panel),
         errorWidget: (_, __, ___) => empty,
       );
     }
 
-    return FutureBuilder<FileInfo?>(
-      future: DefaultCacheManager().getFileFromCache(imageUrl),
+    return FutureBuilder<cache_manager.FileInfo?>(
+      future: _offlineFile(imageUrl),
       builder: (context, snapshot) {
         final file = snapshot.data?.file;
         if (file != null && file.existsSync()) {
-          return Image.file(file, fit: fit, cacheWidth: memCacheWidth, cacheHeight: memCacheHeight);
+          return Image.file(
+            file,
+            fit: fit,
+            cacheWidth: width,
+            cacheHeight: height,
+          );
         }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return placeholder ?? Container(color: panel);
@@ -376,41 +631,126 @@ class FlixoraCachedImage extends StatelessWidget {
       },
     );
   }
-}
 
-class InternetService {
-  static Future<bool> isOnline() async {
-    try {
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) return false;
+  @override
+  Widget build(BuildContext context) {
+    if (imageUrl.isEmpty) return fallback ?? Container(color: panel);
 
-      // Test real Internet reachability, not just Wi-Fi/mobile connectivity.
-      final endpoints = <Uri>[
-        Uri.parse('https://www.google.com/generate_204'),
-        Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
-      ];
-
-      for (final endpoint in endpoints) {
-        try {
-          final response = await http
-              .get(endpoint)
-              .timeout(const Duration(seconds: 4));
-          if (response.statusCode == 204 || response.statusCode == 200) {
-            return true;
-          }
-        } catch (_) {
-          // Try the fallback endpoint.
-        }
-      }
-      return false;
-    } catch (_) {
-      return false;
+    // Most FLIXORA cards already know their decode dimensions. Skip an
+    // unnecessary LayoutBuilder/MediaQuery pass for those common cases.
+    if (memCacheWidth != null && memCacheHeight != null) {
+      return _buildForSize(memCacheWidth, memCacheHeight);
     }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+        final resolvedWidth = memCacheWidth ??
+            (constraints.maxWidth.isFinite && constraints.maxWidth > 0
+                ? (constraints.maxWidth * pixelRatio)
+                    .round()
+                    .clamp(1, 1600)
+                    .toInt()
+                : null);
+        final resolvedHeight = memCacheHeight ??
+            (constraints.maxHeight.isFinite && constraints.maxHeight > 0
+                ? (constraints.maxHeight * pixelRatio)
+                    .round()
+                    .clamp(1, 1600)
+                    .toInt()
+                : null);
+        return _buildForSize(resolvedWidth, resolvedHeight);
+      },
+    );
   }
 }
 
+class InternetService {
+  static bool? _cachedOnline;
+  static DateTime? _lastCheck;
+  static Future<bool>? _checkInFlight;
+  static const Duration _cacheDuration = Duration(seconds: 20);
+
+  static void invalidateCache() {
+    _cachedOnline = null;
+    _lastCheck = null;
+  }
+
+  static Future<bool> isOnline({bool forceRefresh = false}) async {
+    final checkedAt = _lastCheck;
+    if (!forceRefresh &&
+        _cachedOnline != null &&
+        checkedAt != null &&
+        DateTime.now().difference(checkedAt) < _cacheDuration) {
+      return _cachedOnline!;
+    }
+
+    final pending = _checkInFlight;
+    if (pending != null) return pending;
+
+    final request = _performCheck();
+    _checkInFlight = request;
+    try {
+      final online = await request;
+      _cachedOnline = online;
+      _lastCheck = DateTime.now();
+      return online;
+    } finally {
+      if (identical(_checkInFlight, request)) _checkInFlight = null;
+    }
+  }
+
+  static Future<bool> _performCheck() async {
+    // Do not tie app connectivity to the MovieBox host: its API can be
+    // temporarily unavailable while the device still has internet access.
+    // GET is used because some networks/CDNs reject HEAD requests.
+    final endpoints = <Uri>[
+      Uri.parse('https://www.google.com/generate_204'),
+      Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
+      if (apiKey.isNotEmpty)
+        Uri.parse(
+          'https://api.themoviedb.org/3/configuration?api_key=$apiKey',
+        ),
+    ];
+    final completer = Completer<bool>();
+    var remaining = endpoints.length;
+
+    for (final endpoint in endpoints) {
+      unawaited(() async {
+        var reachable = false;
+        try {
+          final response = await http
+              .get(
+                endpoint,
+                headers: const {'Cache-Control': 'no-cache'},
+              )
+              .timeout(const Duration(seconds: 4));
+          reachable = response.statusCode >= 200 && response.statusCode < 500;
+        } catch (_) {}
+
+        if (reachable && !completer.isCompleted) {
+          completer.complete(true);
+        }
+        remaining--;
+        if (remaining == 0 && !completer.isCompleted) {
+          completer.complete(false);
+        }
+      }());
+    }
+
+    return completer.future.timeout(
+      const Duration(seconds: 4),
+      onTimeout: () => false,
+    );
+  }
+}
 class MovieCache {
   static const String trendingKey = 'flixora_trending';
+  static const String playableTrendingMoviesKey = 'flixora_playable_trending_movies';
+  static const String tmdbTrendingMoviesKey = 'flixora_tmdb_trending_movies';
+  static const String trendingHindiDubbedKey = 'flixora_trending_hindi_dubbed';
+  static const String trendingBollywoodKey = 'flixora_trending_bollywood';
+  static const String trendingHollywoodKey = 'flixora_trending_hollywood';
   static const String popularKey = 'flixora_popular';
   static const String latestKey = 'flixora_latest';
   static const String topRatedKey = 'flixora_top_rated';
@@ -430,6 +770,7 @@ class MovieCache {
   static const String hollywoodMoviesKey = 'flixora_hollywood_movies';
   static const String southIndianMoviesKey = 'flixora_south_indian_movies';
   static const String indianDramaTvKey = 'flixora_indian_drama_tv';
+  static const String movieBoxSectionsKey = 'flixora_moviebox_sections';
 
   static Future<void> saveDownloads(List<DownloadTask> tasks) async {
     try {
@@ -515,6 +856,35 @@ class MovieCache {
     }
   }
 
+  static Future<void> saveMovieBoxSections(
+    List<MovieBoxHomeSection> sections,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        movieBoxSectionsKey,
+        jsonEncode(sections.map((section) => section.toJson()).toList()),
+      );
+    } catch (_) {}
+  }
+
+  static Future<List<MovieBoxHomeSection>> getMovieBoxSections() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(movieBoxSectionsKey);
+      if (raw == null || raw.isEmpty) return [];
+      final decoded = jsonDecode(raw) as List;
+      return decoded
+          .whereType<Map>()
+          .map((item) => MovieBoxHomeSection.fromCache(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(growable: false);
+    } catch (_) {
+      return [];
+    }
+  }
+
   static Future<void> saveSearch(String query, List<Movie> movies) async {
     final key = 'flixora_search_${query.trim().toLowerCase()}';
     await saveList(key, movies);
@@ -568,8 +938,52 @@ class MovieCache {
   }
 }
 
+class _TimedMovieListCacheEntry {
+  const _TimedMovieListCacheEntry({
+    required this.createdAt,
+    required this.future,
+  });
+
+  final DateTime createdAt;
+  final Future<List<Movie>> future;
+}
+
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
+  static const Duration _catalogueCacheDuration = Duration(minutes: 5);
+  static const Duration _searchCacheDuration = Duration(minutes: 2);
+  static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
+  static final Map<String, _TimedMovieListCacheEntry> _searchCache = {};
+
+  static Future<List<Movie>> _rememberMovies(
+    Map<String, _TimedMovieListCacheEntry> cache,
+    String key,
+    Duration ttl,
+    Future<List<Movie>> Function() load, {
+    bool forceRefresh = false,
+  }) {
+    if (forceRefresh) cache.remove(key);
+    final now = DateTime.now();
+    final existing = cache[key];
+    if (existing != null && now.difference(existing.createdAt) < ttl) {
+      return existing.future;
+    }
+
+    final future = load();
+    final entry = _TimedMovieListCacheEntry(
+      createdAt: now,
+      future: future,
+    );
+    cache[key] = entry;
+    future.then<void>((items) {
+      if (items.isEmpty && identical(cache[key], entry)) {
+        cache.remove(key);
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (identical(cache[key], entry)) cache.remove(key);
+    });
+    return future;
+  }
 
   /// Retries transient TMDB throttling and server errors instead of silently
   /// leaving a category with only one page of results.
@@ -599,12 +1013,41 @@ class TmdbService {
     String endpoint, {
     Map<String, String> extraParams = const {},
     int pages = 1,
+    int startPage = 1,
+    bool forceRefresh = false,
+  }) {
+    final sortedParams = extraParams.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final paramsKey = sortedParams
+        .map((entry) => '${entry.key}=${entry.value}')
+        .join('&');
+    final key = '$endpoint|$paramsKey|$pages|$startPage';
+    return _rememberMovies(
+      _catalogueCache,
+      key,
+      _catalogueCacheDuration,
+      () => _fetchMovies(
+        endpoint,
+        extraParams: extraParams,
+        pages: pages,
+        startPage: startPage,
+      ),
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  static Future<List<Movie>> _fetchMovies(
+    String endpoint, {
+    Map<String, String> extraParams = const {},
+    int pages = 1,
+    int startPage = 1,
   }) async {
     if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
     final isTv = TmdbMediaType.isTvEndpoint(endpoint);
     final pageCount = pages.clamp(1, 3).toInt();
+    final firstPage = startPage.clamp(1, 500).toInt();
     final pageResults = await Future.wait<List<Movie>>(
-      List<int>.generate(pageCount, (index) => index + 1).map((page) async {
+      List<int>.generate(pageCount, (index) => index + firstPage).map((page) async {
         try {
           final uri = Uri.parse('$base/$endpoint').replace(queryParameters: {
             'api_key': apiKey,
@@ -630,7 +1073,6 @@ class TmdbService {
     );
     return _deduplicateCataloguePages(pageResults.expand((items) => items));
   }
-
   static List<Movie> _deduplicateCataloguePages(Iterable<Movie> movies) {
     final seen = <String>{};
     return movies.where((movie) {
@@ -641,25 +1083,40 @@ class TmdbService {
     }).toList();
   }
 
-  static Future<List<Movie>> search(String query) async {
-    if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
-    Future<List<Movie>> searchType(String type) async {
-      final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
-        'api_key': apiKey, 'query': query, 'language': 'en-US',
-        'page': '1', 'include_adult': 'false',
-      });
-      final response = await http.get(uri).timeout(const Duration(seconds: 20));
-      if (response.statusCode != 200) return [];
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final results = data['results'] as List? ?? [];
-      return results.whereType<Map>().map((item) => Movie.fromJson(
-        Map<String, dynamic>.from(item), mediaType: type,
-      )).toList();
-    }
-    final results = await Future.wait([searchType('movie'), searchType('tv')]);
-    return [...results[0], ...results[1]];
+  static Future<List<Movie>> search(String query) {
+    final normalized = query.trim();
+    if (normalized.isEmpty) return Future<List<Movie>>.value(<Movie>[]);
+    final key = normalized.toLowerCase();
+    return _rememberMovies(
+      _searchCache,
+      key,
+      _searchCacheDuration,
+      () async {
+        if (apiKey.isEmpty) throw Exception('TMDB service is not configured.');
+        Future<List<Movie>> searchType(String type) async {
+          final uri = Uri.parse('$base/search/$type').replace(queryParameters: {
+            'api_key': apiKey,
+            'query': normalized,
+            'language': 'en-US',
+            'page': '1',
+            'include_adult': 'false',
+          });
+          final response = await _getWithRetry(uri);
+          if (response.statusCode != 200) return [];
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          final results = data['results'] as List? ?? [];
+          return results.whereType<Map>().map((item) => Movie.fromJson(
+            Map<String, dynamic>.from(item), mediaType: type,
+          )).toList();
+        }
+        final results = await Future.wait([
+          searchType('movie'),
+          searchType('tv'),
+        ]);
+        return [...results[0], ...results[1]];
+      },
+    );
   }
-
   static Future<List<Map<String, dynamic>>> getCast(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -737,55 +1194,69 @@ class FlixoraMovieService {
     final audioLanguagesByMovie = <int, List<String>>{};
 
     if (movieIds.isNotEmpty) {
-      try {
-        final audioRows = await client.from('movie_languages')
-            .select('movie_id, languages(name,code)')
-            .inFilter('movie_id', movieIds);
-        for (final item in (audioRows as List).whereType<Map>()) {
-          final row = Map<String, dynamic>.from(item);
-          final movieId = _toInt(row['movie_id']);
-          final rawLanguage = row['languages'];
-          if (movieId <= 0 || rawLanguage is! Map) continue;
-          final language = (rawLanguage['name'] ?? rawLanguage['code'] ?? '').toString().trim();
-          if (language.isNotEmpty) (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
-        }
-      } catch (e) {
-        debugPrint('Could not load movie audio languages: $e');
-      }
-      try {
-        final qualityRows = await client
-            .from('movie_video_qualities')
-            .select('movie_id, quality, video_url')
-            .inFilter('movie_id', movieIds);
-
-        for (final item in (qualityRows as List).whereType<Map>()) {
-          final row = Map<String, dynamic>.from(item);
-          final movieId = _toInt(row['movie_id']);
-          final quality = (row['quality'] ?? '').toString().trim();
-          final url = (row['video_url'] ?? '').toString().trim();
-          if (movieId <= 0 || quality.isEmpty || !_isHttpUrl(url)) continue;
-
-          final current = qualityFallbacks[movieId];
-          final currentQuality = current?['quality'] ?? '';
-          final is720p = quality.toLowerCase() == '720p';
-          final currentIs720p = currentQuality.toLowerCase() == '720p';
-          final shouldReplace = current == null ||
-              (is720p && !currentIs720p) ||
-              (!currentIs720p &&
-                  !is720p &&
-                  VideoQualityService.rank(quality) >
-                      VideoQualityService.rank(currentQuality));
-
-          if (shouldReplace) {
-            qualityFallbacks[movieId] = {
-              'quality': quality,
-              'video_url': url,
-            };
+      Future<void> loadAudioLanguages() async {
+        try {
+          final audioRows = await client
+              .from('movie_languages')
+              .select('movie_id, languages(name,code)')
+              .inFilter('movie_id', movieIds);
+          for (final item in (audioRows as List).whereType<Map>()) {
+            final row = Map<String, dynamic>.from(item);
+            final movieId = _toInt(row['movie_id']);
+            final rawLanguage = row['languages'];
+            if (movieId <= 0 || rawLanguage is! Map) continue;
+            final language =
+                (rawLanguage['name'] ?? rawLanguage['code'] ?? '')
+                    .toString()
+                    .trim();
+            if (language.isNotEmpty) {
+              (audioLanguagesByMovie[movieId] ??= <String>[]).add(language);
+            }
           }
+        } catch (error) {
+          debugPrint('Could not load movie audio languages: $error');
         }
-      } catch (e) {
-        debugPrint('Could not resolve Admin video qualities: $e');
       }
+
+      Future<void> loadQualityFallbacks() async {
+        try {
+          final qualityRows = await client
+              .from('movie_video_qualities')
+              .select('movie_id, quality, video_url')
+              .inFilter('movie_id', movieIds);
+          for (final item in (qualityRows as List).whereType<Map>()) {
+            final row = Map<String, dynamic>.from(item);
+            final movieId = _toInt(row['movie_id']);
+            final quality = (row['quality'] ?? '').toString().trim();
+            final url = (row['video_url'] ?? '').toString().trim();
+            if (movieId <= 0 || quality.isEmpty || !_isHttpUrl(url)) continue;
+
+            final current = qualityFallbacks[movieId];
+            final currentQuality = current?['quality'] ?? '';
+            final is720p = quality.toLowerCase() == '720p';
+            final currentIs720p = currentQuality.toLowerCase() == '720p';
+            final shouldReplace = current == null ||
+                (is720p && !currentIs720p) ||
+                (!currentIs720p &&
+                    !is720p &&
+                    VideoQualityService.rank(quality) >
+                        VideoQualityService.rank(currentQuality));
+            if (shouldReplace) {
+              qualityFallbacks[movieId] = {
+                'quality': quality,
+                'video_url': url,
+              };
+            }
+          }
+        } catch (error) {
+          debugPrint('Could not resolve Admin video qualities: $error');
+        }
+      }
+
+      await Future.wait<void>([
+        loadAudioLanguages(),
+        loadQualityFallbacks(),
+      ]);
     }
 
     return rows.map((row) {
@@ -908,6 +1379,9 @@ class DownloadTask {
   final String poster;
   final String videoUrl;
   final String quality;
+  final Map<String, String> headers;
+  final int? seasonNumber;
+  final int? episodeNumber;
   double progress;
   int bytesReceived;
   int totalBytes;
@@ -922,6 +1396,9 @@ class DownloadTask {
     required this.poster,
     this.videoUrl = '',
     this.quality = 'Original',
+    this.headers = const <String, String>{},
+    this.seasonNumber,
+    this.episodeNumber,
     this.progress = 0,
     this.bytesReceived = 0,
     this.totalBytes = 0,
@@ -930,6 +1407,13 @@ class DownloadTask {
     this.errorMessage,
   });
 
+  String get displayTitle {
+    if (seasonNumber == null || episodeNumber == null) return title;
+    final season = seasonNumber!.toString().padLeft(2, '0');
+    final episode = episodeNumber!.toString().padLeft(2, '0');
+    return '$title • S$season E$episode';
+  }
+
   Map<String, dynamic> toJson() => {
         'movieId': movieId,
         'downloadId': downloadId,
@@ -937,6 +1421,9 @@ class DownloadTask {
         'poster': poster,
         'videoUrl': videoUrl,
         'quality': quality,
+        'headers': headers,
+        'seasonNumber': seasonNumber,
+        'episodeNumber': episodeNumber,
         'progress': progress,
         'bytesReceived': bytesReceived,
         'totalBytes': totalBytes,
@@ -954,6 +1441,19 @@ class DownloadTask {
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
         quality: (json['quality'] ?? 'Original').toString(),
+        headers: json['headers'] is Map
+            ? Map<String, String>.from(
+                (json['headers'] as Map).map(
+                  (key, value) => MapEntry(key.toString(), value.toString()),
+                ),
+              )
+            : const <String, String>{},
+        seasonNumber: _toInt(json['seasonNumber']) > 0
+            ? _toInt(json['seasonNumber'])
+            : null,
+        episodeNumber: _toInt(json['episodeNumber']) > 0
+            ? _toInt(json['episodeNumber'])
+            : null,
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
         bytesReceived: _toInt(json['bytesReceived']),
         totalBytes: _toInt(json['totalBytes']),
@@ -978,11 +1478,17 @@ class DownloadManager {
     return '${size.toStringAsFixed(unit == 0 ? 0 : 1)} ${units[unit]}';
   }
 
-  static Future<int?> getRemoteFileSize(String url) async {
+  static Future<int?> getRemoteFileSize(
+    String url, {
+    Map<String, String> headers = const <String, String>{},
+  }) async {
     try {
       final response = await _dio.head(
         url,
-        options: Options(headers: {'Accept-Encoding': 'identity'}),
+        options: Options(headers: {
+          ...headers,
+          'Accept-Encoding': 'identity',
+        }),
       ).timeout(const Duration(seconds: 10));
       final length = int.tryParse(
         response.headers.value('content-length') ?? '',
@@ -999,6 +1505,7 @@ class DownloadManager {
         options: Options(
           responseType: ResponseType.stream,
           headers: {
+            ...headers,
             'Range': 'bytes=0-0',
             'Accept-Encoding': 'identity',
           },
@@ -1044,6 +1551,7 @@ class DownloadManager {
     required String url,
     required String fileName,
     required int uniqueId,
+    Map<String, String> headers = const <String, String>{},
     String? existingPartialPath,
     required void Function(int received, int total) onProgress,
     required void Function(String path, int offset) onQueued,
@@ -1056,6 +1564,7 @@ class DownloadManager {
         url: url,
         fileName: fileName,
         uniqueId: uniqueId,
+        headers: headers,
         existingPartialPath: existingPartialPath,
         onProgress: onProgress,
         onQueued: onQueued,
@@ -1111,6 +1620,18 @@ class FlixoraApp extends StatelessWidget {
   }
 }
 
+class _CachedHomeSection {
+  const _CachedHomeSection({
+    required this.deduplicatedMovies,
+    required this.filteredByOption,
+    required this.filters,
+  });
+
+  final List<Movie> deduplicatedMovies;
+  final Map<String, List<Movie>> filteredByOption;
+  final List<String> filters;
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -1119,6 +1640,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static const String _searchHistoryPrefsKey = 'flixora_search_history';
   final PageController _sliderController = PageController();
   final ScrollController _featuredCardsController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
@@ -1127,22 +1649,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _networkTimer;
   Timer? _searchTimer;
+  Timer? _catalogueRefreshTimer;
+  int _searchRequestToken = 0;
+  bool _homeRefreshQueued = false;
+  List<Movie>? _allMoviesCache;
+  int? _allMoviesCacheFingerprint;
+  List<Movie>? _homeTrendingMoviesCache;
+  int? _homeTrendingMoviesCacheFingerprint;
+  List<Movie>? _webSeriesTitlesCache;
+  int? _webSeriesTitlesCacheFingerprint;
+  List<Movie>? _gemsForYouCache;
+  int? _gemsForYouCacheFingerprint;
+  final Map<String, _CachedHomeSection> _homeSectionCache = {};
+  Future<void>? _secondaryCacheLoadFuture;
+  DateTime? _lastSecondaryCataloguesRefreshAt;
+  DateTime? _lastCatalogVisibilityRefreshAt;
+  final Set<String> _unpublishedCatalogKeys = {};
+  final Set<String> _checkedCatalogVisibilityKeys = {};
+  bool _refreshingCatalogVisibility = false;
+  Future<void>? _catalogVisibilityRefreshFuture;
   DateTime? _lastCarouselInteractionAt;
+  DateTime? _lastHomeScrollAt;
 
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   StreamSubscription<AuthState>? _authSubscription;
 
   int _slide = 0;
   int _tab = 0;
-  String _ottRegion = 'BD';
-  String _ottMediaFilter = 'All';
-  List<OttProvider> _ottProviders = [];
-  OttProvider? _selectedOttProvider;
-  List<Movie> _ottProviderTitles = [];
-  bool _ottProvidersLoading = false;
-  bool _ottTitlesLoading = false;
-  String? _ottProvidersError;
-  String? _ottTitlesError;
   String _librarySection = 'Downloads';
   bool _showRanking = false;
   bool _searchOpen = false;
@@ -1153,11 +1686,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _search = '';
   bool _searchLoading = false;
   String? _searchError;
+  List<String> _searchHistory = [];
 
   bool loading = true;
   bool _online = false;
   bool _connectionKnown = false;
   bool _refreshing = false;
+  bool _refreshingSecondaryCatalogues = false;
+  bool _backgroundCatalogueWorkRunning = false;
+  bool _backgroundCatalogueWorkPending = false;
+  int _secondaryCatalogueNextIndex = 0;
+  DateTime? _lastHomeRefreshAt;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
   String? _openingTitleKey;
@@ -1165,6 +1704,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? homeError;
 
   List<Movie> trending = [];
+  List<Movie> _trendingMovies = [];
+  List<Movie> _tmdbTrendingMovies = [];
+  List<Movie> _trendingHindiDubbedMovies = [];
+  List<Movie> _trendingBollywoodMovies = [];
+  List<Movie> _trendingHollywoodMovies = [];
+  bool _refreshingPlayableTrendingMovies = false;
+  bool _playableTrendingRefreshQueued = false;
   List<Movie> popular = [];
   List<Movie> latest = [];
   List<Movie> topRated = [];
@@ -1181,6 +1727,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> indianDramaTv = [];
   List<Movie> flixoraMovies = [];
   List<Movie> searchResults = [];
+  List<MovieBoxHomeSection> _movieBoxSections = [];
+  final Map<String, Movie> _movieBoxMatchCache = {};
+  final Set<String> _downloadPreparationKeys = <String>{};
+  String? _expandedHotShortId;
+  final Map<String, List<MovieBoxShortEpisode>> _hotShortEpisodesById = {};
+  final Set<String> _hotShortEpisodeLoading = <String>{};
+  final Map<String, String> _hotShortEpisodeErrors = {};
 
   final Set<int> _favourites = {};
   final Set<int> _saved = {};
@@ -1210,58 +1763,630 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).toList();
   }
 
-  List<Movie> _deduplicateMovies(List<Movie> movies) {
-    final seenTmdbIds = <String>{};
-    final seenFallbackIds = <String>{};
+  String _normalizedMovieTitle(String value) => value
+      .toLowerCase()
+      // Preserve Bengali and other non-Latin scripts while normalizing
+      // common title punctuation and whitespace.
+      .replaceAll(RegExp(r'[\s\-_.,:;!?()\[\]{}]+'), ' ')
+      .trim();
 
-    return movies.where((movie) {
-      if (movie.tmdbId > 0) {
-        return seenTmdbIds.add('${movie.mediaType}:${movie.tmdbId}');
+  String _movieBoxMatchKey(Movie movie) =>
+      '${movie.mediaType}:${_normalizedMovieTitle(movie.title)}:${movie.year}';
+
+  List<Movie> _movieBoxSectionItems(MovieBoxHomeSection section) {
+    final adminMatches = flixoraMovies.where((admin) {
+      return section.items.any((item) {
+        if (admin.mediaType != item.mediaType) return false;
+        if (admin.tmdbId > 0 && item.tmdbId > 0) {
+          return admin.tmdbId == item.tmdbId;
+        }
+        final yearMatches = admin.year == item.year ||
+            admin.year == 'N/A' ||
+            item.year == 'N/A';
+        return yearMatches &&
+            _normalizedMovieTitle(admin.title) ==
+                _normalizedMovieTitle(item.title);
+      });
+    }).toList(growable: false);
+    // MovieBox is the canonical source; Admin is appended only as fallback.
+    return _deduplicateMovies([...section.items, ...adminMatches]);
+  }
+
+  int _catalogVisibilitySourceId(Movie movie) {
+    if (!movie.isFlixora) return 0;
+    if (movie.sourceId > 0) return movie.sourceId;
+    return movie.id < 0 ? -movie.id : 0;
+  }
+
+  String _catalogVisibilityKey(Movie movie) {
+    final sourceId = _catalogVisibilitySourceId(movie);
+    return CatalogSourcePolicy.adminVisibilityKey(
+          isAdmin: movie.isFlixora,
+          sourceId: sourceId,
+        ) ??
+        '';
+  }
+
+  Map<String, dynamic> _catalogVisibilityPayload(Movie movie) {
+    final sourceId = _catalogVisibilitySourceId(movie);
+    return {
+      'key': _catalogVisibilityKey(movie),
+      'source': 'admin',
+      'sourceId': sourceId,
+    };
+  }
+
+  List<Movie> _allCatalogVisibilityCandidates() => [
+        ...trending,
+        ...popular,
+        ...latest,
+        ...topRated,
+        ...trendingTv,
+        ...popularTv,
+        ...topRatedTv,
+        ...anime,
+        ...koreanDrama,
+        ...bengaliMovies,
+        ...bengaliTv,
+        ...flixoraMovies,
+        ...searchResults,
+        ...bollywoodMovies,
+        ...hollywoodMovies,
+        ...southIndianMovies,
+        ...indianDramaTv,
+        ..._trendingMovies,
+        ..._tmdbTrendingMovies,
+        ..._trendingHindiDubbedMovies,
+        ..._movieBoxSections.expand((section) => section.items),
+      ];
+
+  Future<void> _refreshCatalogVisibility({
+    List<Movie>? candidates,
+    bool forceRefresh = false,
+  }) async {
+    final client = supabaseClient;
+    if (client == null || !_online || !mounted) return;
+
+    final isFullRefresh = candidates == null;
+    if (isFullRefresh &&
+        !forceRefresh &&
+        _lastCatalogVisibilityRefreshAt != null &&
+        DateTime.now().difference(_lastCatalogVisibilityRefreshAt!) <
+            const Duration(minutes: 10)) {
+      return;
+    }
+
+    final requestedCandidates =
+        candidates ?? _allCatalogVisibilityCandidates();
+    // Publication visibility belongs only to the exact Admin row. Never send
+    // MovieBox or TMDB candidates through the Admin unpublish filter.
+    final adminCandidates = CatalogSourcePolicy.adminCandidates<Movie>(
+      requestedCandidates,
+      isAdmin: (movie) =>
+          movie.isFlixora && _catalogVisibilityKey(movie).isNotEmpty,
+    );
+
+    if (_refreshingCatalogVisibility) {
+      final active = _catalogVisibilityRefreshFuture;
+      if (active != null) await active;
+      if (!mounted || !_online) return;
+      if (isFullRefresh) {
+        return _refreshCatalogVisibility(forceRefresh: true);
+      }
+      final missing = adminCandidates
+          .where((movie) => !_checkedCatalogVisibilityKeys
+              .contains(_catalogVisibilityKey(movie)))
+          .toList(growable: false);
+      if (missing.isEmpty) return;
+      return _refreshCatalogVisibility(
+        candidates: missing,
+        forceRefresh: true,
+      );
+    }
+
+    final source = isFullRefresh
+        ? adminCandidates
+        : (forceRefresh
+            ? adminCandidates
+            : adminCandidates.where((movie) => !_checkedCatalogVisibilityKeys
+                .contains(_catalogVisibilityKey(movie))));
+    final payloadByKey = <String, Map<String, dynamic>>{};
+    for (final movie in source) {
+      if (movie.title.trim().isEmpty) continue;
+      final payload = _catalogVisibilityPayload(movie);
+      payloadByKey[payload['key'] as String] = payload;
+    }
+    if (payloadByKey.isEmpty) return;
+
+    _refreshingCatalogVisibility = true;
+    final completer = Completer<void>();
+    _catalogVisibilityRefreshFuture = completer.future;
+    try {
+      final checked = <String>{};
+      final blocked = <String>{};
+      final payloads = payloadByKey.values.toList(growable: false);
+      for (var start = 0; start < payloads.length; start += 200) {
+        final batch = payloads.skip(start).take(200).toList(growable: false);
+        final blockedBatch = await CatalogVisibilityService.blockedKeys(
+          client: client,
+          candidates: batch,
+        );
+        checked.addAll(batch.map((item) => item['key'].toString()));
+        blocked.addAll(blockedBatch);
       }
 
-      final fallbackKey = '${movie.mediaType}:${movie.source}:${movie.id}';
-      return seenFallbackIds.add(fallbackKey);
-    }).toList();
+      if (!mounted) return;
+      final oldBlocked = Set<String>.from(_unpublishedCatalogKeys);
+      if (isFullRefresh) {
+        _unpublishedCatalogKeys
+          ..clear()
+          ..addAll(blocked);
+        _checkedCatalogVisibilityKeys
+          ..clear()
+          ..addAll(checked);
+        _lastCatalogVisibilityRefreshAt = DateTime.now();
+      } else {
+        // A targeted refresh can also recognize an Admin republish and clear
+        // an earlier cached unpublished flag for the checked candidates.
+        _unpublishedCatalogKeys
+          ..removeAll(checked.difference(blocked))
+          ..addAll(blocked);
+        _checkedCatalogVisibilityKeys.addAll(checked);
+      }
+
+      final visibilityChanged = oldBlocked.length != _unpublishedCatalogKeys.length ||
+          !oldBlocked.containsAll(_unpublishedCatalogKeys);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'flixora_unpublished_catalog_keys',
+        _unpublishedCatalogKeys.toList(growable: false),
+      );
+      await prefs.setStringList(
+        'flixora_checked_catalog_visibility_keys',
+        _checkedCatalogVisibilityKeys.toList(growable: false),
+      );
+      if (visibilityChanged && mounted) {
+        setState(() {
+          searchResults = _deduplicateMovies(searchResults);
+        });
+      }
+    } catch (error) {
+      debugPrint('Admin catalogue visibility check failed: $error');
+    } finally {
+      _refreshingCatalogVisibility = false;
+      if (!completer.isCompleted) completer.complete();
+      if (identical(_catalogVisibilityRefreshFuture, completer.future)) {
+        _catalogVisibilityRefreshFuture = null;
+      }
+    }
+  }
+
+  Iterable<String> _movieBoxDuplicateKeys(
+    Movie movie, {
+    required bool forMovieBoxIndex,
+  }) sync* {
+    final type = movie.mediaType;
+    if (movie.tmdbId > 0) {
+      yield 'tmdb:' + type + ':' + movie.tmdbId.toString();
+    }
+
+    final title = _normalizedMovieTitle(movie.title);
+    if (title.isEmpty) return;
+    final titleBase = 'title:' + type + ':' + title;
+    final year = movie.year.trim();
+
+    if (forMovieBoxIndex) {
+      // N/A candidates can match any MovieBox release, as before.
+      yield titleBase + ':any';
+      yield titleBase + ':year:' + year;
+      if (year == 'N/A') yield titleBase + ':unknown';
+      return;
+    }
+
+    if (year == 'N/A') {
+      yield titleBase + ':any';
+    } else {
+      yield titleBase + ':year:' + year;
+      yield titleBase + ':unknown';
+    }
+  }
+
+  List<Movie> _deduplicateMovies(List<Movie> movies) {
+    final seenTmdbIds = <String>{};
+    final seenTitleYears = <String>{};
+    final seenTitleBasesWithYear = <String>{};
+    final seenTitleBasesWithoutYear = <String>{};
+    final seenFallbackIds = <String>{};
+
+    final orderedMovies =
+        CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<Movie>(
+      movies,
+      isMovieBox: (movie) => movie.isMovieBox,
+      movieBoxKeys: (movie) => _movieBoxDuplicateKeys(
+        movie,
+        forMovieBoxIndex: true,
+      ),
+      candidateKeys: (movie) => _movieBoxDuplicateKeys(
+        movie,
+        forMovieBoxIndex: false,
+      ),
+    );
+    return orderedMovies.where((movie) {
+      if (CatalogSourcePolicy.isAdminBlocked(
+        isAdmin: movie.isFlixora,
+        visibilityKey: _catalogVisibilityKey(movie),
+        blockedKeys: _unpublishedCatalogKeys,
+      )) {
+        return false;
+      }
+      if (movie.tmdbId > 0 &&
+          !seenTmdbIds.add(movie.mediaType + ':' + movie.tmdbId.toString())) {
+        return false;
+      }
+
+      final normalizedTitle = _normalizedMovieTitle(movie.title);
+      final year = movie.year.trim().length >= 4
+          ? movie.year.trim().substring(0, 4)
+          : '';
+      if (normalizedTitle.isNotEmpty) {
+        final titleBase = movie.mediaType + ':' + normalizedTitle;
+        if (year.isNotEmpty && year != 'N/A') {
+          if (seenTitleBasesWithoutYear.contains(titleBase)) return false;
+          final titleYearKey = titleBase + ':' + year;
+          if (!seenTitleYears.add(titleYearKey)) return false;
+          seenTitleBasesWithYear.add(titleBase);
+        } else {
+          if (seenTitleBasesWithYear.contains(titleBase) ||
+              !seenTitleBasesWithoutYear.add(titleBase)) {
+            return false;
+          }
+        }
+      }
+
+      if (movie.tmdbId <= 0) {
+        final fallbackKey = movie.mediaType + ':' + movie.source + ':' + movie.id.toString();
+        return seenFallbackIds.add(fallbackKey);
+      }
+      return true;
+    }).toList(growable: false);
   }
 
   /// Keep the Home hero and Trending Movies row populated if TMDB's
-  /// trending endpoint temporarily returns an empty response. Admin records
-  /// stay first so they retain precedence over matching TMDB catalogue items.
-  List<Movie> _homeTrendingMovies() {
-    final primary = _withoutFlixoraDuplicates(trending)
-        .where((title) => title.mediaType == 'movie')
-        .toList();
-    final candidates = <Movie>[
-      ...flixoraMovies.where((title) => title.mediaType == 'movie'),
-      ...primary,
-    ];
+  /// trending endpoint temporarily returns an empty response. Matching
+  /// MovieBox records remain canonical; published Admin rows are fallback.
+  MovieBoxHomeSection? get _hotShortsSection {
+    for (final section in _movieBoxSections) {
+      if (section.isHotShorts && section.items.isNotEmpty) return section;
+    }
+    return null;
+  }
 
-    if (primary.length < 5) {
-      candidates.addAll(_withoutFlixoraDuplicates(popular)
-          .where((title) => title.mediaType == 'movie'));
-      candidates.addAll(_withoutFlixoraDuplicates(latest)
-          .where((title) => title.mediaType == 'movie'));
-      candidates.addAll(_withoutFlixoraDuplicates(topRated)
-          .where((title) => title.mediaType == 'movie'));
+  List<Movie> get _regularMovieBoxItems => _movieBoxSections
+      .where((section) => !section.isHotShorts)
+      .expand((section) => section.items)
+      .toList(growable: false);
+
+  /// Build a mixed hero from Trending Movies plus the strongest TV categories.
+  /// Movies and Web Series lead; Drama, Anime and general TV appear regularly.
+  List<Movie> _homeTrendingMovies() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _homeTrendingMoviesCache;
+    if (cached != null && _homeTrendingMoviesCacheFingerprint == fingerprint) {
+      return cached;
+    }
+    List<Movie> preferMovieBoxRecords(Iterable<Movie> titles) {
+      return _deduplicateMovies(
+        titles
+            .map((title) => _cachedMovieBoxMatch(title) ?? title)
+            .toList(growable: false),
+      );
     }
 
-    return _deduplicateMovies(candidates);
+    final movieBoxTrendingMovies = _movieBoxSections
+        .where((section) =>
+            !section.isHotShorts &&
+            (section.isBanner ||
+                section.title.toLowerCase().contains('trending')))
+        .expand((section) => section.items)
+        .where((title) => title.mediaType == 'movie')
+        .toList(growable: false);
+
+    final movieTitles = preferMovieBoxRecords([
+      ..._trendingMovies,
+      ...movieBoxTrendingMovies,
+      ..._tmdbTrendingMovies,
+      ...trending.where((title) => title.mediaType == 'movie'),
+    ]).where((title) => title.mediaType == 'movie').toList(growable: false);
+
+    final seriesCatalog = preferMovieBoxRecords([
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ]).where((title) => title.mediaType == 'tv').toList(growable: false);
+
+    final webSeries = preferMovieBoxRecords(_webSeriesTitles())
+        .where((title) => title.mediaType == 'tv')
+        .take(12)
+        .toList(growable: false);
+    final webSeriesKeys = webSeries.map(_movieBoxMatchKey).toSet();
+
+    final dramaTitles = seriesCatalog
+        .where((title) => title.genres.any(
+              (genre) => genre.toLowerCase().contains('drama'),
+            ))
+        .toList(growable: false);
+
+    final animeTitles = preferMovieBoxRecords([
+      ...anime,
+      ...seriesCatalog.where(_isAnimeTitle),
+    ]);
+
+    final tvShows = seriesCatalog
+        .where((title) =>
+            !webSeriesKeys.contains(_movieBoxMatchKey(title)) &&
+            !_isAnimeTitle(title) &&
+            !title.genres.any(
+              (genre) => genre.toLowerCase().contains('drama'),
+            ))
+        .toList(growable: false);
+
+    final result = HeroSliderMixer.mix<Movie>(
+      movies: movieTitles,
+      webSeries: webSeries,
+      dramas: dramaTitles,
+      anime: animeTitles,
+      tvShows: tvShows,
+      keyOf: _movieBoxMatchKey,
+      limit: 18,
+    ).where((title) =>
+        title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
+      .toList(growable: false);
+    _homeTrendingMoviesCacheFingerprint = fingerprint;
+    _homeTrendingMoviesCache = result;
+    return result;
+  }
+
+  String _trendingMovieCategory(Movie movie) {
+    final id = movie.tmdbId;
+    return TrendingMovieEligibility.category(
+      originalLanguage: movie.originalLanguage,
+      originCountry: movie.originCountry,
+      inBollywoodCatalogue: id > 0 &&
+          bollywoodMovies.any((item) => item.tmdbId == id),
+      inHollywoodCatalogue: id > 0 &&
+          hollywoodMovies.any((item) => item.tmdbId == id),
+      inSouthIndianCatalogue: id > 0 &&
+          southIndianMovies.any((item) => item.tmdbId == id),
+      inBengaliCatalogue: id > 0 &&
+          bengaliMovies.any((item) => item.tmdbId == id),
+    );
+  }
+
+  List<Movie> _trendingMovieCandidates() {
+    final regionalLists = <List<Movie>>[
+      _deduplicateMovies(bollywoodMovies),
+      _deduplicateMovies(hollywoodMovies),
+      _deduplicateMovies(southIndianMovies),
+      _deduplicateMovies(bengaliMovies),
+    ];
+    final regionalFallbacks = <Movie>[];
+    final longestRegionalList = regionalLists
+        .map((items) => items.length)
+        .fold<int>(0, (longest, length) => length > longest ? length : longest);
+    for (var index = 0; index < longestRegionalList; index++) {
+      for (final region in regionalLists) {
+        if (index < region.length) regionalFallbacks.add(region[index]);
+      }
+    }
+
+    final movieBoxBanners = _movieBoxSections
+        .where((section) =>
+            !section.isHotShorts &&
+            (section.isBanner ||
+                section.title.toLowerCase().contains('trending')))
+        .expand((section) => section.items)
+        .where((movie) => movie.mediaType == 'movie')
+        .toList(growable: false);
+
+    return _deduplicateMovies([
+      // MovieBox is canonical when the same title exists in both sources.
+      ...movieBoxBanners,
+      // Mix regional catalogues near the top so global titles cannot fill
+      // the entire rail before South Indian, Bengali and other regions appear.
+      ..._tmdbTrendingMovies.take(12),
+      ...regionalFallbacks,
+      ..._tmdbTrendingMovies.skip(12),
+      ...popular,
+      ...latest,
+      ...topRated,
+      ...flixoraMovies.where((movie) => movie.mediaType == 'movie'),
+    ]).where((movie) =>
+        movie.mediaType == 'movie' &&
+        (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
+      .take(24)
+      .toList(growable: false);
+  }
+
+  Future<List<String>> _movieBoxPlayableAudioLanguages(Movie movie) async {
+    final result = await MovieBoxService.prewarmStreams(
+      movie.toMovieBoxMap(),
+      isSeries: false,
+    ).timeout(const Duration(seconds: 6));
+    if (result == null || !MovieBoxStreamPolicy.hasPlayableLinks(result)) {
+      return <String>[];
+    }
+
+    final links = result['links'] as List? ?? const [];
+    final languages = <String>[];
+    for (final rawLink in links.whereType<Map>()) {
+      final label = (rawLink['label'] ?? '').toString().trim();
+      if (label.isEmpty) continue;
+      final language = label.split('·').first.trim();
+      final isQualityOnly = RegExp(r'^\d{3,4}p$', caseSensitive: false)
+          .hasMatch(language);
+      if (!isQualityOnly &&
+          !language.toLowerCase().contains('subtitle') &&
+          !languages.contains(language)) {
+        languages.add(language);
+      }
+    }
+    if (languages.isEmpty) languages.add('Original');
+    return languages;
+  }
+
+  Future<MapEntry<String, Movie>?> _verifyPlayableTrendingMovie(
+    Movie candidate,
+  ) async {
+    final category = _trendingMovieCategory(candidate);
+
+    // A matching MovieBox title always wins, even when its Admin duplicate
+    // has been unpublished. Only look at Admin after MovieBox has no match.
+    final movieBoxMatch = _cachedMovieBoxMatch(candidate) ??
+        await _searchMovieBoxMatch(candidate);
+    if (movieBoxMatch != null) {
+      if (!movieBoxMatch.isMovieBox || movieBoxMatch.movieBoxIsSeries) {
+        return null;
+      }
+
+      final audioLanguages =
+          await _movieBoxPlayableAudioLanguages(movieBoxMatch);
+      if (audioLanguages.isNotEmpty) {
+        final verifiedMovie = Movie.fromCache({
+          ...movieBoxMatch.toJson(),
+          'audioLanguages': audioLanguages,
+        });
+        return MapEntry(category, verifiedMovie);
+      }
+      // A matching MovieBox title remains canonical even if its current
+      // stream is unavailable. Do not replace it with an Admin duplicate.
+      return null;
+    }
+
+    final adminMatch = _cachedFlixoraMatch(candidate) ??
+        (candidate.isFlixora &&
+                !CatalogSourcePolicy.isAdminBlocked(
+                  isAdmin: true,
+                  visibilityKey: _catalogVisibilityKey(candidate),
+                  blockedKeys: _unpublishedCatalogKeys,
+                )
+            ? candidate
+            : null);
+    if (adminMatch != null && adminMatch.hasPlayableVideoUrl) {
+      return MapEntry(category, adminMatch);
+    }
+
+    if (!candidate.isFlixora && candidate.hasPlayableVideoUrl) {
+      return MapEntry(category, candidate);
+    }
+    return null;
+  }
+
+  Future<void> _refreshPlayableTrendingMovies() async {
+    if (!_online) return;
+    if (_refreshingPlayableTrendingMovies) {
+      _playableTrendingRefreshQueued = true;
+      return;
+    }
+    final candidates = _trendingMovieCandidates().take(8).toList(growable: false);
+    if (candidates.isEmpty) return;
+
+    _refreshingPlayableTrendingMovies = true;
+    try {
+      // Admin visibility is checked once by the background coordinator.
+      final verifiedAll = <Movie>[];
+      for (var start = 0;
+          start < candidates.length && verifiedAll.length < 8;
+          start += 2) {
+        if (!_canRunBackgroundCatalogueWork) {
+          _backgroundCatalogueWorkPending = true;
+          break;
+        }
+        final batch = candidates.skip(start).take(2);
+        final resolved = await Future.wait<MapEntry<String, Movie>?>(
+          batch.map(_verifyPlayableTrendingMovie),
+        );
+
+        for (final entry in resolved.whereType<MapEntry<String, Movie>>()) {
+          if (verifiedAll.length >= 16) break;
+          verifiedAll.add(entry.value);
+        }
+      }
+
+      final verified = _deduplicateMovies(verifiedAll)
+          .take(8)
+          .toList(growable: false);
+      final verifiedHindi = verified.where(_hasHindiAudio).toList();
+      final verifiedBollywood = verified
+          .where((movie) => _trendingMovieCategory(movie) == 'Bollywood')
+          .toList();
+      final verifiedHollywood = verified
+          .where((movie) => _trendingMovieCategory(movie) == 'Hollywood')
+          .toList();
+
+      if (!mounted) return;
+      setState(() {
+        _trendingMovies = verified;
+        _trendingHindiDubbedMovies = verifiedHindi;
+        _trendingBollywoodMovies = verifiedBollywood;
+        _trendingHollywoodMovies = verifiedHollywood;
+      });
+      await Future.wait([
+        MovieCache.saveList(
+          MovieCache.playableTrendingMoviesKey,
+          _trendingMovies,
+        ),
+        MovieCache.saveList(
+          MovieCache.trendingHindiDubbedKey,
+          _trendingHindiDubbedMovies,
+        ),
+        MovieCache.saveList(
+          MovieCache.trendingBollywoodKey,
+          _trendingBollywoodMovies,
+        ),
+        MovieCache.saveList(
+          MovieCache.trendingHollywoodKey,
+          _trendingHollywoodMovies,
+        ),
+      ]);
+    } catch (error) {
+      debugPrint('Could not refresh playable Trending Movies: $error');
+    } finally {
+      _refreshingPlayableTrendingMovies = false;
+      if (_playableTrendingRefreshQueued && mounted && _online) {
+        _playableTrendingRefreshQueued = false;
+        unawaited(_refreshPlayableTrendingMovies());
+      }
+    }
   }
 
   bool _isAnimeTitle(Movie title) {
     final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
+    final country = title.originCountry.toLowerCase();
     return genres.contains('anime') ||
         (genres.contains('animation') &&
             (title.originalLanguage.toLowerCase() == 'ja' ||
-                title.originCountry.toUpperCase() == 'JP'));
+                country == 'jp' ||
+                country.contains('japan')));
   }
 
   /// TMDB does not define "Web Series" as a TV genre. Prefer titles explicitly
   /// tagged by FLIXORA Admin; if none exist yet, show the available non-anime
   /// TV catalogue instead of leaving the Home section blank.
   List<Movie> _webSeriesTitles() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _webSeriesTitlesCache;
+    if (cached != null && _webSeriesTitlesCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final catalogue = _deduplicateMovies([
-      ...flixoraMovies,
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ...trendingTv,
       ...popularTv,
       ...topRatedTv,
@@ -1273,13 +2398,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final tagged = catalogue.where((title) => title.genres.any((genre) {
       final normalized = genre.toLowerCase().replaceAll('-', ' ').trim();
       return normalized == 'web series' || normalized == 'webseries';
-    })).toList();
+    })).toList(growable: false);
 
-    if (tagged.isNotEmpty) return tagged;
-
-    final fallback = catalogue.where((title) => !_isAnimeTitle(title)).toList()
-      ..sort((a, b) => b.rating.compareTo(a.rating));
-    return fallback;
+    final result = tagged.isNotEmpty
+        ? tagged
+        : (catalogue.where((title) => !_isAnimeTitle(title)).toList()
+          ..sort((a, b) => b.rating.compareTo(a.rating)));
+    _webSeriesTitlesCacheFingerprint = fingerprint;
+    _webSeriesTitlesCache = result;
+    return result;
   }
 
   @override
@@ -1301,8 +2428,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _initializeApp();
     _listenToConnectivity();
     _networkTimer = Timer.periodic(
-      const Duration(seconds: 12),
+      const Duration(seconds: 30),
       (_) => _refreshConnectionStatus(),
+    );
+    _catalogueRefreshTimer = Timer.periodic(
+      const Duration(minutes: 20),
+      (_) {
+        if (!mounted ||
+            !_online ||
+            _tab != 0 ||
+            _searchOpen ||
+            !(ModalRoute.of(context)?.isCurrent ?? true)) {
+          return;
+        }
+        unawaited(loadHome(forceRefresh: true));
+      },
     );
 
     _timer = Timer.periodic(
@@ -1315,12 +2455,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             (lastInteraction != null &&
                 DateTime.now().difference(lastInteraction) <
                     const Duration(seconds: 8)) ||
+            (_lastHomeScrollAt != null &&
+                DateTime.now().difference(_lastHomeScrollAt!) <
+                    const Duration(seconds: 6)) ||
             !(ModalRoute.of(context)?.isCurrent ?? true)) {
           return;
         }
 
-        final slideCount = _homeTrendingMovies().length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
+        final visibleCount = _homeTrendingMovies().length;
 
         if (visibleCount == 0) return;
 
@@ -1338,44 +2480,99 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _initializeApp() async {
-    await _loadCachedMovies();
-    await _loadSavedPreferences();
-    await _loadAppSettings();
-    final savedHistory = await MovieCache.getList(MovieCache.historyKey);
-    final prefs = await SharedPreferences.getInstance();
-    final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
-    final savedDownloads = await MovieCache.getDownloads();
-    if (mounted) {
+    try {
+      // Start the reachability probe and small preference reads while the
+      // essential cached Home catalogue is being restored.
+      final onlineFuture = InternetService.isOnline();
+      final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
+      final prefsFuture = SharedPreferences.getInstance();
+      unawaited(_loadSavedPreferences().catchError((_) {}));
+      unawaited(_loadAppSettings());
+
+      await _loadCachedMovies();
+      if (!mounted) return;
+
+      final savedDownloadsFuture = MovieCache.getDownloads();
+      final savedHistory = await savedHistoryFuture;
+      final prefs = await prefsFuture;
+      final savedSearchHistory =
+          prefs.getStringList(_searchHistoryPrefsKey) ?? const <String>[];
+      // Publication state is scoped to the exact Admin row, never a MovieBox
+      // duplicate that happens to share its TMDB ID or title/year.
+      _unpublishedCatalogKeys
+        ..clear()
+        ..addAll(
+          (prefs.getStringList('flixora_unpublished_catalog_keys') ?? const [])
+              .where((key) => key.startsWith('admin:id:')),
+        );
+      _checkedCatalogVisibilityKeys
+        ..clear()
+        ..addAll(
+          (prefs.getStringList('flixora_checked_catalog_visibility_keys') ?? const [])
+              .where((key) => key.startsWith('admin:id:')),
+        );
+      final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
+      if (mounted) {
+        setState(() {
+          _watchHistory
+            ..clear()
+            ..addAll(savedHistory);
+          _searchHistory
+            ..clear()
+            ..addAll(
+              savedSearchHistory
+                  .map((query) => query.trim())
+                  .where((query) => query.isNotEmpty)
+                  .take(20),
+            );
+          _studyMode = savedStudyMode;
+        });
+      }
+
+      // Download verification can scan many files, so it stays off the first
+      // Home frame and fills the Library in the background.
+      unawaited(savedDownloadsFuture.then((savedDownloads) {
+        if (!mounted) return;
+        setState(() {
+          _downloads
+            ..clear()
+            ..addAll(savedDownloads);
+        });
+      }).catchError((_) {}));
+
+      final online = await onlineFuture;
+      if (!mounted) return;
       setState(() {
-        _watchHistory
-          ..clear()
-          ..addAll(savedHistory);
-        _studyMode = savedStudyMode;
-        _downloads
-          ..clear()
-          ..addAll(savedDownloads);
+        _online = online;
+        _connectionKnown = true;
       });
-    }
 
-    if (!mounted) return;
-
-    final online = await InternetService.isOnline();
-
-    if (!mounted) return;
-
-    setState(() {
-      _online = online;
-      _connectionKnown = true;
-    });
-
-    if (online) {
-      await Future.wait<void>([loadHome(), _loadOttProviders()]);
-    } else {
+      if (online) {
+        await loadHome();
+      } else {
+        // If the essential cache is empty, let the smaller secondary cache
+        // finish before showing the offline state.
+        if (_allMovies().isEmpty) await _loadSecondaryCachedMovies();
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          homeError = _allMovies().isEmpty ? 'offline' : null;
+        });
+      }
+    } catch (error) {
+      debugPrint('FLIXORA startup failed: $error');
+      if (!mounted) return;
       setState(() {
         loading = false;
-        if (_allMovies().isEmpty) homeError = 'offline';
+        _connectionKnown = true;
+        if (_allMovies().isEmpty) {
+          homeError = _online
+              ? 'Unable to load movies. Pull down to retry.'
+              : 'offline';
+        }
       });
-    }  }
+    }
+  }
 
   Future<void> _loadAppSettings() async {
     try {
@@ -1484,6 +2681,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCachedMovies() async {
+    final cachedMovieBoxSectionsFuture = MovieCache.getMovieBoxSections();
+    final cachedTrendingDataFuture = Future.wait<List<Movie>>([
+      MovieCache.getList(MovieCache.playableTrendingMoviesKey),
+      MovieCache.getList(MovieCache.tmdbTrendingMoviesKey),
+    ]);
+    // Load the first-screen essentials first. Regional catalogues and less
+    // frequently used categories are restored after Home is already visible.
     final results = await Future.wait<List<Movie>>([
       MovieCache.getList(MovieCache.trendingKey),
       MovieCache.getList(MovieCache.popularKey),
@@ -1493,19 +2697,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.popularTvKey),
       MovieCache.getList(MovieCache.topRatedTvKey),
       MovieCache.getList(MovieCache.animeKey),
-      MovieCache.getList(MovieCache.koreanKey),
-      MovieCache.getList(MovieCache.bengaliMoviesKey),
-      MovieCache.getList(MovieCache.bengaliTvKey),
       MovieCache.getList(MovieCache.flixoraKey),
-      MovieCache.getList(MovieCache.bollywoodMoviesKey),
-      MovieCache.getList(MovieCache.hollywoodMoviesKey),
-      MovieCache.getList(MovieCache.southIndianMoviesKey),
-      MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
+    final cachedMovieBoxSections = (await cachedMovieBoxSectionsFuture)
+        .where((section) => !section.isFlixoraOriginal)
+        .toList(growable: false);
+    final cachedTrendingData = await cachedTrendingDataFuture;
     if (!mounted) return;
 
     setState(() {
+      _movieBoxSections = cachedMovieBoxSections;
+      _trendingMovies = cachedTrendingData[0];
+      _tmdbTrendingMovies = cachedTrendingData[1];
       trending = results[0];
       popular = results[1];
       latest = results[2];
@@ -1514,40 +2718,82 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       popularTv = results[5];
       topRatedTv = results[6];
       anime = results[7];
-      koreanDrama = results[8];
-      bengaliMovies = results[9];
-      bengaliTv = results[10];
-      flixoraMovies = results[11];
-      bollywoodMovies = results[12];
-      hollywoodMovies = results[13];
-      southIndianMovies = results[14];
-      indianDramaTv = results[15];
+      flixoraMovies = results[8];
       loading = false;
       homeError = null;
     });
+
+    // The remaining cached categories no longer block the first Home render.
+    unawaited(_loadSecondaryCachedMovies());
+  }
+
+  Future<void> _loadSecondaryCachedMovies() {
+    return _secondaryCacheLoadFuture ??= _loadSecondaryCachedMoviesInternal();
+  }
+
+  Future<void> _loadSecondaryCachedMoviesInternal() async {
+    try {
+      final results = await Future.wait<List<Movie>>([
+        MovieCache.getList(MovieCache.koreanKey),
+        MovieCache.getList(MovieCache.bengaliMoviesKey),
+        MovieCache.getList(MovieCache.bengaliTvKey),
+        MovieCache.getList(MovieCache.bollywoodMoviesKey),
+        MovieCache.getList(MovieCache.hollywoodMoviesKey),
+        MovieCache.getList(MovieCache.southIndianMoviesKey),
+        MovieCache.getList(MovieCache.indianDramaTvKey),
+        MovieCache.getList(MovieCache.trendingHindiDubbedKey),
+        MovieCache.getList(MovieCache.trendingBollywoodKey),
+        MovieCache.getList(MovieCache.trendingHollywoodKey),
+      ]);
+      if (!mounted) return;
+
+      setState(() {
+        if (koreanDrama.isEmpty) koreanDrama = results[0];
+        if (bengaliMovies.isEmpty) bengaliMovies = results[1];
+        if (bengaliTv.isEmpty) bengaliTv = results[2];
+        if (bollywoodMovies.isEmpty) bollywoodMovies = results[3];
+        if (hollywoodMovies.isEmpty) hollywoodMovies = results[4];
+        if (southIndianMovies.isEmpty) southIndianMovies = results[5];
+        if (indianDramaTv.isEmpty) indianDramaTv = results[6];
+        if (_trendingHindiDubbedMovies.isEmpty) {
+          _trendingHindiDubbedMovies = results[7];
+        }
+        if (_trendingBollywoodMovies.isEmpty) {
+          _trendingBollywoodMovies = results[8];
+        }
+        if (_trendingHollywoodMovies.isEmpty) {
+          _trendingHollywoodMovies = results[9];
+        }
+        if (_trendingMovies.isEmpty) {
+          _trendingMovies = _deduplicateMovies([
+            ...results[7],
+            ...results[8],
+            ...results[9],
+          ]);
+        }
+        if (_allMovies().isNotEmpty) {
+          loading = false;
+          homeError = null;
+        }
+      });
+      _syncFeaturedCarouselAfterDataChange();
+    } catch (error) {
+      debugPrint('Secondary cached catalogue restore failed: $error');
+    }
   }
 
   void _listenToConnectivity() {
     _connectivitySubscription =
         Connectivity().onConnectivityChanged.listen(
-      (results) async {
-        final hasNetwork = !results.contains(ConnectivityResult.none);
-
-        if (!hasNetwork) {
-          if (!mounted) return;
-
-          setState(() {
-            _online = false;
-            _connectionKnown = true;
-            if (_allMovies().isEmpty) homeError = 'offline';
-          });
-          return;
-        }
-
-        final online = await InternetService.isOnline();
+      (_) async {
+        InternetService.invalidateCache();
+        // Connectivity events can briefly report "none" during Wi-Fi/mobile
+        // hand-offs. Confirm real internet reachability before showing Offline.
+        final online = await InternetService.isOnline(forceRefresh: true);
 
         if (!mounted) return;
 
+        if (online == _online && _connectionKnown) return;
         final wasOffline = !_online;
 
         setState(() {
@@ -1556,10 +2802,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
 
         if (online && wasOffline) {
-          await loadHome();
+          await loadHome(forceRefresh: true);
 
           if (_search.trim().isNotEmpty) {
-            searchMovies(_search);
+            unawaited(searchMovies(_search));
           }
         }
       },
@@ -1570,6 +2816,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshConnectionStatus();
+      final lastRefresh = _lastHomeRefreshAt;
+      if (lastRefresh == null ||
+          DateTime.now().difference(lastRefresh) >=
+              const Duration(minutes: 15)) {
+        // Refresh MovieBox home and current releases when the app returns
+        // after a while, without polling while the user is actively watching.
+        unawaited(loadHome(forceRefresh: true));
+      }
     }
   }
 
@@ -1577,8 +2831,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted || _checkingConnection) return;
     _checkingConnection = true;
     try {
-      final online = await InternetService.isOnline();
-      if (!mounted || online == _online) return;
+      final online = await InternetService.isOnline(forceRefresh: true);
+      if (!mounted) return;
+      if (online == _online) {
+        if (_backgroundCatalogueWorkPending &&
+            _canRunBackgroundCatalogueWork) {
+          unawaited(_runBackgroundCatalogueWork());
+        }
+        return;
+      }
 
       final wasOffline = !_online;
       setState(() {
@@ -1588,9 +2849,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (online && wasOffline) {
-        await Future.wait<void>([loadHome(), _loadOttProviders()]);
+        await loadHome(forceRefresh: true);
         if (_search.trim().isNotEmpty) {
-          searchMovies(_search);
+          unawaited(searchMovies(_search));
         }
       }
     } finally {
@@ -1603,6 +2864,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _networkTimer?.cancel();
+    _catalogueRefreshTimer?.cancel();
     _searchTimer?.cancel();
     _connectivitySubscription?.cancel();
     _authSubscription?.cancel();
@@ -1613,14 +2875,379 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  Future<void> loadHome() async {
-    if (_refreshing) return;
+  bool get _canRunBackgroundCatalogueWork {
+    if (!mounted ||
+        !_online ||
+        _tab != 0 ||
+        _searchOpen ||
+        _showRanking ||
+        _isOpeningTitle) {
+      return false;
+    }
+    final now = DateTime.now();
+    if (_lastHomeScrollAt != null &&
+        now.difference(_lastHomeScrollAt!) < const Duration(seconds: 6)) {
+      return false;
+    }
+    if (_lastCarouselInteractionAt != null &&
+        now.difference(_lastCarouselInteractionAt!) <
+            const Duration(seconds: 8)) {
+      return false;
+    }
+    return ModalRoute.of(context)?.isCurrent ?? true;
+  }
 
+  Future<void> _runBackgroundCatalogueWork({
+    bool forceRefresh = false,
+  }) async {
+    if (_backgroundCatalogueWorkRunning) {
+      _backgroundCatalogueWorkPending = true;
+      return;
+    }
+    _backgroundCatalogueWorkRunning = true;
+    _backgroundCatalogueWorkPending = false;
+    try {
+      // Let the first Home frame and immediate user interaction take priority.
+      await Future.delayed(const Duration(seconds: 5));
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshCatalogVisibility(forceRefresh: true);
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshSecondaryCatalogues(forceRefresh: forceRefresh);
+      if (!_canRunBackgroundCatalogueWork) {
+        _backgroundCatalogueWorkPending = true;
+        return;
+      }
+
+      await _refreshPlayableTrendingMovies();
+      if (!_canRunBackgroundCatalogueWork ||
+          _secondaryCatalogueNextIndex > 0) {
+        _backgroundCatalogueWorkPending = true;
+      }
+    } catch (error) {
+      _backgroundCatalogueWorkPending = true;
+      debugPrint('Background catalogue coordinator failed: $error');
+    } finally {
+      _backgroundCatalogueWorkRunning = false;
+      if (_backgroundCatalogueWorkPending &&
+          _canRunBackgroundCatalogueWork) {
+        unawaited(_runBackgroundCatalogueWork());
+      }
+    }
+  }
+
+  Future<void> _refreshMovieBoxHome({bool forceRefresh = false}) async {
+    if (!_online) return;
+    try {
+      try {
+        await MovieBoxService.enableSafeContentFilter();
+      } catch (error) {
+        debugPrint('MovieBox safe-content filter setup failed: $error');
+      }
+      final rawSections = await MovieBoxService.home(forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 15));
+      final sections = rawSections
+          .map(MovieBoxHomeSection.fromApi)
+          .where((section) =>
+              section.items.isNotEmpty && !section.isFlixoraOriginal)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() {
+        _movieBoxSections = sections;
+        if (_allMovies().isNotEmpty) {
+          loading = false;
+          homeError = null;
+        }
+      });
+      for (final item in sections.expand((section) => section.items)) {
+        _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
+      }
+      await MovieCache.saveMovieBoxSections(sections);
+      unawaited(_refreshCatalogVisibility(
+        candidates: sections.expand((section) => section.items).toList(),
+        forceRefresh: true,
+      ));
+    } catch (error) {
+      debugPrint('MovieBox/WeFeed home feed unavailable: $error');
+    }
+  }
+
+  Future<void> _refreshSecondaryCatalogues({bool forceRefresh = false}) async {
+    if (_refreshingSecondaryCatalogues || !_online) return;
+    final lastRefresh = _lastSecondaryCataloguesRefreshAt;
+    if (!forceRefresh &&
+        _secondaryCatalogueNextIndex == 0 &&
+        lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(minutes: 15)) {
+      return;
+    }
+    _refreshingSecondaryCatalogues = true;
+    try {
+      final loaders = <Future<List<Movie>> Function()>[
+        // TV and ongoing releases are loaded after the first movie rows appear.
+        () => TmdbService.getMovies('trending/tv/week', forceRefresh: forceRefresh)
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/popular', forceRefresh: forceRefresh)
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/top_rated', forceRefresh: forceRefresh)
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/on_the_air', forceRefresh: forceRefresh)
+            .catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('tv/airing_today', forceRefresh: forceRefresh)
+            .catchError((_) => <Movie>[]),
+
+        // Fetch pages 2-3 without downloading page 1 again.
+        () => TmdbService.getMovies(
+          'trending/movie/week', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/popular', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/now_playing', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'movie/top_rated', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'trending/tv/week', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'tv/popular', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies(
+          'tv/top_rated', pages: 2, startPage: 2,
+          forceRefresh: forceRefresh,
+        ).catchError((_) => <Movie>[]),
+
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_genres': '16',
+          'with_origin_country': 'JP',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'ko',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'bn',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'bn',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'en',
+          'with_origin_country': 'US',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ta',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'te',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ml',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'kn',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'ja',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'zh',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'th',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+      ];
+
+      final results = List<List<Movie>>.generate(
+        loaders.length,
+        (_) => <Movie>[],
+        growable: false,
+      );
+      var completedAll = true;
+      // Keep the background workload small and pause between batches whenever
+      // the user starts scrolling, searching, changing tabs or opening a title.
+      for (var start = _secondaryCatalogueNextIndex;
+          start < loaders.length;
+          start += 2) {
+        if (!_canRunBackgroundCatalogueWork) {
+          completedAll = false;
+          break;
+        }
+        final batch = await Future.wait<List<Movie>>(
+          loaders.skip(start).take(2).map((load) => load()),
+        );
+        for (var offset = 0; offset < batch.length; offset++) {
+          results[start + offset] = batch[offset];
+        }
+        _secondaryCatalogueNextIndex = start + batch.length;
+        if (_secondaryCatalogueNextIndex < loaders.length) {
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        trendingTv = _deduplicateMovies([
+          ...trendingTv,
+          ...results[0],
+          ...results[3],
+          ...results[4],
+          ...results[9],
+        ]);
+        popularTv = _deduplicateMovies([
+          ...popularTv,
+          ...results[1],
+          ...results[10],
+        ]);
+        topRatedTv = _deduplicateMovies([
+          ...topRatedTv,
+          ...results[2],
+          ...results[11],
+        ]);
+
+        trending = _deduplicateMovies([...trending, ...results[5]]);
+        popular = _deduplicateMovies([...popular, ...results[6]]);
+        latest = _deduplicateMovies([...latest, ...results[7]]);
+        topRated = _deduplicateMovies([...topRated, ...results[8]]);
+
+        final onAirAnime = [
+          ...results[0],
+          ...results[3],
+          ...results[4],
+          ...results[9],
+        ].where(_isAnimeTitle);
+        anime = _deduplicateMovies([...anime, ...results[12], ...onAirAnime]);
+
+        final asianDrama = [
+          ...results[13],
+          ...results[23],
+          ...results[24],
+          ...results[25],
+        ];
+        if (asianDrama.isNotEmpty) {
+          koreanDrama = _deduplicateMovies([...koreanDrama, ...asianDrama]);
+        }
+        if (results[14].isNotEmpty) {
+          bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[14]]);
+        }
+        if (results[15].isNotEmpty) {
+          bengaliTv = _deduplicateMovies([...bengaliTv, ...results[15]]);
+        }
+
+        final bollywood = [...results[16], ...results[26]];
+        if (bollywood.isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...bollywood]);
+        }
+        if (results[17].isNotEmpty) {
+          hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[17]]);
+        }
+
+        final southIndian = [
+          ...results[18],
+          ...results[19],
+          ...results[20],
+          ...results[21],
+        ];
+        if (southIndian.isNotEmpty) {
+          southIndianMovies = _deduplicateMovies([
+            ...southIndianMovies,
+            ...southIndian,
+          ]);
+        }
+        if (results[22].isNotEmpty) {
+          indianDramaTv = _deduplicateMovies([
+            ...indianDramaTv,
+            ...results[22],
+          ]);
+        }
+      });
+
+      if (completedAll) {
+        _secondaryCatalogueNextIndex = 0;
+        _lastSecondaryCataloguesRefreshAt = DateTime.now();
+      } else {
+        _backgroundCatalogueWorkPending = true;
+      }
+      await Future.wait([
+        MovieCache.saveList(MovieCache.trendingKey, trending),
+        MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
+        MovieCache.saveList(MovieCache.popularKey, popular),
+        MovieCache.saveList(MovieCache.latestKey, latest),
+        MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
+        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
+        MovieCache.saveList(MovieCache.animeKey, anime),
+        MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
+        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
+        MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
+        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
+        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
+        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
+        MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
+      ]);
+      // Visibility refresh and playable-stream verification are coordinated
+      // by _runBackgroundCatalogueWork; do not launch duplicate jobs here.
+    } catch (error) {
+      debugPrint('Background catalogue refresh failed: $error');
+    } finally {
+      _refreshingSecondaryCatalogues = false;
+    }
+  }
+
+  Future<void> loadHome({bool forceRefresh = false}) async {
+    if (_refreshing) {
+      _homeRefreshQueued = true;
+      return;
+    }
     _refreshing = true;
 
     try {
-      final online = await InternetService.isOnline();
-
+      final online = await InternetService.isOnline(forceRefresh: forceRefresh);
       if (!mounted) return;
 
       if (!online) {
@@ -1640,172 +3267,149 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         homeError = null;
       });
 
-      final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/popular').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/now_playing').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/top_rated').catchError((_) => <Movie>[]),
-        TmdbService.getMovies('trending/tv/week', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/popular', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/top_rated', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_genres': '16', 'with_origin_country': 'JP',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ko',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'en', 'with_origin_country': 'US',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ta', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'te', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ml', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'kn', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ja',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'zh',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'th',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        // Hindi-language films made outside India are also frequently
-        // catalogued as Bollywood titles; include them without the country gate.
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-      ]);
+      // MovieBox sections can render independently while TMDB is loading.
+      unawaited(_refreshMovieBoxHome(forceRefresh: forceRefresh));
 
-      if (!mounted) return;
+      var completedRequests = 0;
+      const primaryRequestCount = 5;
 
-      setState(() {
-        trending = results[0].isNotEmpty ? results[0] : trending;
-        popular = results[1].isNotEmpty ? results[1] : popular;
-        latest = results[2].isNotEmpty ? results[2] : latest;
-        topRated = results[3].isNotEmpty ? results[3] : topRated;
-        // Keep the last successful catalogue when a transient TMDB request
-        // fails, so a temporary API issue does not empty a whole Home section.
-        trendingTv = results[4].isNotEmpty ? results[4] : trendingTv;
-        popularTv = results[5].isNotEmpty ? results[5] : popularTv;
-        topRatedTv = results[6].isNotEmpty ? results[6] : topRatedTv;
-        anime = results[7].isNotEmpty ? results[7] : anime;
-        bengaliMovies = results[9].isNotEmpty ? results[9] : bengaliMovies;
-        bengaliTv = results[10].isNotEmpty ? results[10] : bengaliTv;
-        flixoraMovies = results[11].isNotEmpty ? results[11] : flixoraMovies;
-
-        final refreshedTrendingMovies = _homeTrendingMovies();
-        if (refreshedTrendingMovies.isNotEmpty) {
-          trending = refreshedTrendingMovies;
+      Future<void> loadPrimarySection(
+        Future<List<Movie>> request,
+        void Function(List<Movie>) apply,
+        Future<void> Function() persist,
+      ) async {
+        List<Movie> movies;
+        try {
+          movies = await request;
+        } catch (error) {
+          debugPrint('Home section request failed: $error');
+          movies = <Movie>[];
         }
+        completedRequests++;
 
-        final refreshedBollywood = [...results[12], ...results[22]];
-        if (refreshedBollywood.isNotEmpty) {
-          bollywoodMovies = _deduplicateMovies(refreshedBollywood);
+        if (!mounted) return;
+        if (movies.isNotEmpty) {
+          setState(() {
+            apply(movies);
+            loading = false;
+            homeError = null;
+          });
+          _syncFeaturedCarouselAfterDataChange();
+          await persist();
+        } else if (completedRequests == primaryRequestCount &&
+            _allMovies().isEmpty) {
+          setState(() {
+            loading = false;
+            homeError = 'Unable to load movies.';
+          });
         }
-        if (results[13].isNotEmpty) hollywoodMovies = results[13];
+      }
 
-        final refreshedSouthIndian = [
-          ...results[14], ...results[15], ...results[16], ...results[17],
-        ];
-        if (refreshedSouthIndian.isNotEmpty) {
-          southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
-        }
-
-        if (results[18].isNotEmpty) indianDramaTv = results[18];
-        final refreshedKoreanDrama = [
-          ...results[8], ...results[19], ...results[20], ...results[21],
-        ];
-        if (refreshedKoreanDrama.isNotEmpty) {
-          koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
-        }
-        loading = false;
-
-        if (_allMovies().isEmpty) {
-          homeError = 'Unable to load movies.';
-        } else {
-          homeError = null;
-        }
-
-        final slideCount = _homeTrendingMovies().length;
-        final visibleCount = slideCount < 5 ? slideCount : 5;
-
-        if (visibleCount == 0) {
-          _slide = 0;
-        } else if (_slide >= visibleCount) {
-          _slide = 0;
-        }
-      });
-
-      _syncFeaturedCarouselAfterDataChange();
-
+      // Each section is painted and cached as soon as its own request finishes;
+      // the slowest endpoint no longer blocks every Home card.
       await Future.wait([
-        MovieCache.saveList(MovieCache.trendingKey, trending),
-        MovieCache.saveList(MovieCache.popularKey, popular),
-        MovieCache.saveList(MovieCache.latestKey, latest),
-        MovieCache.saveList(MovieCache.topRatedKey, topRated),
-        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
-        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
-        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
-        MovieCache.saveList(MovieCache.animeKey, anime),
-        MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
-        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
-        MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
-        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
-        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
-        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
-        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
-        MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
+        loadPrimarySection(
+          TmdbService.getMovies('trending/movie/week', forceRefresh: forceRefresh),
+          (movies) {
+            _tmdbTrendingMovies = movies;
+            trending = movies;
+            final composed = _homeTrendingMovies();
+            if (composed.isNotEmpty) trending = composed;
+          },
+          () async {
+            await Future.wait([
+              MovieCache.saveList(MovieCache.trendingKey, trending),
+              MovieCache.saveList(
+                MovieCache.tmdbTrendingMoviesKey,
+                _tmdbTrendingMovies,
+              ),
+            ]);
+          },
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/popular', forceRefresh: forceRefresh),
+          (movies) => popular = movies,
+          () => MovieCache.saveList(MovieCache.popularKey, popular),
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/now_playing', forceRefresh: forceRefresh),
+          (movies) => latest = movies,
+          () => MovieCache.saveList(MovieCache.latestKey, latest),
+        ),
+        loadPrimarySection(
+          TmdbService.getMovies('movie/top_rated', forceRefresh: forceRefresh),
+          (movies) => topRated = movies,
+          () => MovieCache.saveList(MovieCache.topRatedKey, topRated),
+        ),
+        loadPrimarySection(
+          FlixoraMovieService.getPublishedMovies(),
+          (movies) {
+            flixoraMovies = movies;
+            final composed = _homeTrendingMovies();
+            if (composed.isNotEmpty) trending = composed;
+          },
+          () async {
+            await Future.wait([
+              MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+              MovieCache.saveList(MovieCache.trendingKey, trending),
+            ]);
+          },
+        ),
       ]);
-    } catch (e) {
+
+      _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
 
+      unawaited(_runBackgroundCatalogueWork(forceRefresh: forceRefresh));
+    } catch (error) {
+      if (!mounted) return;
       setState(() {
         loading = false;
-        if (_allMovies().isEmpty) homeError = e.toString();
+        if (_allMovies().isEmpty) homeError = error.toString();
       });
     } finally {
       _refreshing = false;
+      if (_homeRefreshQueued) {
+        _homeRefreshQueued = false;
+        if (mounted && _online) unawaited(loadHome(forceRefresh: true));
+      }
     }
   }
 
+  int _catalogueFingerprint() => Object.hashAll([
+        identityHashCode(_movieBoxSections), _movieBoxSections.length,
+        identityHashCode(flixoraMovies), flixoraMovies.length,
+        identityHashCode(_trendingMovies), _trendingMovies.length,
+        identityHashCode(_tmdbTrendingMovies), _tmdbTrendingMovies.length,
+        identityHashCode(trending), trending.length,
+        identityHashCode(popular), popular.length,
+        identityHashCode(latest), latest.length,
+        identityHashCode(topRated), topRated.length,
+        identityHashCode(trendingTv), trendingTv.length,
+        identityHashCode(popularTv), popularTv.length,
+        identityHashCode(topRatedTv), topRatedTv.length,
+        identityHashCode(anime), anime.length,
+        identityHashCode(koreanDrama), koreanDrama.length,
+        identityHashCode(bengaliMovies), bengaliMovies.length,
+        identityHashCode(bengaliTv), bengaliTv.length,
+        identityHashCode(bollywoodMovies), bollywoodMovies.length,
+        identityHashCode(hollywoodMovies), hollywoodMovies.length,
+        identityHashCode(southIndianMovies), southIndianMovies.length,
+        identityHashCode(indianDramaTv), indianDramaTv.length,
+        Object.hashAll(_unpublishedCatalogKeys),
+      ]);
+
   List<Movie> _allMovies() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _allMoviesCache;
+    if (cached != null && _allMoviesCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final combined = <Movie>[
+      ..._regularMovieBoxItems,
       ...flixoraMovies,
+      ..._trendingMovies,
       ...trending,
       ...popular,
       ...latest,
@@ -1823,15 +3427,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...indianDramaTv,
     ];
 
-    return _deduplicateMovies(combined);
+    final result = _deduplicateMovies(combined);
+    _allMoviesCacheFingerprint = fingerprint;
+    _allMoviesCache = result;
+    return result;
   }
 
   Future<void> searchMovies(String query) async {
     final text = query.trim();
+    final requestToken = ++_searchRequestToken;
 
     if (text.isEmpty) {
       if (!mounted) return;
-
       setState(() {
         _search = '';
         searchResults = [];
@@ -1842,61 +3449,139 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
+    final cachedSearch =
+        _deduplicateMovies(await MovieCache.getSearch(text));
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
 
-    final onlineNow = _online && await InternetService.isOnline();
-    if (!mounted) return;
+    if (cachedSearch.isNotEmpty) {
+      setState(() {
+        searchResults = cachedSearch;
+        _searchLoading = true;
+        _searchError = null;
+      });
+    }
+
+    final onlineNow = _online
+        ? await InternetService.isOnline()
+        : await InternetService.isOnline(forceRefresh: true);
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
     if (!onlineNow) {
       setState(() {
         _online = false;
         _connectionKnown = true;
-      });
-      final cached = await MovieCache.getSearch(text);
-      if (!mounted) return;
-      setState(() {
         _search = text;
-        searchResults = cached;
+        searchResults = cachedSearch;
         _searchLoading = false;
-        _searchError = cached.isEmpty ? 'Check your internet connection' : null;
+        _searchError =
+            cachedSearch.isEmpty ? 'Check your internet connection' : null;
       });
       return;
     }
 
     setState(() {
       _online = true;
+      _connectionKnown = true;
       _search = text;
+      if (cachedSearch.isNotEmpty) searchResults = cachedSearch;
       _searchLoading = true;
       _searchError = null;
     });
-    final results = await Future.wait<List<Movie>>([      TmdbService.search(text).catchError((_) => <Movie>[]),
-      FlixoraMovieService.searchPublishedMovies(text)
-          .catchError((_) => <Movie>[]),
+
+    final adminSearch = FlixoraMovieService.searchPublishedMovies(text)
+        .catchError((_) => <Movie>[]);
+    final tmdbSearch = TmdbService.search(text)
+        .catchError((_) => <Movie>[]);
+    final movieBoxSearch = MovieBoxService.search(text)
+        .timeout(const Duration(seconds: 10))
+        .then((result) {
+      final items = result['items'] as List? ?? const [];
+      return items
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((movie) => movie.movieBoxId.isNotEmpty)
+          .toList(growable: false);
+    }).catchError((_) => <Movie>[]);
+
+    var adminResults = <Movie>[];
+    var tmdbResults = <Movie>[];
+    var movieBoxItems = <Movie>[];
+    var completedRequests = 0;
+
+    void applySearchResults() {
+      if (!mounted ||
+          requestToken != _searchRequestToken ||
+          _search.trim().toLowerCase() != text.toLowerCase()) {
+        return;
+      }
+      final unique = _deduplicateMovies([
+        ...movieBoxItems,
+        ...adminResults,
+        ...tmdbResults,
+      ]);
+      setState(() {
+        searchResults = unique;
+        _searchLoading = completedRequests < 3;
+        _searchError =
+            unique.isEmpty && completedRequests == 3 ? 'No movies found.' : null;
+      });
+    }
+
+    await Future.wait<void>([
+      adminSearch.then<void>((items) {
+        adminResults = items;
+        completedRequests++;
+        applySearchResults();
+      }),
+      tmdbSearch.then<void>((items) {
+        tmdbResults = items;
+        completedRequests++;
+        applySearchResults();
+      }),
+      movieBoxSearch.then<void>((items) {
+        movieBoxItems = items;
+        completedRequests++;
+        applySearchResults();
+      }),
     ]);
 
-    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
 
-    final combined = <Movie>[
-      ...results[1],
-      ...results[0],
-    ];
-
-    final unique = _deduplicateMovies(combined);
-
+    await _refreshCatalogVisibility(
+      candidates: [...adminResults, ...movieBoxItems, ...tmdbResults],
+    );
+    final unique = _deduplicateMovies([
+      ...movieBoxItems,
+      ...adminResults,
+      ...tmdbResults,
+    ]);
     setState(() {
       searchResults = unique;
       _searchLoading = false;
       _searchError = unique.isEmpty ? 'No movies found.' : null;
     });
-
     await MovieCache.saveSearch(text, unique);
   }
 
   void _onSearchChanged(String value) {
+    _searchRequestToken++;
     _searchTimer?.cancel();
     final query = value.trim();
 
     if (query.isEmpty) {
+      _searchRequestToken++;
       setState(() {
         _search = '';
         _searchCategory = 'All';
@@ -1910,6 +3595,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     setState(() {
       _search = query;
       _searchCategory = 'All';
+      searchResults = [];
       _searchLoading = true;
       _searchError = null;
     });
@@ -1944,7 +3630,83 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await MovieCache.saveSaved(_saved);
   }
 
-  Future<void> addDownload(Movie movie) async {
+  Map<String, String> _decodeDownloadHeaders(String? raw) {
+    try {
+      final decoded = jsonDecode(raw ?? '{}');
+      if (decoded is Map) {
+        return Map<String, String>.from(
+          decoded.map((key, value) => MapEntry(key.toString(), value.toString())),
+        );
+      }
+    } catch (_) {}
+    return const <String, String>{};
+  }
+
+  Future<List<Map<String, String>>> _movieBoxDirectDownloadOptions(
+    Movie movie, {
+    required int season,
+    required int episode,
+  }) async {
+    final rawItem = movie.toMovieBoxMap();
+    // The player resolves streams from this same catalogue payload; avoid an
+    // extra rich-details request on the download button's critical path.
+    final detail = await MovieBoxService.playDetail(rawItem);
+    final response = await MovieBoxService.streams(
+      detail,
+      season: season,
+      episode: episode,
+      isSeries: movie.movieBoxIsSeries,
+    );
+    final links = response['links'] as List? ?? const [];
+    return links.whereType<Map>().map((link) {
+      final url = (link['url'] ?? '').toString();
+      final kind = (link['kind'] ?? '').toString().toLowerCase();
+      final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+      final isDirectMp4 = kind == 'mp4' || path.endsWith('.mp4');
+      if (!isDirectMp4) return <String, String>{};
+      final rawHeaders = link['headers'];
+      final headers = rawHeaders is Map
+          ? Map<String, String>.from(
+              rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : const <String, String>{};
+      return <String, String>{
+        'quality': (link['label'] ?? 'Original MP4').toString(),
+        'video_url': url,
+        'headers': jsonEncode(headers),
+      };
+    }).where((item) => item['video_url']?.isNotEmpty == true).toList();
+  }
+
+  Future<void> addDownload(
+    Movie movie, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
+    final preparationKey =
+        '${movie.source}:${movie.id}:${seasonNumber ?? 0}:${episodeNumber ?? 0}';
+    if (!_downloadPreparationKeys.add(preparationKey)) return;
+
+    // Give instant tap feedback while source lookup runs in the background.
+    _showMessage('Preparing download options...');
+    try {
+      await _prepareDownload(
+        movie,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+      );
+    } finally {
+      _downloadPreparationKeys.remove(preparationKey);
+    }
+  }
+
+  Future<void> _prepareDownload(
+    Movie movie, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
     final hasInternet = await InternetService.isOnline();
     if (!hasInternet) {
       if (mounted) {
@@ -1959,7 +3721,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (mounted && !_online) setState(() => _online = true);
 
-    final existing = _downloads.where((item) => item.movieId == movie.id).toList();
+    var resolvedSeason = seasonNumber ?? 0;
+    var resolvedEpisode = episodeNumber ?? 0;
+    if (movie.isMovieBox &&
+        movie.movieBoxIsSeries &&
+        (resolvedSeason <= 0 || resolvedEpisode <= 0)) {
+      try {
+        final seasons = await MovieBoxService.seasons(movie.movieBoxId);
+        if (seasons.isEmpty) {
+          _showMessage('No seasons are available to download for this series.');
+          return;
+        }
+        final season = seasons.firstWhere(
+          (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
+          orElse: () => seasons.first,
+        );
+        resolvedSeason = _toInt(season['se']);
+        final episodes = (season['episodes'] as List? ?? const [])
+            .map(_toInt)
+            .where((number) => number > 0)
+            .toList(growable: false);
+        if (resolvedEpisode <= 0 ||
+            (episodes.isNotEmpty && !episodes.contains(resolvedEpisode))) {
+          resolvedEpisode = episodes.isNotEmpty ? episodes.first : 1;
+        }
+      } catch (error) {
+        debugPrint('MovieBox season lookup for download failed: $error');
+        _showMessage('Could not load this series episode list. Please retry.');
+        return;
+      }
+    }
+
+    final existing = _downloads.where((item) =>
+        item.movieId == movie.id &&
+        (item.seasonNumber ?? 0) == resolvedSeason &&
+        (item.episodeNumber ?? 0) == resolvedEpisode).toList();
     if (existing.any((item) => item.status == 'Completed')) {
       _showMessage('This movie is already downloaded.');
       return;
@@ -1976,25 +3772,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final rawOptions = await FlixoraMovieService.getDownloadQualities(movie);
+    List<Map<String, String>> rawOptions;
+    try {
+      rawOptions = movie.isMovieBox
+          ? await _movieBoxDirectDownloadOptions(
+              movie,
+              season: resolvedSeason,
+              episode: resolvedEpisode,
+            )
+          : await FlixoraMovieService.getDownloadQualities(movie);
+    } catch (error) {
+      debugPrint('Download source lookup failed: $error');
+      rawOptions = <Map<String, String>>[];
+    }
     if (!mounted) return;
     if (rawOptions.isEmpty) {
       _showMessage(
-        'Download source is not available for this movie. Ask Admin to add a direct video file.',
+        movie.isMovieBox
+            ? 'Only HLS/DASH adaptive streams are available. Direct MP4 download is not available for this episode yet.'
+            : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
       );
       return;
     }
 
-    final options = await Future.wait(rawOptions.map((item) async {
-      final size = await DownloadManager.getRemoteFileSize(item['video_url']!);
-      return <String, String>{
-        ...item,
-        'size_bytes': size?.toString() ?? '',
-        'size_label': size == null
-            ? 'File size unavailable'
-            : DownloadManager.formatBytes(size),
-      };
-    }));
+    // Do not issue one or more HEAD/Range requests before showing the
+    // quality picker. The downloader reads Content-Length from the actual
+    // transfer response, so the size can be detected without delaying the tap.
+    final options = rawOptions
+        .map((item) => <String, String>{
+              ...item,
+              'size_bytes': '',
+              'size_label': 'Detected when download starts',
+            })
+        .toList(growable: false);
 
     if (!mounted) return;
     final selected = await showModalBottomSheet<Map<String, String>>(
@@ -2105,6 +3915,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       poster: movie.posterUrl,
       videoUrl: selectedUrl,
       quality: quality,
+      headers: _decodeDownloadHeaders(selected['headers']),
+      seasonNumber: resolvedSeason > 0 ? resolvedSeason : null,
+      episodeNumber: resolvedEpisode > 0 ? resolvedEpisode : null,
       totalBytes: expectedBytes,
       status: 'Waiting',
     );
@@ -2122,8 +3935,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     await DownloadManager.download(
       url: task.videoUrl,
-      fileName: '${task.title}_${task.quality}',
+      fileName: '${task.displayTitle}_${task.quality}',
       uniqueId: downloadId,
+      headers: task.headers,
       existingPartialPath: resume ? task.filePath : null,
       onQueued: (path, offset) {
         if (!mounted) return;
@@ -2188,7 +4002,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ..errorMessage = null;
         });
         await MovieCache.saveDownloads(_downloads);
-        _showMessage('Successfully downloaded ${task.title}.');
+        _showMessage('Successfully downloaded ${task.displayTitle}.');
       },
       onError: (message) {
         if (!mounted) return;
@@ -2348,74 +4162,198 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Movie? _cachedFlixoraMatch(Movie movie) {
-    if (movie.tmdbId <= 0) return null;
     for (final candidate in [...flixoraMovies, ...searchResults]) {
-      if (candidate.isFlixora &&
-          candidate.tmdbId == movie.tmdbId &&
-          candidate.mediaType == movie.mediaType) {
+      if (!candidate.isFlixora || candidate.mediaType != movie.mediaType) {
+        continue;
+      }
+      if (CatalogSourcePolicy.isAdminBlocked(
+        isAdmin: true,
+        visibilityKey: _catalogVisibilityKey(candidate),
+        blockedKeys: _unpublishedCatalogKeys,
+      )) {
+        continue;
+      }
+      if (movie.tmdbId > 0 && candidate.tmdbId == movie.tmdbId) {
         return candidate;
+      }
+      final sameTitle = _normalizedMovieTitle(candidate.title) ==
+          _normalizedMovieTitle(movie.title);
+      final sameYear = candidate.year == movie.year ||
+          candidate.year == 'N/A' ||
+          movie.year == 'N/A';
+      if (sameTitle && sameYear) return candidate;
+    }
+    return null;
+  }
+
+  Movie? _cachedMovieBoxMatch(Movie movie) {
+    if (movie.isMovieBox) return movie;
+    final key = _movieBoxMatchKey(movie);
+    final cached = _movieBoxMatchCache[key];
+    if (cached != null) return cached.withFallbackMetadata(movie);
+
+    final candidates = <Movie>[
+      ..._movieBoxSections.expand((section) => section.items),
+      ...searchResults.where((item) => item.isMovieBox),
+    ];
+    for (final candidate in candidates) {
+      if (candidate.mediaType != movie.mediaType) continue;
+      final sameTmdbId = movie.tmdbId > 0 &&
+          candidate.tmdbId > 0 &&
+          candidate.tmdbId == movie.tmdbId;
+      final sameTitle = _normalizedMovieTitle(candidate.title) ==
+          _normalizedMovieTitle(movie.title);
+      final sameYear = candidate.year == movie.year ||
+          candidate.year == 'N/A' ||
+          movie.year == 'N/A';
+      if (sameTmdbId || (sameTitle && sameYear)) {
+        final resolved = candidate.withFallbackMetadata(movie);
+        _movieBoxMatchCache[key] = resolved;
+        return resolved;
       }
     }
     return null;
+  }
+
+  Future<Movie?> _searchMovieBoxMatch(Movie movie) async {
+    if (movie.title.trim().isEmpty ||
+        (movie.mediaType != 'movie' && movie.mediaType != 'tv')) {
+      return null;
+    }
+    try {
+      final result = await MovieBoxService.search(movie.title, perPage: 20)
+          .timeout(const Duration(seconds: 5));
+      final items = (result['items'] as List? ?? const [])
+          .whereType<Map>()
+          .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
+          .where((item) => item.movieBoxId.isNotEmpty &&
+              item.mediaType == movie.mediaType)
+          .toList(growable: false);
+      final wantedTitle = _normalizedMovieTitle(movie.title);
+      for (final candidate in items) {
+        final sameTmdbId = movie.tmdbId > 0 &&
+            candidate.tmdbId > 0 &&
+            candidate.tmdbId == movie.tmdbId;
+        final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
+        final sameYear = candidate.year == movie.year ||
+            candidate.year == 'N/A' ||
+            movie.year == 'N/A';
+        if (sameTmdbId || (sameTitle && sameYear)) {
+          final resolved = candidate.withFallbackMetadata(movie);
+          _movieBoxMatchCache[_movieBoxMatchKey(movie)] = resolved;
+          return resolved;
+        }
+      }
+    } catch (error) {
+      debugPrint('MovieBox title lookup failed: $error');
+    }
+    return null;
+  }
+
+  Future<List<dynamic>> _findAdminRowsByTitleYear(
+    dynamic client,
+    Movie requested,
+  ) async {
+    if (client == null || requested.title.trim().isEmpty) return <dynamic>[];
+    final candidates = await client
+        .from('movies')
+        .select()
+        .ilike('title', requested.title.trim())
+        .eq('media_type', requested.mediaType)
+        .order('created_at', ascending: false)
+        .limit(10);
+    final rows = (candidates as List).whereType<Map>();
+    final wantedTitle = _normalizedMovieTitle(requested.title);
+    final matching = rows.where((row) {
+      final rowTitle = _normalizedMovieTitle((row['title'] ?? '').toString());
+      final rowDate = (row['release_date'] ?? '').toString();
+      final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
+      return rowTitle == wantedTitle &&
+          (requested.year == 'N/A' ||
+           rowYear == 'N/A' ||
+           rowYear == requested.year);
+    }).toList();
+    return matching.isEmpty ? <dynamic>[] : [matching.first];
   }
 
   /// Resolve every entry point to the same Admin-managed movie record.
   /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
     final client = supabaseClient;
+    final cachedMovieBox = _cachedMovieBoxMatch(requested);
+    final cachedAdmin = _cachedFlixoraMatch(requested);
 
-    if (!_online || client == null) {
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+    if (cachedMovieBox != null && cachedMovieBox.isMovieBox) {
+      return CatalogSourcePolicy.preferMovieBox<Movie>(
+        movieBoxMatch: cachedMovieBox.withFallbackMetadata(
+          cachedAdmin ?? requested,
+        ),
+        publishedAdminFallback: null,
+      );
     }
 
-    try {
-      dynamic response;
-      if (requested.isFlixora && requested.sourceId > 0) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('id', requested.sourceId)
-            .limit(1);
-      } else if (requested.tmdbId > 0 &&
-          (requested.mediaType == 'movie' || requested.mediaType == 'tv')) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('tmdb_id', requested.tmdbId)
-            .eq('media_type', requested.mediaType)
-            .order('created_at', ascending: false)
-            .limit(1);
+    if (!_online) {
+      if (requested.isFlixora &&
+          !CatalogSourcePolicy.isAdminBlocked(
+            isAdmin: true,
+            visibilityKey: _catalogVisibilityKey(requested),
+            blockedKeys: _unpublishedCatalogKeys,
+          )) {
+        return requested;
       }
-
-      if (response is List && response.isNotEmpty) {
-        final row = Map<String, dynamic>.from(response.first as Map);
-        // An Admin record takes priority even when it is unpublished.
-        if (row['is_published'] != true) return null;
-
-        final playable = await FlixoraMovieService.mapPlayableRows(
-          client,
-          [row],
-          includeWithoutVideo: true,
-        );
-        if (playable.isEmpty) return null;
-
-        // Keep the Admin source/status, but fill missing catalogue metadata
-        // from TMDB so incomplete Admin fields do not blank the details page.
-        return playable.first.withFallbackMetadata(requested);
+      if (cachedAdmin != null) return cachedAdmin;
+      if (!requested.isFlixora && requested.hasPlayableVideoUrl) {
+        return requested;
       }
-
-      if (requested.isFlixora) return null;
-      return _cachedFlixoraMatch(requested) ?? requested;
-    } catch (e) {
-      debugPrint('Could not resolve Admin movie record: $e');
-      // Keep the already-loaded published Admin entry usable if the network
-      // lookup fails; otherwise fall back to the requested TMDB catalogue item.
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ?? requested);
+      return null;
     }
+
+    // Start MovieBox and Admin resolution together. The previous sequential
+    // flow waited for MovieBox search before even asking Supabase.
+    final movieBoxLookup = _searchMovieBoxMatch(requested)
+        .timeout(
+          const Duration(seconds: 5),
+          onTimeout: () => null,
+        )
+        .catchError((_) => null);
+    final adminLookup = client == null
+        ? Future<Movie?>.value(null)
+        : _resolvePublishedAdminFallback(requested)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => null,
+            )
+            .catchError((_) => null);
+
+    final resolved = await Future.wait<Movie?>([
+      movieBoxLookup,
+      adminLookup,
+    ]);
+    final movieBoxMatch = resolved[0];
+    if (movieBoxMatch != null && movieBoxMatch.isMovieBox) {
+      return CatalogSourcePolicy.preferMovieBox<Movie>(
+        movieBoxMatch: movieBoxMatch.withFallbackMetadata(
+          cachedAdmin ?? requested,
+        ),
+        publishedAdminFallback: null,
+      );
+    }
+
+    // When Supabase is reachable, trust its publication result. Only use a
+    // cached Admin row when no Supabase client is configured at all.
+    final adminMatch = resolved[1] ?? (client == null ? cachedAdmin : null);
+    if (adminMatch != null) {
+      return CatalogSourcePolicy.preferMovieBox<Movie>(
+        movieBoxMatch: null,
+        publishedAdminFallback: adminMatch,
+      );
+    }
+
+    // A stale Admin card must not remain playable after its row is deleted
+    // or unpublished. Non-Admin direct sources remain valid fallbacks.
+    if (requested.isFlixora) return null;
+    if (requested.hasPlayableVideoUrl) return requested;
+    return null;
   }
 
   int _archiveMovieId(String identifier) {
@@ -2445,21 +4383,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_openMovie(movie));
   }
 
+  Future<bool> _refreshFromOfflineScreen() async {
+    if (!mounted) return false;
+    InternetService.invalidateCache();
+    final online = await InternetService.isOnline(forceRefresh: true);
+    if (!mounted) return false;
+
+    if (!online) {
+      setState(() {
+        _online = false;
+        _connectionKnown = true;
+        if (_allMovies().isEmpty) homeError = 'offline';
+      });
+      return false;
+    }
+
+    setState(() {
+      _online = true;
+      _connectionKnown = true;
+      homeError = null;
+    });
+    await loadHome(forceRefresh: true);
+    if (_search.trim().isNotEmpty) {
+      unawaited(searchMovies(_search));
+    }
+    return true;
+  }
+
   void _showNoInternetScreen() {
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => NoInternetScreen(),
+        builder: (_) => NoInternetScreen(
+          onRefresh: _refreshFromOfflineScreen,
+          closeOnReconnect: true,
+        ),
       ),
     );
+  }
+
+  bool _hasCompletedLocalDownload(Movie movie) {
+    return _downloads.any((task) {
+      final matchesMovie = task.movieId == movie.id ||
+          (movie.tmdbId > 0 && task.movieId == movie.tmdbId);
+      return matchesMovie &&
+          task.status == 'Completed' &&
+          task.filePath != null &&
+          File(task.filePath!).existsSync();
+    });
   }
 
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
-      final hasInternet = await InternetService.isOnline();
+      if (!_online && _hasCompletedLocalDownload(movie)) {
+        await _openResolvedPlayer(movie, movie);
+        return;
+      }
+      final hasInternet = _online ||
+          await InternetService.isOnline(forceRefresh: true);
       if (!mounted) return;
       if (!hasInternet) {
+        if (_hasCompletedLocalDownload(movie)) {
+          // Downloaded movies/episodes remain playable even when the
+          // catalogue itself is offline.
+          await _openResolvedPlayer(movie, movie);
+          return;
+        }
         setState(() {
           _online = false;
           _connectionKnown = true;
@@ -2478,6 +4468,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       final selectedMovie = resolvedMovie;
+      if (selectedMovie.isMovieBox) {
+        unawaited(MovieBoxService.prewarm(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ));
+      }
       final isFavourite = _favourites.contains(selectedMovie.id) ||
           _favourites.contains(movie.id);
       final isSaved = _saved.contains(selectedMovie.id) ||
@@ -2521,6 +4517,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Navigator.of(context).pop();
       }
 
+      if (!_online && _hasCompletedLocalDownload(movie)) {
+        await _openResolvedPlayer(movie, movie);
+        return;
+      }
+
+      if (!_online) {
+        final online = await InternetService.isOnline(forceRefresh: true);
+        if (!mounted) return;
+        setState(() {
+          _online = online;
+          _connectionKnown = true;
+          if (!online && _allMovies().isEmpty) homeError = 'offline';
+        });
+        if (!online) {
+          if (_hasCompletedLocalDownload(movie)) {
+            await _openResolvedPlayer(movie, movie);
+            return;
+          }
+          _showNoInternetScreen();
+          return;
+        }
+      }
+
       final selectedMovie = await _resolveMovieForOpening(movie);
       if (!mounted) return;
 
@@ -2529,6 +4548,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
 
+      if (selectedMovie.isMovieBox &&
+          !_hasCompletedLocalDownload(selectedMovie)) {
+        unawaited(MovieBoxService.prewarm(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ));
+      }
       await _openResolvedPlayer(selectedMovie, movie);
     } finally {
       _endTitleOpening();
@@ -2549,6 +4575,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Opens a player for a title that has already been resolved to the
   /// canonical Admin/TMDB record. The caller owns the tap lock.
+  Future<Movie?> _resolvePublishedAdminFallback(Movie movie) async {
+    final client = supabaseClient;
+    if (client == null) return null;
+
+    try {
+      dynamic response;
+      if (movie.sourceId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('id', movie.sourceId)
+            .eq('is_published', true)
+            .limit(1);
+      } else if (movie.tmdbId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('tmdb_id', movie.tmdbId)
+            .eq('media_type', movie.mediaType)
+            .eq('is_published', true)
+            .order('created_at', ascending: false)
+            .limit(1);
+      } else {
+        final matches = await _findAdminRowsByTitleYear(client, movie);
+        response = matches
+            .where((row) => row is Map && row['is_published'] == true)
+            .toList(growable: false);
+      }
+
+      if (response is! List || response.isEmpty) return null;
+      final row = Map<String, dynamic>.from(response.first as Map);
+      if (row['is_published'] != true) return null;
+
+      final playable = await FlixoraMovieService.mapPlayableRows(
+        client,
+        [row],
+      );
+      if (playable.isEmpty || !playable.first.hasPlayableVideoUrl) return null;
+      return playable.first.withFallbackMetadata(movie);
+    } catch (error) {
+      debugPrint('Published Admin fallback lookup failed: $error');
+      return null;
+    }
+  }
+
   Future<void> _openResolvedPlayer(
     Movie selectedMovie,
     Movie requestedMovie,
@@ -2576,10 +4647,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
+          localSeasonNumber: downloaded.seasonNumber,
+          localEpisodeNumber: downloaded.episodeNumber,
           recommendedMovies: _allMovies(),
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
           onDownload: () => addDownload(selectedMovie),
+          onDownloadEpisode: (season, episode) => addDownload(
+            selectedMovie,
+            seasonNumber: season,
+            episodeNumber: episode,
+          ),
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
           enablePip: _autoMiniPlayer,
@@ -2588,12 +4666,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (!selectedMovie.canAttemptPlayback) {
-      _showMessage('This title has no supported FLIXORA playback source.');
-      return;
-    }
-
-    final hasInternet = await InternetService.isOnline();
+    final hasInternet = _online ||
+        await InternetService.isOnline(forceRefresh: true);
     if (!mounted) return;
     if (!hasInternet) {
       setState(() {
@@ -2605,6 +4679,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!_online) setState(() => _online = true);
+
+    if (!selectedMovie.canAttemptPlayback) {
+      _showMessage('This title has no supported FLIXORA playback source.');
+      return;
+    }
+    // Open the player immediately. MoviePlayerScreen resolves MovieBox
+    // streams itself and shows its loading/error state without blocking Home.
     _recordWatch(selectedMovie);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
@@ -2613,6 +4694,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onMovieSelected: _playMovieFromPlayer,
         onSave: () => _toggleSaved(selectedMovie),
         onDownload: () => addDownload(selectedMovie),
+        onDownloadEpisode: (season, episode) => addDownload(
+          selectedMovie,
+          seasonNumber: season,
+          episodeNumber: episode,
+        ),
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
           enablePip: _autoMiniPlayer,
@@ -2631,6 +4717,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<String> _sectionFilterOptions(String section) {
     switch (section) {
       case 'Trending Movies':
+        return const [
+          'All', 'Bollywood', 'Hollywood', 'South Indian',
+          'Bengali', 'Asian', 'International', 'Hindi Dubbed',
+        ];
       case 'Popular Movies':
         return const ['Cinema', 'TOP Movies', 'New Bengali', 'Bollywood', 'Hollywood', 'South Indian', 'New Release'];
       case 'Trending TV Series':
@@ -2656,8 +4746,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  List<Movie> _filterSectionMovies(String section, List<Movie> source, String filter) {
-    final items = _deduplicateMovies(source);
+  List<Movie> _filterSectionMovies(
+    String section,
+    List<Movie> source,
+    String filter, {
+    bool sourceIsDeduplicated = false,
+  }) {
+    final items = sourceIsDeduplicated ? source : _deduplicateMovies(source);
+
+    if (section == 'Trending Movies') {
+      switch (filter) {
+        case 'Hindi Dubbed':
+          return _trendingHindiDubbedMovies;
+        case 'Bollywood':
+        case 'Hollywood':
+        case 'South Indian':
+        case 'Bengali':
+        case 'Asian':
+        case 'International':
+          return items
+              .where((movie) => _trendingMovieCategory(movie) == filter)
+              .toList(growable: false);
+        default:
+          return items;
+      }
+    }
 
     if (section.contains('TV Series')) {
       switch (filter) {
@@ -2666,8 +4779,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+            ..._regularMovieBoxItems
+                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+            ...flixoraMovies.where((title) =>
+                title.mediaType == 'tv' && _isAnimeTitle(title)),
           ]);
         case 'Asian Drama':
           return _deduplicateMovies(koreanDrama);
@@ -2722,21 +4837,526 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return items;
   }
 
-  Widget _sectionBlock(String title, List<Movie> movies) {
-    final allFilters = _sectionFilterOptions(title);
-    final filteredByOption = <String, List<Movie>>{
-      for (final filter in allFilters)
-        filter: _filterSectionMovies(title, movies, filter),
-    };
-    final filters = allFilters
-        .where((filter) => filteredByOption[filter]!.isNotEmpty)
+  Future<List<Movie>> _loadHotShortsCatalog() async {
+    if (!_online) return const <Movie>[];
+    final response = await MovieBoxService.shorts(
+      perPage: 24,
+      maxPages: 10,
+    ).timeout(const Duration(seconds: 45));
+    final rawItems = response['items'] as List? ?? const [];
+    return rawItems
+        .whereType<Map>()
+        .map((item) => Movie.fromMovieBox(
+              Map<String, dynamic>.from(item),
+            ))
+        .where((movie) => movie.movieBoxId.isNotEmpty)
         .toList(growable: false);
+  }
+
+  void _cacheHotShortsCatalog(List<Movie> items) {
+    if (!mounted || items.isEmpty) return;
+    final existing = _movieBoxSections
+        .where((section) => section.isHotShorts)
+        .expand((section) => section.items)
+        .toList(growable: false);
+    final merged = _deduplicateMovies([...existing, ...items]);
+    if (merged.isEmpty) return;
+
+    final updatedSections = <MovieBoxHomeSection>[
+      ..._movieBoxSections.where((section) => !section.isHotShorts),
+      MovieBoxHomeSection(title: 'Hot Shorts TV', items: merged),
+    ];
+    for (final item in merged) {
+      _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
+    }
+    setState(() => _movieBoxSections = updatedSections);
+    unawaited(MovieCache.saveMovieBoxSections(updatedSections));
+  }
+
+  void _openHotShorts(
+    List<Movie> source, {
+    int initialIndex = 0,
+    int? initialSeasonNumber,
+    int? initialEpisodeNumber,
+  }) {
+    final shorts = _deduplicateMovies(
+      source.where((movie) => movie.isMovieBox).toList(growable: false),
+    );
+    if (shorts.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => HotShortsScreen(
+          items: shorts,
+          initialIndex: initialIndex.clamp(0, shorts.length - 1).toInt(),
+          initialSeasonNumber: initialSeasonNumber,
+          initialEpisodeNumber: initialEpisodeNumber,
+          loadCatalogue: _online ? _loadHotShortsCatalog : null,
+          onCatalogueLoaded: _cacheHotShortsCatalog,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadHotShortEpisodes(
+    Movie movie, {
+    bool forceRefresh = false,
+  }) async {
+    final subjectId = movie.movieBoxId;
+    if (subjectId.isEmpty || !movie.movieBoxIsSeries) return;
+    if (_hotShortEpisodeLoading.contains(subjectId)) return;
+    if (!forceRefresh && _hotShortEpisodesById.containsKey(subjectId)) return;
+
+    if (mounted) {
+      setState(() {
+        _hotShortEpisodeLoading.add(subjectId);
+        _hotShortEpisodeErrors.remove(subjectId);
+        if (forceRefresh) _hotShortEpisodesById.remove(subjectId);
+      });
+    }
+
+    try {
+      final seasons = await MovieBoxService.seasons(subjectId)
+          .timeout(const Duration(seconds: 18));
+      final episodes = MovieBoxShortEpisode.fromSeasons(seasons);
+      if (!mounted) return;
+      setState(() {
+        _hotShortEpisodesById[subjectId] = episodes;
+        if (episodes.isEmpty) {
+          _hotShortEpisodeErrors[subjectId] =
+              'No episodes are available for this short.';
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _hotShortEpisodeErrors[subjectId] =
+            'Could not load episodes. Please try again.';
+      });
+      debugPrint('Hot Shorts episode list failed for ${movie.title}: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _hotShortEpisodeLoading.remove(subjectId));
+      }
+    }
+  }
+
+  void _toggleHotShortEpisodes(Movie movie) {
+    if (!movie.movieBoxIsSeries) return;
+    final subjectId = movie.movieBoxId;
+    if (_expandedHotShortId == subjectId) {
+      setState(() => _expandedHotShortId = null);
+      return;
+    }
+    setState(() => _expandedHotShortId = subjectId);
+    unawaited(_loadHotShortEpisodes(movie));
+  }
+
+  void _openHotShortEpisode(
+    List<Movie> shorts,
+    Movie movie,
+    MovieBoxShortEpisode episode,
+  ) {
+    final index = shorts.indexWhere(
+      (item) => item.movieBoxId == movie.movieBoxId,
+    );
+    if (index < 0) return;
+    _openHotShorts(
+      shorts,
+      initialIndex: index,
+      initialSeasonNumber: episode.season,
+      initialEpisodeNumber: episode.episode,
+    );
+  }
+
+  Widget _hotShortEpisodesPanel(Movie movie, List<Movie> shorts) {
+    final subjectId = movie.movieBoxId;
+    final episodes = _hotShortEpisodesById[subjectId] ??
+        const <MovieBoxShortEpisode>[];
+    final loading = _hotShortEpisodeLoading.contains(subjectId);
+    final error = _hotShortEpisodeErrors[subjectId];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 11, 14, 3),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: ink12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${movie.title} · Episodes',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Hide episodes',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() => _expandedHotShortId = null),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: ink60,
+                    size: 19,
+                  ),
+                ),
+              ],
+            ),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: LinearProgressIndicator(
+                  minHeight: 2,
+                  color: gold,
+                  backgroundColor: ink12,
+                ),
+              )
+            else if (error != null)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      error,
+                      style: const TextStyle(color: ink60, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => unawaited(
+                      _loadHotShortEpisodes(movie, forceRefresh: true),
+                    ),
+                    child: const Text('Retry'),
+                  ),
+                ],
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: episodes.map((episode) {
+                  return ActionChip(
+                    backgroundColor: const Color(0xFF303030),
+                    side: const BorderSide(color: ink12),
+                    label: Text(
+                      episode.label,
+                      style: const TextStyle(
+                        color: white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    onPressed: () =>
+                        _openHotShortEpisode(shorts, movie, episode),
+                  );
+                }).toList(growable: false),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hotShortsBlock(List<Movie> source) {
+    final shorts = _deduplicateMovies(
+      source.where((movie) => movie.isMovieBox).toList(growable: false),
+    );
+    if (shorts.isEmpty) return const SizedBox.shrink();
+
+    Movie? expandedShort;
+    for (final short in shorts) {
+      if (short.movieBoxId == _expandedHotShortId) {
+        expandedShort = short;
+        break;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 22, 12, 9),
+          child: Row(
+            children: [
+              const Icon(Icons.smart_display_rounded, color: gold, size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hot Shorts TV',
+                      style: TextStyle(
+                        color: white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'Vertical videos · Swipe up to watch next',
+                      style: TextStyle(color: ink60, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => _openHotShorts(shorts),
+                style: TextButton.styleFrom(
+                  foregroundColor: gold,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(36, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Watch',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 238,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            itemCount: shorts.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final movie = shorts[index];
+              final imageUrl = movie.posterUrl.isNotEmpty
+                  ? movie.posterUrl
+                  : movie.backdropUrl;
+              final expanded = _expandedHotShortId == movie.movieBoxId;
+              return SizedBox(
+                width: 132,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: Material(
+                        color: panel,
+                        borderRadius: BorderRadius.circular(13),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => _openHotShorts(
+                            shorts,
+                            initialIndex: index,
+                          ),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (imageUrl.isNotEmpty)
+                                FlixoraCachedImage(
+                                  imageUrl: imageUrl,
+                                  isOnline: _online,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 396,
+                                  memCacheHeight: 714,
+                                  placeholder: const ColoredBox(color: panel),
+                                  fallback: const ColoredBox(color: panel),
+                                )
+                              else
+                                const ColoredBox(color: panel),
+                              const DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      Color(0x55000000),
+                                      Colors.transparent,
+                                      Color(0xDD000000),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                top: 9,
+                                left: 9,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 7,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: gold,
+                                    borderRadius: BorderRadius.circular(5),
+                                  ),
+                                  child: const Text(
+                                    'SHORTS',
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.6,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const Center(
+                                child: CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: Color(0xAA000000),
+                                  child: Icon(
+                                    Icons.play_arrow_rounded,
+                                    color: Colors.white,
+                                    size: 28,
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                left: 9,
+                                right: 9,
+                                bottom: 10,
+                                child: Text(
+                                  movie.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black,
+                                        blurRadius: 8,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      height: 32,
+                      child: movie.movieBoxIsSeries
+                          ? TextButton.icon(
+                              onPressed: () => _toggleHotShortEpisodes(movie),
+                              icon: Icon(
+                                expanded
+                                    ? Icons.expand_less_rounded
+                                    : Icons.list_alt_rounded,
+                                size: 16,
+                              ),
+                              label: Text(
+                                expanded ? 'Hide Episodes' : 'Episodes',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              style: TextButton.styleFrom(
+                                foregroundColor: gold,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 30),
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            )
+                          : const Center(
+                              child: Text(
+                                'Single Part',
+                                style: TextStyle(
+                                  color: ink60,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+        if (expandedShort != null)
+          _hotShortEpisodesPanel(expandedShort, shorts),
+      ],
+    );
+  }
+
+  int _movieListFingerprint(List<Movie> movies) => Object.hashAll([
+        Object.hashAll(movies.map((movie) => Object.hashAll([
+              movie.id,
+              movie.tmdbId,
+              movie.sourceId,
+              movie.source,
+              movie.title,
+              movie.year,
+              movie.rating,
+              movie.mediaType,
+              movie.originalLanguage,
+              movie.originCountry,
+              movie.movieBoxId,
+              movie.movieBoxDetailPath,
+              movie.movieBoxIsSeries,
+              movie.movieBoxSubjectType,
+              movie.poster,
+              movie.backdrop,
+              movie.overview,
+              movie.releaseDate,
+              movie.videoUrl,
+              movie.downloadUrl,
+              movie.runtime,
+              Object.hashAll(movie.genres),
+              Object.hashAll(movie.audioLanguages),
+            ]))),
+        Object.hashAll(_unpublishedCatalogKeys),
+        _catalogueFingerprint(),
+      ]);
+
+  Widget _sectionBlock(String title, List<Movie> movies) {
+    final fingerprint = _movieListFingerprint(movies);
+    final cacheKey = title + ':' + fingerprint.toString();
+    var cached = _homeSectionCache[cacheKey];
+    if (cached == null) {
+      final allFilters = _sectionFilterOptions(title);
+      final deduplicatedMovies = _deduplicateMovies(movies);
+      final filteredByOption = <String, List<Movie>>{
+        for (final filter in allFilters)
+          filter: _filterSectionMovies(
+            title,
+            deduplicatedMovies,
+            filter,
+            sourceIsDeduplicated: true,
+          ),
+      };
+      final filters = allFilters
+          .where((filter) => filteredByOption[filter]!.isNotEmpty)
+          .toList(growable: false);
+      cached = _CachedHomeSection(
+        deduplicatedMovies: deduplicatedMovies,
+        filteredByOption: filteredByOption,
+        filters: filters,
+      );
+      if (_homeSectionCache.length >= 64) _homeSectionCache.clear();
+      _homeSectionCache[cacheKey] = cached;
+    }
+
+    final filters = cached.filters;
     final selected = filters.contains(_sectionFilters[title])
         ? _sectionFilters[title]!
         : (filters.isNotEmpty ? filters.first : '');
     final visibleMovies = filters.isEmpty
-        ? _deduplicateMovies(movies)
-        : filteredByOption[selected] ?? const <Movie>[];
+        ? cached.deduplicatedMovies
+        : cached.filteredByOption[selected] ?? const <Movie>[];
 
     // A category with no matching catalogue items is omitted instead of
     // leaving an empty strip on the Home page.
@@ -2934,7 +5554,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _featuredSlider() {
-    final slides = _homeTrendingMovies().take(5).toList(growable: false);
+    final slides = _homeTrendingMovies().toList(growable: false);
 
     if (slides.isEmpty) {
       return const SizedBox(height: 12);
@@ -2979,21 +5599,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
               itemBuilder: (context, index) {
                 final movie = slides[index];
+                final hasLandscapeBackdrop = movie.backdrop.trim().isNotEmpty &&
+                    movie.backdropUrl.isNotEmpty;
+                final heroImageUrl = hasLandscapeBackdrop
+                    ? movie.backdropUrl
+                    : movie.posterUrl;
+                // Keep every hero frame full-bleed and the same 16:9 size.
+                // Poster-only titles now fill the frame instead of shrinking
+                // into a small letterboxed image.
+                const heroImageFit = BoxFit.cover;
                 return GestureDetector(
                   onTap: _isOpeningTitle ? null : () => _playMovie(movie),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      movie.backdropUrl.isEmpty
-                          ? Container(color: panel)
-                          : FlixoraCachedImage(
-                              imageUrl: movie.backdropUrl,
+                      heroImageUrl.isEmpty
+                          ? const ColoredBox(color: Color(0xFF080808))
+                          : ColoredBox(
+                              color: const Color(0xFF080808),
+                              child: FlixoraCachedImage(
+                              imageUrl: heroImageUrl,
                               isOnline: _online,
-                              fit: BoxFit.cover,
+                              fit: heroImageFit,
                               memCacheWidth: heroCacheWidth,
                               memCacheHeight: heroCacheHeight,
                               placeholder: Container(color: panel),
-                              fallback: Container(color: panel),
+                              fallback: const ColoredBox(color: Color(0xFF080808)),
+                            ),
                             ),
                       const DecoratedBox(
                         decoration: BoxDecoration(
@@ -3209,10 +5841,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                       size: 18,
                                     ),
                                   )
-                                : FlixoraCachedImage(
+                                : ColoredBox(
+                                    color: const Color(0xFF111111),
+                                    child: FlixoraCachedImage(
                                     imageUrl: movie.posterUrl,
                                     isOnline: _online,
-                                    fit: BoxFit.cover,
+                                    fit: BoxFit.contain,
                                     memCacheWidth:
                                         (FeaturedCarouselLayout.posterWidth * 3).round(),
                                     memCacheHeight:
@@ -3228,6 +5862,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                         size: 18,
                                       ),
                                     ),
+                                  ),
                                   ),
                           ),
                         ),
@@ -3250,51 +5885,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (category) {
       case 'Trending':
         return _deduplicateMovies([
-          ...flixoraMovies, ...trending, ...trendingTv,
+          ...flixoraMovies,
+          ..._regularMovieBoxItems,
+          ...trending,
+          ...trendingTv,
         ]);
       case 'Movies':
         return _deduplicateMovies([
-          ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
+          ...flixoraMovies,
+          ..._regularMovieBoxItems,
+          ...trending, ...popular, ...latest, ...topRated,
         ].where((movie) => movie.mediaType == 'movie').toList());
       case 'TV Series':
         return _deduplicateMovies([
-          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
           ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ..._regularMovieBoxItems
+              .where((title) => title.mediaType == 'tv'),
+          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
         ]);
       case 'Anime':
         return _deduplicateMovies([
+          ...flixoraMovies.where(_isAnimeTitle),
+          ..._regularMovieBoxItems
+              .where(_isAnimeTitle),
           ...anime,
-          ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-              _isAnimeTitle(title)),
         ]);
       case 'Korean Drama':
         return _deduplicateMovies([
-          ...koreanDrama,
           ...flixoraMovies.where((title) =>
               title.mediaType == 'tv' &&
               title.originalLanguage.toLowerCase() == 'ko'),
+          ..._regularMovieBoxItems.where((title) =>
+              title.mediaType == 'tv' &&
+              (title.originCountry.toLowerCase().contains('korea') ||
+               title.originCountry.toUpperCase().contains('KR'))),
+          ...koreanDrama,
         ]);
       case 'Bengali':
         return _deduplicateMovies([
-          ...bengaliMovies, ...bengaliTv,
           ...flixoraMovies.where((title) =>
               title.originalLanguage.toLowerCase() == 'bn' ||
               title.originCountry.toUpperCase().contains('BD')),
+          ..._regularMovieBoxItems.where((title) =>
+              title.originCountry.toUpperCase().contains('BD') ||
+              title.originCountry.toLowerCase().contains('bangladesh')),
+          ...bengaliMovies, ...bengaliTv,
         ]);
       case 'Bengali Movies':
         return _deduplicateMovies([
-          ...bengaliMovies,
           ...flixoraMovies.where((title) =>
               title.mediaType == 'movie' &&
               (title.originalLanguage.toLowerCase() == 'bn' ||
                title.originCountry.toUpperCase().contains('BD'))),
+          ..._regularMovieBoxItems.where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originCountry.toUpperCase().contains('BD') ||
+               title.originCountry.toLowerCase().contains('bangladesh'))),
+          ...bengaliMovies,
         ]);
       case 'Drama':
         return _deduplicateMovies(_allMovies().where((title) =>
             title.genres.any((genre) =>
                 genre.toLowerCase().contains('drama'))).toList());
-      case 'Flixora Originals':
-        return flixoraMovies;
       default:
         return [];
     }
@@ -3322,7 +5974,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _syncFeaturedCarouselAfterDataChange() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final visibleCount = _homeTrendingMovies().take(5).length;
+      final visibleCount = _homeTrendingMovies().length;
       if (visibleCount == 0) {
         if (_sliderController.hasClients) _sliderController.jumpToPage(0);
         if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
@@ -3344,10 +5996,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   bool _hasHindiAudio(Movie movie) {
-    return movie.audioLanguages.any((language) {
-      final value = language.trim().toLowerCase();
-      return value == 'hi' || value.contains('hindi');
-    }) || movie.originalLanguage.toLowerCase() == 'hi';
+    return TrendingMovieEligibility.hasHindiAudioVariant(movie.audioLanguages) ||
+        movie.originalLanguage.toLowerCase() == 'hi';
   }
 
   String _displayTitle(Movie movie) {
@@ -3434,6 +6084,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _closeSearch() {
+    _searchRequestToken++;
     _searchTimer?.cancel();
     FocusScope.of(context).unfocus();
     setState(() {
@@ -3447,9 +6098,100 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _saveSearchHistory(String value) async {
+    final query = value.trim();
+    if (query.isEmpty) return;
+
+    final updated = <String>[
+      query,
+      ..._searchHistory.where(
+        (item) => item.toLowerCase() != query.toLowerCase(),
+      ),
+    ].take(20).toList(growable: false);
+
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
+  Future<void> _removeSearchHistory(String value) async {
+    final updated = _searchHistory
+        .where((item) => item.toLowerCase() != value.toLowerCase())
+        .toList(growable: false);
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
+  Widget _searchHistoryBlock() {
+    final items = _searchHistory.take(10).toList(growable: false);
+    if (items.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 7),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 3, bottom: 5),
+            child: Text(
+              'Search History',
+              style: TextStyle(
+                color: white,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          ...items.map((query) => SizedBox(
+                height: 39,
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.history_rounded,
+                      color: ink60,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _searchForTitle(query),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            query,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Remove search history item',
+                      onPressed: () => _removeSearchHistory(query),
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: ink60,
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
   Future<void> _searchForTitle(String title) async {
     if (!_searchOpen) await _openSearch();
     if (!mounted) return;
+    unawaited(_saveSearchHistory(title));
     _searchController.text = title;
     _searchController.selection = TextSelection.collapsed(
       offset: title.length,
@@ -3648,6 +6390,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       padding: const EdgeInsets.only(bottom: 20),
       children: [
+        _searchHistoryBlock(),
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 18, 16, 10),
           child: Text(
@@ -3785,6 +6528,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               onSubmitted: (value) {
                 _searchTimer?.cancel();
                 FocusScope.of(context).unfocus();
+                unawaited(_saveSearchHistory(value));
                 searchMovies(value);
               },
               style: const TextStyle(color: white, fontSize: 14),
@@ -3836,7 +6580,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             }
             _searchTimer?.cancel();
             FocusScope.of(context).unfocus();
-            _onSearchChanged(_searchController.text);
+            final query = _searchController.text;
+            unawaited(_saveSearchHistory(query));
+            _onSearchChanged(query);
           },
           style: TextButton.styleFrom(
             foregroundColor: gold,
@@ -3857,7 +6603,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _homeTopCategories() {
     const categories = [
       'Trending', 'Movies', 'TV Series', 'Anime', 'Drama',
-      'Bengali', 'Bengali Movies', 'Korean Drama', 'Flixora Originals',
+      'Bengali', 'Bengali Movies', 'Korean Drama',
     ];
     final available = categories.where(
       (category) => _moviesForHomeCategory(category).isNotEmpty,
@@ -4007,6 +6753,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _gemsForYou() {
+    final fingerprint = _catalogueFingerprint();
+    final cached = _gemsForYouCache;
+    if (cached != null && _gemsForYouCacheFingerprint == fingerprint) {
+      return cached;
+    }
+
     final titles = _deduplicateMovies([
       ...flixoraMovies,
       ...trending,
@@ -4016,9 +6768,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...popularTv,
       ...anime,
       ...koreanDrama,
+      ..._regularMovieBoxItems,
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
-    return titles.take(14).toList(growable: false);
+    final result = titles.take(14).toList(growable: false);
+    _gemsForYouCacheFingerprint = fingerprint;
+    _gemsForYouCache = result;
+    return result;
   }
 
   Widget _homeContent() {
@@ -4046,38 +6802,81 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
+    final movieBoxSections = _movieBoxSections
+        .where((section) =>
+            (!section.isBanner ||
+                section.title.toLowerCase().contains('coming soon')) &&
+            !section.title.toLowerCase().contains('trending') &&
+            !section.isFlixoraOriginal &&
+            !section.isHotShorts)
+        .toList(growable: false);
+    final movieBoxSectionWidgets = <Widget>[];
+    var hotShortsInserted = false;
+    for (final section in movieBoxSections) {
+      movieBoxSectionWidgets.add(
+        _sectionBlock(section.title, _movieBoxSectionItems(section)),
+      );
+      if (!hotShortsInserted &&
+          section.title.toLowerCase().contains('coming soon')) {
+        if (_hotShortsSection != null) {
+          movieBoxSectionWidgets.add(
+            _hotShortsBlock(_hotShortsSection!.items),
+          );
+        }
+        hotShortsInserted = true;
+      }
+    }
+    if (!hotShortsInserted && _hotShortsSection != null) {
+      movieBoxSectionWidgets.add(
+        _hotShortsBlock(_hotShortsSection!.items),
+      );
+    }
+
     return RefreshIndicator(
       color: gold,
       backgroundColor: panel,
-      onRefresh: loadHome,
-      child: ListView(
+      onRefresh: () => loadHome(forceRefresh: true),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) {
+          if (notification.metrics.axis == Axis.vertical &&
+              (notification is ScrollStartNotification ||
+                  notification is ScrollUpdateNotification)) {
+            _lastHomeScrollAt = DateTime.now();
+          }
+          return false;
+        },
+        child: ListView(
         key: const PageStorageKey<String>('flixora-home-trending'),
+        cacheExtent: 320,
         physics: const BouncingScrollPhysics(
           parent: AlwaysScrollableScrollPhysics(),
         ),
         children: [
           _homeTopCategories(),
-          _featuredSlider(),
-          _ottHomeSection(),
-          if (flixoraMovies.isNotEmpty) _sectionBlock('Flixora Originals', flixoraMovies),
-          _sectionBlock('Trending Movies', _homeTrendingMovies()),
+          RepaintBoundary(child: _featuredSlider()),
+          _sectionBlock('Trending Movies', _trendingMovies),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
+            ..._regularMovieBoxItems
+                .where((title) => title.mediaType == 'tv'),
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
+          ...movieBoxSectionWidgets,
           _homeCategoryCards(),
           _sectionBlock('Gems for you', _gemsForYou()),
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
-          ]).where((title) => title.mediaType == 'tv' && title.genres.any(
+            ..._regularMovieBoxItems,
+          ]).where((title) => title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
           _sectionBlock('Web Series', _webSeriesTitles()),
           _sectionBlock('Anime', _deduplicateMovies([
             ...anime,
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+            ..._regularMovieBoxItems
+                .where(_isAnimeTitle),
+            ...flixoraMovies.where(_isAnimeTitle),
           ])),
           _sectionBlock('Korean & Asian Drama', koreanDrama),
           _sectionBlock('Bengali Movies', bengaliMovies),
@@ -4095,6 +6894,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ])),
           const SizedBox(height: 25),
         ],
+        ),
       ),
     );
   }
@@ -4228,8 +7028,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Column(
       children: [
         _searchFilterBar(searchResults),
+        if (_searchLoading && searchResults.isNotEmpty)
+          const LinearProgressIndicator(
+            minHeight: 2,
+            color: gold,
+            backgroundColor: panel,
+          ),
         Expanded(
-          child: _searchLoading
+          child: _searchLoading && searchResults.isEmpty
               ? const Center(
                   child: CircularProgressIndicator(color: gold),
                 )
@@ -4273,7 +7079,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (task.filePath == null) return;
         final movie = Movie(
           id: task.movieId,
-          title: task.title,
+          title: task.displayTitle,
           year: 'N/A',
           overview: '',
           poster: task.poster,
@@ -4294,484 +7100,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-
-  Future<void> _loadOttProviders() async {
-    if (apiKey.isEmpty || !_online) return;
-    if (mounted) {
-      setState(() {
-        _ottProvidersLoading = true;
-        _ottProvidersError = null;
-      });
-    }
-    try {
-      final providers = await OttCatalogService.getProviders(apiKey: apiKey);
-      if (!mounted) return;
-      final selectedId = _selectedOttProvider?.id;
-      setState(() {
-        _ottProviders = providers;
-        _ottProvidersLoading = false;
-        if (selectedId != null) {
-          _selectedOttProvider = providers.cast<OttProvider?>().firstWhere(
-            (provider) => provider?.id == selectedId,
-            orElse: () => null,
-          );
-        }
-      });
-      if (_selectedOttProvider != null) {
-        await _loadOttProviderTitles(_selectedOttProvider!);
-      }
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _ottProvidersLoading = false;
-        _ottProvidersError = 'Could not load streaming platforms. Please retry.';
-      });
-      debugPrint('OTT provider catalogue error: $error');
-    }
-  }
-
-  Future<void> _loadOttProviderTitles(OttProvider provider) async {
-    if (!_online || apiKey.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _ottTitlesError = 'Connect to the internet to browse this platform.';
-          _ottProviderTitles = [];
-        });
-      }
-      return;
-    }
-    final requestedRegion = _ottRegion;
-    final requestedFilter = _ottMediaFilter;
-    setState(() {
-      _selectedOttProvider = provider;
-      _ottTitlesLoading = true;
-      _ottTitlesError = null;
-      _ottProviderTitles = [];
-    });
-    try {
-      final rows = await OttCatalogService.getProviderTitles(
-        apiKey: apiKey,
-        providerId: provider.id,
-        region: requestedRegion,
-        mediaFilter: requestedFilter == 'Movies' || requestedFilter == 'TV Series'
-            ? requestedFilter
-            : 'All',
-      );
-      final titles = rows.map((row) {
-        final mediaType = (row['media_type'] ?? 'movie').toString();
-        final catalogueMovie = Movie.fromJson(row, mediaType: mediaType);
-        for (final adminTitle in flixoraMovies) {
-          if (adminTitle.tmdbId > 0 &&
-              adminTitle.tmdbId == catalogueMovie.tmdbId &&
-              adminTitle.mediaType == mediaType) {
-            return adminTitle.withFallbackMetadata(catalogueMovie);
-          }
-        }
-        return catalogueMovie;
-      }).toList();
-      if (!mounted ||
-          _selectedOttProvider?.id != provider.id ||
-          _ottRegion != requestedRegion ||
-          _ottMediaFilter != requestedFilter) return;
-      setState(() {
-        _ottProviderTitles = _deduplicateMovies(titles);
-        _ottTitlesLoading = false;
-      });
-    } catch (error) {
-      if (!mounted ||
-          _selectedOttProvider?.id != provider.id ||
-          _ottRegion != requestedRegion ||
-          _ottMediaFilter != requestedFilter) return;
-      setState(() {
-        _ottTitlesLoading = false;
-        _ottTitlesError = 'Could not load titles for ${provider.name}.';
-      });
-      debugPrint('OTT title discovery error: $error');
-    }
-  }
-
-  void _changeOttRegion(String? region) {
-    if (region == null || region == _ottRegion) return;
-    setState(() => _ottRegion = region);
-    final provider = _selectedOttProvider;
-    if (provider != null) unawaited(_loadOttProviderTitles(provider));
-  }
-
-  void _changeOttMediaFilter(String filter) {
-    if (_ottMediaFilter == filter) return;
-    setState(() => _ottMediaFilter = filter);
-    final provider = _selectedOttProvider;
-    if (provider != null) unawaited(_loadOttProviderTitles(provider));
-  }
-
-  void _openOttProvider(OttProvider provider) {
-    FocusScope.of(context).unfocus();
-    setState(() {
-      _tab = 1;
-      _search = '';
-      _searchController.clear();
-      _showRanking = false;
-      _ottMediaFilter = 'All';
-      _selectedOttProvider = provider;
-    });
-    unawaited(_loadOttProviderTitles(provider));
-  }
-
-  Widget _ottProviderLogo(OttProvider provider, {double size = 58}) {
-    return Container(
-      width: size,
-      height: size,
-      padding: const EdgeInsets.all(9),
-      decoration: BoxDecoration(
-        color: const Color(0xFF202020),
-        borderRadius: BorderRadius.circular(17),
-        border: Border.all(color: ink12),
-      ),
-      child: provider.logoUrl.isEmpty
-          ? const Icon(Icons.live_tv_rounded, color: gold, size: 25)
-          : ClipRRect(
-              borderRadius: BorderRadius.circular(9),
-              child: Image.network(
-                provider.logoUrl,
-                fit: BoxFit.contain,
-                errorBuilder: (_, __, ___) => const Icon(
-                  Icons.live_tv_rounded,
-                  color: gold,
-                  size: 25,
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _ottHomeSection() {
-    if (_ottProviders.isEmpty && !_ottProvidersLoading) {
-      return const SizedBox.shrink();
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 20, 12, 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Stream on OTT',
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: () => setState(() {
-                  _tab = 1;
-                  _search = '';
-                  _searchController.clear();
-                }),
-                child: const Text(
-                  'Explore all',
-                  style: TextStyle(color: gold, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (_ottProvidersLoading && _ottProviders.isEmpty)
-          const SizedBox(
-            height: 78,
-            child: Center(
-              child: CircularProgressIndicator(color: gold, strokeWidth: 2),
-            ),
-          )
-        else
-          SizedBox(
-            height: 104,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              scrollDirection: Axis.horizontal,
-              itemCount: _ottProviders.take(18).length,
-              separatorBuilder: (_, __) => const SizedBox(width: 13),
-              itemBuilder: (context, index) {
-                final provider = _ottProviders[index];
-                return GestureDetector(
-                  onTap: () => _openOttProvider(provider),
-                  child: SizedBox(
-                    width: 68,
-                    child: Column(
-                      children: [
-                        _ottProviderLogo(provider, size: 60),
-                        const SizedBox(height: 5),
-                        Text(
-                          provider.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: ink70,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
-    );
-  }
-
-  List<Movie> _filteredOttProviderTitles() {
-    final titles = _ottProviderTitles;
-    switch (_ottMediaFilter) {
-      case 'Movies':
-        return titles.where((movie) => movie.mediaType == 'movie').toList();
-      case 'TV Series':
-        return titles.where((movie) => movie.mediaType == 'tv').toList();
-      case 'Anime':
-        return titles.where((title) {
-          final genres = title.genres.map((genre) => genre.toLowerCase()).toSet();
-          return genres.contains('anime') ||
-              (genres.contains('animation') &&
-                  (title.originalLanguage.toLowerCase() == 'ja' ||
-                      title.originCountry.toUpperCase() == 'JP'));
-        }).toList();
-      case 'Drama':
-        return titles.where((movie) => movie.genres.any(
-          (genre) => genre.toLowerCase() == 'drama',
-        )).toList();
-      case 'Documentary':
-        return titles.where((movie) => movie.genres.any(
-          (genre) => genre.toLowerCase() == 'documentary',
-        )).toList();
-      default:
-        return titles;
-    }
-  }
-
-  Widget _ottContent() {
-    const mediaFilters = [
-      'All', 'Movies', 'TV Series', 'Anime', 'Drama', 'Documentary',
-    ];
-    final selectedProvider = _selectedOttProvider;
-    final titles = _filteredOttProviderTitles();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Explore streaming platforms',
-                  style: TextStyle(color: ink60, fontSize: 13),
-                ),
-              ),
-              const Text('Region', style: TextStyle(color: ink54, fontSize: 11)),
-              const SizedBox(width: 7),
-              DropdownButton<String>(
-                value: _ottRegion,
-                dropdownColor: panel,
-                underline: const SizedBox.shrink(),
-                style: const TextStyle(
-                  color: white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-                items: const [
-                  DropdownMenuItem(value: 'BD', child: Text('🇧🇩 BD')),
-                  DropdownMenuItem(value: 'IN', child: Text('🇮🇳 IN')),
-                  DropdownMenuItem(value: 'US', child: Text('🇺🇸 US')),
-                  DropdownMenuItem(value: 'GB', child: Text('🇬🇧 UK')),
-                  DropdownMenuItem(value: 'CA', child: Text('🇨🇦 CA')),
-                  DropdownMenuItem(value: 'AU', child: Text('🇦🇺 AU')),
-                ],
-                onChanged: _changeOttRegion,
-              ),
-            ],
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Text(
-            'Platform logos show catalogue availability for the selected region. Playback and audio tracks depend on the video source available in FLIXORA.',
-            style: TextStyle(color: ink54, fontSize: 10, height: 1.35),
-          ),
-        ),
-        SizedBox(
-          height: 106,
-          child: _ottProvidersLoading && _ottProviders.isEmpty
-              ? const Center(child: CircularProgressIndicator(color: gold))
-              : ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  scrollDirection: Axis.horizontal,
-                  itemCount: _ottProviders.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 13),
-                  itemBuilder: (context, index) {
-                    final provider = _ottProviders[index];
-                    final selected = selectedProvider?.id == provider.id;
-                    return GestureDetector(
-                      onTap: () => _loadOttProviderTitles(provider),
-                      child: SizedBox(
-                        width: 70,
-                        child: Column(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(19),
-                                border: Border.all(
-                                  color: selected ? gold : Colors.transparent,
-                                  width: 2,
-                                ),
-                              ),
-                              child: _ottProviderLogo(provider, size: 58),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              provider.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: selected ? gold : ink70,
-                                fontSize: 10,
-                                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-        ),
-        if (_ottProvidersError != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-            child: Text(
-              _ottProvidersError!,
-              style: const TextStyle(color: ink60, fontSize: 12),
-            ),
-          ),
-        if (selectedProvider == null)
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.touch_app_rounded, color: gold, size: 36),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Choose a platform to explore its catalogue',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: ink70, fontSize: 13),
-                  ),
-                  if (_ottProvidersError != null)
-                    TextButton(
-                      onPressed: _loadOttProviders,
-                      child: const Text('Retry'),
-                    ),
-                ],
-              ),
-            ),
-          )
-        else ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 5),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    selectedProvider.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                Text(
-                  _ottRegion,
-                  style: const TextStyle(color: gold, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          SizedBox(
-            height: 42,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-              scrollDirection: Axis.horizontal,
-              itemCount: mediaFilters.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 7),
-              itemBuilder: (context, index) {
-                final filter = mediaFilters[index];
-                final selected = _ottMediaFilter == filter;
-                return ChoiceChip(
-                  label: Text(filter),
-                  selected: selected,
-                  onSelected: (_) => _changeOttMediaFilter(filter),
-                  selectedColor: gold,
-                  backgroundColor: panel,
-                  side: BorderSide(color: selected ? gold : ink24),
-                  labelStyle: TextStyle(
-                    color: selected ? white : ink70,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                );
-              },
-            ),
-          ),
-          Expanded(
-            child: _ottTitlesLoading
-                ? const Center(child: CircularProgressIndicator(color: gold))
-                : _ottTitlesError != null
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _ottTitlesError!,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: ink60),
-                            ),
-                            TextButton(
-                              onPressed: () => _loadOttProviderTitles(selectedProvider),
-                              child: const Text('Try again'),
-                            ),
-                          ],
-                        ),
-                      )
-                    : titles.isEmpty
-                        ? Center(
-                            child: Padding(
-                              padding: const EdgeInsets.all(22),
-                              child: Text(
-                                'No ${_ottMediaFilter.toLowerCase()} titles found for ${selectedProvider.name} in $_ottRegion. Try another region or category.',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: ink54, height: 1.4),
-                              ),
-                            ),
-                          )
-                        : _collectionContent(
-                            selectedProvider.name + ' · ' + _ottMediaFilter,
-                            titles,
-                          ),
-          ),
-        ],
-      ],
-    );
-  }
 
   Widget _libraryContent() {
     const sections = ['Downloads', 'My List', 'Favourites', 'History'];
@@ -5359,13 +7687,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ...flixoraMovies.where((title) => title.mediaType == 'tv' &&
-                title.genres.any((genre) => genre.toLowerCase() == 'anime')),
+            ..._regularMovieBoxItems
+                .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
+            ...flixoraMovies.where((title) =>
+                title.mediaType == 'tv' && _isAnimeTitle(title)),
           ]);
         case 'Drama': {
           return _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
+            ..._regularMovieBoxItems,
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList();
@@ -5528,8 +7859,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         return _homeContent();
 
-      case 1:
-        return _ottContent();
       case 2:
         return _libraryContent();
       case 3:
@@ -5575,7 +7904,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
-    if (_tab == 1) return 'OTT';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
     if (_tab == 4) return 'Free Movies';
@@ -5660,12 +7988,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
       ),
-      body: !_connectionKnown
+      body: (!_connectionKnown && _allMovies().isEmpty)
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
           : (_tab == 0 && !_searchOpen && !_online && _allMovies().isEmpty)
-              ? NoInternetScreen()
+              ? NoInternetScreen(onRefresh: _refreshFromOfflineScreen)
               : _currentPage(),
       extendBody: true,
       bottomNavigationBar: _showRanking ? null : Container(
@@ -5681,10 +8009,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
-                _bottomNavItem(1, Icons.live_tv_outlined, Icons.live_tv, 'OTT'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
-                _bottomNavItem(4, Icons.local_movies_outlined, Icons.local_movies, 'Free'),
               ],
             ),
           ),
@@ -5694,23 +8020,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 }
 
-class NoInternetScreen extends StatelessWidget {
-  const NoInternetScreen({super.key});
+class NoInternetScreen extends StatefulWidget {
+  final Future<bool> Function() onRefresh;
+  final bool closeOnReconnect;
+
+  const NoInternetScreen({
+    super.key,
+    required this.onRefresh,
+    this.closeOnReconnect = false,
+  });
+
+  @override
+  State<NoInternetScreen> createState() => _NoInternetScreenState();
+}
+
+class _NoInternetScreenState extends State<NoInternetScreen> {
+  Timer? _retryTimer;
+  bool _refreshing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _retryTimer = Timer.periodic(
+      const Duration(seconds: 6),
+      (_) {
+        if (!_refreshing) unawaited(_refresh(silent: true));
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh({bool silent = false}) async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    try {
+      final connected = await widget.onRefresh();
+      if (!mounted) return;
+      if (connected) {
+        if (widget.closeOnReconnect && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        return;
+      }
+      if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Still offline. Please try again.')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      if (!silent) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not refresh the connection.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
 
   Future<void> _openWifiSettings(BuildContext context) async {
     try {
-      await AppSettings.openAppSettings(
-        type: AppSettingsType.wifi,
-      );
+      await AppSettings.openAppSettings(type: AppSettingsType.wifi);
     } catch (_) {
       try {
         await AppSettings.openAppSettings();
       } catch (_) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Unable to open settings.'),
-            ),
+            const SnackBar(content: Text('Unable to open settings.')),
           );
         }
       }
@@ -5727,11 +8110,7 @@ class NoInternetScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.wifi_off_rounded,
-                size: 75,
-                color: gold,
-              ),
+              const Icon(Icons.wifi_off_rounded, size: 75, color: gold),
               const SizedBox(height: 20),
               const Text(
                 'Connect to the internet',
@@ -5758,10 +8137,31 @@ class NoInternetScreen extends StatelessWidget {
                 style: FilledButton.styleFrom(
                   backgroundColor: gold,
                   foregroundColor: Colors.white,
+                  minimumSize: const Size(190, 46),
                 ),
+                onPressed: _refreshing ? null : () => _refresh(),
+                icon: _refreshing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.refresh_rounded),
+                label: Text(_refreshing ? 'Checking connection...' : 'Refresh'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
                 onPressed: () => _openWifiSettings(context),
-                icon: const Icon(Icons.settings),
+                icon: const Icon(Icons.settings_rounded),
                 label: const Text('Open Wi-Fi Settings'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: goldLight,
+                  side: const BorderSide(color: gold),
+                  minimumSize: const Size(190, 44),
+                ),
               ),
             ],
           ),
@@ -5900,7 +8300,7 @@ class DownloadsScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            task.title,
+                            task.displayTitle,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -6033,6 +8433,810 @@ class DownloadsScreen extends StatelessWidget {
     );
   }
 }
+/// Dedicated vertical Reels-style player for MovieBox Hot Shorts TV.
+/// Every selected short is resolved through the central MovieBox/WeFeed core.
+class HotShortsScreen extends StatefulWidget {
+  final List<Movie> items;
+  final int initialIndex;
+  final int? initialSeasonNumber;
+  final int? initialEpisodeNumber;
+  final Future<List<Movie>> Function()? loadCatalogue;
+  final ValueChanged<List<Movie>>? onCatalogueLoaded;
+
+  const HotShortsScreen({
+    super.key,
+    required this.items,
+    this.initialIndex = 0,
+    this.initialSeasonNumber,
+    this.initialEpisodeNumber,
+    this.loadCatalogue,
+    this.onCatalogueLoaded,
+  });
+
+  @override
+  State<HotShortsScreen> createState() => _HotShortsScreenState();
+}
+
+class _HotShortsScreenState extends State<HotShortsScreen> {
+  late List<Movie> _items;
+  bool _catalogueRequested = false;
+  late final Player _player;
+  late final VideoController _videoController;
+  late final PageController _pageController;
+
+  StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration>? _durationSubscription;
+  StreamSubscription<String>? _errorSubscription;
+  StreamSubscription<bool>? _completedSubscription;
+
+  Future<void> _playerOperation = Future<void>.value();
+  Timer? _controlsTimer;
+  int _activeIndex = 0;
+  int _requestToken = 0;
+  bool _loading = true;
+  bool _playing = false;
+  bool _showControls = true;
+  bool _disposed = false;
+  String? _error;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  int? _activeSeasonNumber;
+  int? _activeEpisodeNumber;
+  List<MovieBoxShortEpisode> _availableEpisodes = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _items = List<Movie>.from(widget.items);
+    _activeIndex = _items.isEmpty
+        ? 0
+        : widget.initialIndex.clamp(0, _items.length - 1).toInt();
+    _pageController = PageController(initialPage: _activeIndex);
+    _player = Player(
+      configuration: PlayerConfiguration(
+        title: 'FLIXORA Hot Shorts',
+        bufferSize: 24 * 1024 * 1024,
+        libass: true,
+      ),
+    );
+    _videoController = VideoController(_player);
+
+    _playingSubscription = _player.stream.playing.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() {
+        _playing = value;
+        if (!value) _showControls = true;
+      });
+      if (value) {
+        _scheduleControlsHide();
+      } else {
+        _controlsTimer?.cancel();
+      }
+    });
+    _positionSubscription = _player.stream.position.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() => _position = value);
+    });
+    _durationSubscription = _player.stream.duration.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() => _duration = value);
+    });
+    _errorSubscription = _player.stream.error.listen((value) {
+      if (!mounted || _disposed || _loading || _playing) return;
+      setState(() => _error = 'This short stream could not be played. Tap retry.');
+      debugPrint('Hot Shorts player error: $value');
+    });
+    _completedSubscription = _player.stream.completed.listen((completed) {
+      if (!completed || _disposed || _loading) return;
+      unawaited(_player.seek(Duration.zero).then((_) => _player.play()));
+    });
+
+    if (_items.isNotEmpty) {
+      unawaited(_loadShort(_activeIndex).whenComplete(_loadCatalogue));
+    } else {
+      unawaited(_loadCatalogue());
+    }
+  }
+
+  Future<void> _loadCatalogue() async {
+    final loader = widget.loadCatalogue;
+    if (_catalogueRequested || loader == null || _disposed) return;
+    _catalogueRequested = true;
+    try {
+      final loaded = await loader();
+      if (!mounted || _disposed || loaded.isEmpty) return;
+
+      final seen = <String>{};
+      final merged = <Movie>[];
+      for (final movie in [..._items, ...loaded]) {
+        final key = movie.movieBoxId.isNotEmpty
+            ? movie.movieBoxId
+            : '${movie.title.toLowerCase().trim()}|${movie.year}';
+        if (seen.add(key)) merged.add(movie);
+      }
+      if (merged.length > _items.length) {
+        setState(() => _items = merged);
+        widget.onCatalogueLoaded?.call(List<Movie>.unmodifiable(merged));
+      }
+    } catch (error) {
+      debugPrint('Hot Shorts background catalogue load failed: $error');
+    }
+  }
+
+  void _scheduleControlsHide() {
+    _controlsTimer?.cancel();
+    _controlsTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || _disposed || !_playing) return;
+      setState(() => _showControls = false);
+    });
+  }
+
+  void _toggleControls() {
+    if (!mounted || _disposed) return;
+    setState(() => _showControls = !_showControls);
+    if (_showControls) _scheduleControlsHide();
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_disposed) return;
+    try {
+      if (_playing) {
+        await _player.pause();
+      } else {
+        await _player.play();
+        _scheduleControlsHide();
+      }
+    } catch (error) {
+      if (mounted && !_disposed) {
+        setState(() => _error = 'Could not control this short video: $error');
+      }
+    }
+  }
+
+  Future<void> _showEpisodePicker() async {
+    if (!mounted || _disposed) return;
+    final episodes = _availableEpisodes;
+    if (episodes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _loading
+                ? 'Episodes are loading. Please wait.'
+                : 'No episodes are available for this short series.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final seasons = episodes.map((episode) => episode.season).toSet().toList()
+      ..sort();
+    final selectedEpisode =
+        await showModalBottomSheet<MovieBoxShortEpisode>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.of(sheetContext).size.height * 0.68,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Choose Episode',
+                        style: TextStyle(
+                          color: white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close_rounded, color: white),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final season in seasons)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Season $season',
+                                style: const TextStyle(
+                                  color: gold,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: episodes
+                                    .where((episode) =>
+                                        episode.season == season)
+                                    .map((episode) {
+                                  final selected =
+                                      episode.season == _activeSeasonNumber &&
+                                          episode.episode ==
+                                              _activeEpisodeNumber;
+                                  return ChoiceChip(
+                                    label: Text('EP ${episode.episode}'),
+                                    selected: selected,
+                                    onSelected: (_) =>
+                                        Navigator.of(sheetContext)
+                                            .pop(episode),
+                                    selectedColor: gold,
+                                    backgroundColor: panel,
+                                    labelStyle: TextStyle(
+                                      color: selected
+                                          ? Colors.black
+                                          : Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    side: BorderSide(
+                                      color: selected ? gold : ink24,
+                                    ),
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (selectedEpisode != null && mounted && !_disposed) {
+      await _loadShort(
+        _activeIndex,
+        requestedSeasonNumber: selectedEpisode.season,
+        requestedEpisodeNumber: selectedEpisode.episode,
+      );
+    }
+  }
+
+  Map<String, String> _linkHeaders(Map<String, dynamic> link) {
+    final rawHeaders = link['headers'];
+    if (rawHeaders is! Map) return const <String, String>{};
+    return Map<String, String>.from(
+      rawHeaders.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+    );
+  }
+
+  int _qualityRank(Map<String, dynamic> link) {
+    final label = (link['label'] ?? '').toString().toLowerCase();
+    if (label.contains('2160p') || label.contains('4k')) return 5;
+    if (label.contains('1080p')) return 4;
+    if (label.contains('720p')) return 3;
+    if (label.contains('480p')) return 2;
+    if (label.contains('360p')) return 1;
+    return 0;
+  }
+
+  Future<void> _prefetchShort(int index) async {
+    if (_disposed || index < 0 || index >= _items.length) return;
+    final movie = _items[index];
+    try {
+      await MovieBoxService.prewarmStreams(
+        movie.toMovieBoxMap(),
+        isSeries: movie.movieBoxIsSeries,
+      );
+    } catch (_) {
+      // The next short will resolve normally when the viewer swipes to it.
+    }
+  }
+
+  Future<void> _loadShort(
+    int index, {
+    int? requestedSeasonNumber,
+    int? requestedEpisodeNumber,
+  }) async {
+    if (_disposed || index < 0 || index >= _items.length) return;
+    final requestToken = ++_requestToken;
+    final movie = _items[index];
+
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _position = Duration.zero;
+        _duration = Duration.zero;
+        _activeSeasonNumber = null;
+        _activeEpisodeNumber = null;
+        _availableEpisodes = [];
+        _playing = false;
+      });
+    }
+
+    // Serialize pause/open operations so a previous short cannot resume
+    // over the next page while its MovieBox stream is being resolved.
+    final pauseOperation = _playerOperation.then((_) async {
+      if (!_disposed && requestToken == _requestToken) {
+        await _player.pause();
+      }
+    });
+    _playerOperation = pauseOperation.catchError((Object _) {});
+
+    try {
+      final requests = <Future<dynamic>>[
+        MovieBoxService.playDetail(movie.toMovieBoxMap())
+            .timeout(const Duration(seconds: 18)),
+      ];
+      if (movie.movieBoxIsSeries) {
+        requests.add(
+          MovieBoxService.seasons(movie.movieBoxId)
+              .timeout(const Duration(seconds: 18)),
+        );
+      }
+
+      final resolved = await Future.wait<dynamic>(requests);
+      if (_disposed || requestToken != _requestToken) return;
+      final detail = Map<String, dynamic>.from(resolved.first as Map);
+
+      var seasonNumber = 0;
+      var episodeNumber = 0;
+      var availableEpisodes = <MovieBoxShortEpisode>[];
+      if (movie.movieBoxIsSeries) {
+        final seasons = (resolved[1] as List)
+            .whereType<Map>()
+            .map((season) => Map<String, dynamic>.from(season))
+            .toList(growable: false);
+        availableEpisodes = MovieBoxShortEpisode.fromSeasons(seasons);
+        if (availableEpisodes.isEmpty) {
+          throw StateError('No episodes were returned for this short series.');
+        }
+
+        final wantedSeason = requestedSeasonNumber ??
+            (index == widget.initialIndex ? widget.initialSeasonNumber : null);
+        final wantedEpisode = requestedEpisodeNumber ??
+            (index == widget.initialIndex ? widget.initialEpisodeNumber : null);
+        MovieBoxShortEpisode? selectedEpisode;
+        if (wantedSeason != null && wantedEpisode != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason &&
+                episode.episode == wantedEpisode) {
+              selectedEpisode = episode;
+              break;
+            }
+          }
+        }
+        if (selectedEpisode == null && wantedSeason != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason) {
+              selectedEpisode = episode;
+              break;
+            }
+          }
+        }
+        selectedEpisode ??= availableEpisodes.first;
+        seasonNumber = selectedEpisode.season;
+        episodeNumber = selectedEpisode.episode;
+      }
+
+      if (mounted && requestToken == _requestToken) {
+        setState(() {
+          _availableEpisodes = availableEpisodes;
+          _activeSeasonNumber =
+              movie.movieBoxIsSeries ? seasonNumber : null;
+          _activeEpisodeNumber =
+              movie.movieBoxIsSeries ? episodeNumber : null;
+        });
+      }
+
+      final streamResult = await MovieBoxService.streams(
+        detail,
+        season: seasonNumber,
+        episode: episodeNumber,
+        isSeries: movie.movieBoxIsSeries,
+        forceRefresh: false,
+      ).timeout(const Duration(seconds: 25));
+      if (_disposed || requestToken != _requestToken) return;
+
+      final rawLinks = streamResult['links'] as List? ?? const [];
+      final links = rawLinks
+          .whereType<Map>()
+          .map((link) => Map<String, dynamic>.from(link))
+          .where((link) {
+            final uri = Uri.tryParse((link['url'] ?? '').toString().trim());
+            return uri != null &&
+                (uri.scheme == 'http' || uri.scheme == 'https') &&
+                uri.host.isNotEmpty;
+          })
+          .toList(growable: false);
+      if (links.isEmpty) {
+        throw StateError('MovieBox did not return a playable short video.');
+      }
+
+      final languages = links
+          .map((link) => (link['label'] ?? '').toString().split('·').first.trim())
+          .where((language) => language.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      final preferredLanguage = languages.contains('Original')
+          ? 'Original'
+          : (languages.isNotEmpty ? languages.first : '');
+      final candidates = links
+          .where((link) => preferredLanguage.isEmpty ||
+              (link['label'] ?? '').toString().split('·').first.trim() ==
+                  preferredLanguage)
+          .toList()
+        ..sort((a, b) => _qualityRank(b).compareTo(_qualityRank(a)));
+
+      Object? lastError;
+      for (final link in candidates.take(5)) {
+        if (_disposed || requestToken != _requestToken) return;
+        final url = (link['url'] ?? '').toString().trim();
+        final headers = _linkHeaders(link);
+        try {
+          final operation = _playerOperation.then((_) async {
+            if (_disposed || requestToken != _requestToken) return;
+            await _player.stop();
+            if (_disposed || requestToken != _requestToken) return;
+            await _player.open(
+              Media(url, httpHeaders: headers),
+              play: false,
+            );
+            if (_disposed || requestToken != _requestToken) {
+              await _player.stop();
+              return;
+            }
+            await _player.play();
+            if (_disposed || requestToken != _requestToken) {
+              await _player.stop();
+            }
+          });
+          _playerOperation = operation.catchError((Object _) {});
+          await operation;
+          if (_disposed || requestToken != _requestToken) return;
+          if (mounted) {
+            setState(() {
+              _loading = false;
+              _error = null;
+            });
+          }
+          _scheduleControlsHide();
+          if (index + 1 < _items.length) {
+            unawaited(_prefetchShort(index + 1));
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError ?? StateError('No working MovieBox stream was found.');
+    } catch (error) {
+      if (mounted && !_disposed && requestToken == _requestToken) {
+        setState(() {
+          _loading = false;
+          _error = 'This short could not be played right now. Tap retry to resolve it again.';
+        });
+        debugPrint('Hot Shorts playback failed for ${movie.title}: $error');
+      }
+    }
+  }
+
+  void _onPageChanged(int index) {
+    if (_disposed || index == _activeIndex) return;
+    setState(() {
+      _activeIndex = index;
+      _showControls = true;
+      _loading = true;
+    });
+    unawaited(_loadShort(index));
+  }
+
+  Widget _shortArtwork(Movie movie) {
+    final imageUrl = movie.posterUrl.isNotEmpty
+        ? movie.posterUrl
+        : movie.backdropUrl;
+    if (imageUrl.isEmpty) return const ColoredBox(color: Colors.black);
+    return FlixoraCachedImage(
+      imageUrl: imageUrl,
+      isOnline: true,
+      fit: BoxFit.cover,
+      memCacheWidth: 900,
+      memCacheHeight: 1600,
+      placeholder: const ColoredBox(color: Colors.black),
+      fallback: const ColoredBox(color: Colors.black),
+    );
+  }
+
+  Widget _shortPage(Movie movie, int index) {
+    final active = index == _activeIndex;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: active ? _toggleControls : null,
+            child: active && !_loading && _error == null
+                ? Video(
+                    controller: _videoController,
+                    fit: BoxFit.cover,
+                    controls: NoVideoControls,
+                  )
+                : _shortArtwork(movie),
+          ),
+        ),
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0x66000000),
+                  Colors.transparent,
+                  Color(0xCC000000),
+                ],
+                stops: [0, 0.48, 1],
+              ),
+            ),
+          ),
+        ),
+        if (active && _loading)
+          const Center(
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(
+                color: gold,
+                strokeWidth: 2.5,
+              ),
+            ),
+          ),
+        if (active && _error != null)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 34),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.play_circle_outline_rounded,
+                    color: gold,
+                    size: 48,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: () => _loadShort(
+                      _activeIndex,
+                      requestedSeasonNumber: _activeSeasonNumber,
+                      requestedEpisodeNumber: _activeEpisodeNumber,
+                    ),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Retry'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: gold,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (active && _showControls)
+          Positioned.fill(
+            child: SafeArea(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: 12,
+                    right: 12,
+                    top: 5,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                            size: 27,
+                          ),
+                        ),
+                        const Expanded(
+                          child: Text(
+                            'HOT SHORTS TV',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.4,
+                            ),
+                          ),
+                        ),
+                        if (movie.movieBoxIsSeries)
+                          TextButton.icon(
+                            onPressed: _showEpisodePicker,
+                            icon: const Icon(
+                              Icons.list_alt_rounded,
+                              size: 17,
+                            ),
+                            label: const Text('EP'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: gold,
+                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                              minimumSize: const Size(0, 32),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        Text(
+                          '${index + 1}/${_items.length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 18,
+                    right: 78,
+                    bottom: 31,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          movie.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w900,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 8),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          movie.movieBoxIsSeries &&
+                                  _activeSeasonNumber != null &&
+                                  _activeEpisodeNumber != null
+                              ? 'Short Series · S$_activeSeasonNumber · E$_activeEpisodeNumber'
+                              : (movie.movieBoxIsSeries
+                                  ? 'Short Series'
+                                  : 'MovieBox Shorts'),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        const Text(
+                          'Swipe up for the next short',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    right: 15,
+                    bottom: 42,
+                    child: IconButton.filled(
+                      onPressed: _togglePlayback,
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0x99000000),
+                        foregroundColor: Colors.white,
+                        fixedSize: const Size(48, 48),
+                      ),
+                      icon: Icon(
+                        _playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 27,
+                      ),
+                    ),
+                  ),
+                  if (_duration > Duration.zero)
+                    Positioned(
+                      left: 18,
+                      right: 18,
+                      bottom: 8,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: LinearProgressIndicator(
+                          value: (_position.inMilliseconds /
+                                  _duration.inMilliseconds)
+                              .clamp(0.0, 1.0)
+                              .toDouble(),
+                          minHeight: 3,
+                          backgroundColor: Colors.white30,
+                          valueColor: const AlwaysStoppedAnimation<Color>(gold),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _requestToken++;
+    _controlsTimer?.cancel();
+    _playingSubscription?.cancel();
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _completedSubscription?.cancel();
+    _pageController.dispose();
+    unawaited(_player.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_items.isEmpty) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Text(
+            'No shorts available.',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PageView.builder(
+        controller: _pageController,
+        scrollDirection: Axis.vertical,
+        physics: const PageScrollPhysics(),
+        itemCount: _items.length,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) =>
+            _shortPage(_items[index], index),
+      ),
+    );
+  }
+}
+
 class MovieDetailsScreen extends StatelessWidget {
   final Movie movie;
   final bool isOnline;
@@ -6235,13 +9439,6 @@ class MovieDetailsScreen extends StatelessWidget {
                       fontSize: 14,
                     ),
                   ),
-                  ExternalCatalogSection(
-                    title: movie.title,
-                    year: movie.year,
-                    mediaType: movie.mediaType,
-                    tmdbId: movie.tmdbId,
-                    client: supabaseClient,
-                  ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
                     SizedBox(
@@ -6331,7 +9528,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  if (movie.downloadUrl.trim().isNotEmpty)
+                  if (movie.canAttemptPlayback)
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
@@ -6359,10 +9556,13 @@ class MovieDetailsScreen extends StatelessWidget {
 class MoviePlayerScreen extends StatefulWidget {
   final Movie movie;
   final String? localFilePath;
+  final int? localSeasonNumber;
+  final int? localEpisodeNumber;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
   final VoidCallback? onDownload;
+  final void Function(int seasonNumber, int episodeNumber)? onDownloadEpisode;
   final VoidCallback? onViewDownloads;
   final bool isOnline;
   final bool enablePip;
@@ -6371,10 +9571,13 @@ class MoviePlayerScreen extends StatefulWidget {
     super.key,
     required this.movie,
     this.localFilePath,
+    this.localSeasonNumber,
+    this.localEpisodeNumber,
     this.recommendedMovies = const [],
     this.onMovieSelected,
     this.onSave,
     this.onDownload,
+    this.onDownloadEpisode,
     this.onViewDownloads,
     this.isOnline = true,
     this.enablePip = true,
@@ -6399,6 +9602,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  final ValueNotifier<Duration> _positionNotifier =
+      ValueNotifier<Duration>(Duration.zero);
 
   bool _isPlaying = false;
   bool _isBuffering = false;
@@ -6411,23 +9616,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isOpening = false;
   bool _playerIsOnline = true;
   Timer? _playerConnectionTimer;
+  Timer? _playbackErrorTimer;
+  Offset? _miniPlayerOffset;
   List<Map<String, String>> _availableQualities = [];
   String? _selectedQuality;
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
   int _selectedAudioTrackIndex = 0;
-  List<ProviderEmbedSource> _providerSources = [];
-  ProviderEmbedSource? _selectedProviderSource;
   List<Map<String, dynamic>> _tvSeasons = [];
   List<Map<String, dynamic>> _tvEpisodes = [];
+  List<Map<String, dynamic>> _movieBoxSeasons = [];
+  List<Map<String, dynamic>> _movieBoxAllLinks = [];
+  List<Map<String, dynamic>> _movieBoxSubtitles = [];
+  final Map<String, Map<String, String>> _movieBoxHeadersByUrl = {};
+  List<String> _movieBoxLanguages = [];
+  String? _selectedMovieBoxLanguage;
+  Map<String, dynamic>? _movieBoxDetail;
   int _selectedSeasonNumber = 1;
   int _selectedEpisodeNumber = 1;
-  int? _aniListId;
   bool _loadingTvEpisodes = false;
   int _tvSeasonRequestToken = 0;
+  int _movieBoxPlaybackRequestToken = 0;
   String? _tvEpisodeError;
-  final Set<String> _failedProviderIds = <String>{};
-  bool _isSelectingDefaultProvider = false;
 
   String? _errorMessage;
 
@@ -6458,8 +9668,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final id = widget.movie.tmdbId > 0
         ? widget.movie.tmdbId
         : widget.movie.id;
+    final episodeKey = widget.movie.mediaType == 'tv'
+        ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+        : '';
 
-    return 'flixora_resume_$id';
+    // Every TV episode has its own resume point; never carry the previous
+    // episode's position into a newly selected episode.
+    return 'flixora_resume_$id$episodeKey';
   }
 
   String _resolveInitialNetworkUrl() {
@@ -6476,10 +9691,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       return defaultQuality['video_url'] ?? '';
     }
 
+    if (widget.movie.isMovieBox && _availableQualities.isNotEmpty) {
+      return _availableQualities.first['video_url'] ?? '';
+    }
+
     final legacyUrl = widget.movie.videoUrl.trim();
-    // Dailymotion share links are provider pages, not direct media files.
-    // Route them through the dedicated Player-ID embed source instead.
-    if (ProviderCatalog.fromAdminUrl(legacyUrl) != null) return '';
     final legacyUri = Uri.tryParse(legacyUrl);
     if (legacyUri != null &&
         (legacyUri.scheme == 'http' || legacyUri.scheme == 'https') &&
@@ -6491,11 +9707,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   bool get _validVideoUrl {
     if (widget.localFilePath != null) return true;
-    final url = _resolveInitialNetworkUrl();
-    final uri = Uri.tryParse(url);
-    return uri != null &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
+    final candidates = <String>[
+      _resolveInitialNetworkUrl(),
+      ..._availableQualities.map((item) => item['video_url'] ?? ''),
+      widget.movie.videoUrl,
+    ];
+    return candidates.any((url) {
+      final uri = Uri.tryParse(url.trim());
+      return uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty;
+    });
   }
 
   @override
@@ -6503,17 +9725,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     super.initState();
 
     _playerIsOnline = widget.isOnline;
-    _providerSources = widget.movie.mediaType == 'tv'
-        ? ProviderCatalog.forTv(
-            tmdbId: widget.movie.tmdbId,
-            adminVideoUrl: widget.movie.videoUrl,
-          )
-        : ProviderCatalog.forMovie(
-            tmdbId: widget.movie.tmdbId,
-            dailymotionUrl: widget.movie.videoUrl,
-            adminVideoUrl: widget.movie.videoUrl,
-          );
-    _movieDetailsFuture = _loadPlayerMovieDetails();
+    _selectedSeasonNumber = widget.localSeasonNumber ?? 1;
+    _selectedEpisodeNumber = widget.localEpisodeNumber ?? 1;
+    _movieDetailsFuture = widget.movie.isMovieBox
+        ? Future<Map<String, dynamic>>.value(const <String, dynamic>{})
+        : _loadPlayerMovieDetails();
     _player = Player(
       configuration: PlayerConfiguration(
         title: 'FLIXORA',
@@ -6558,49 +9774,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           });
         }
 
-        // Anime is catalogued as TV by TMDB. Use AniList only when TMDB's
-        // metadata identifies a Japanese animated series and an exact title
-        // match is found; otherwise use the season-aware TMDB TV route.
-        final genres = (details['genres'] as List? ?? [])
-            .whereType<Map>()
-            .map((genre) => (genre['name'] ?? '').toString().toLowerCase())
-            .toSet();
-        final language =
-            (details['original_language'] ?? '').toString().toLowerCase();
-        final countries = (details['origin_country'] as List? ?? [])
-            .map((country) => country.toString().toUpperCase())
-            .toSet();
-        final isAnime = genres.contains('animation') &&
-            (language == 'ja' || countries.contains('JP'));
-
-        int? aniListId;
-        if (isAnime) {
-          final firstAirDate = (details['first_air_date'] ?? '').toString();
-          final year = firstAirDate.length >= 4
-              ? firstAirDate.substring(0, 4)
-              : widget.movie.year;
-          aniListId = await AniListService.findMatchingAnimeId(
-            title: (details['name'] ?? widget.movie.title).toString(),
-            year: year,
-          );
-        }
-        _aniListId = aniListId;
         await _loadTvSeasonEpisodes(firstSeason);
-      } else {
-        final externalIds = details['external_ids'];
-        final imdbId = externalIds is Map
-            ? (externalIds['imdb_id'] ?? '').toString()
-            : '';
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _providerSources = ProviderCatalog.forMovie(
-              tmdbId: id,
-              imdbId: imdbId,
-              dailymotionUrl: widget.movie.videoUrl,
-            adminVideoUrl: widget.movie.videoUrl,
-            );
-          });
-        }
       }
       return details;
     } catch (e) {
@@ -6609,49 +9783,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  int _aniListEpisodeNumber(int episodeNumber) {
-    var offset = 0;
-    for (final season in _tvSeasons) {
-      final seasonNumber = _toInt(season['season_number']);
-      if (seasonNumber > 0 && seasonNumber < _selectedSeasonNumber) {
-        offset += _toInt(season['episode_count']);
-      }
+  Future<void> _loadTvSeasonEpisodes(int seasonNumber) async {
+    if (widget.movie.isMovieBox) {
+      await _loadMovieBoxSeasonEpisodes(seasonNumber, resolveStreams: true);
+      return;
     }
-    return offset + episodeNumber;
-  }
-
-  void _refreshTvProviderSources({bool selectProvider = false}) {
-    final id = widget.movie.tmdbId;
-    if (widget.movie.mediaType != 'tv') return;
-    final sources = ProviderCatalog.forTv(
-      tmdbId: id,
-      aniListId: _aniListId,
-      seasonNumber: _selectedSeasonNumber,
-      episodeNumber: _selectedEpisodeNumber,
-      aniListEpisodeNumber: _aniListEpisodeNumber(_selectedEpisodeNumber),
-      adminVideoUrl: widget.movie.videoUrl,
-    );
-    if (mounted && !_isDisposed) {
-      setState(() {
-        _providerSources = sources;
-        _selectedProviderSource = null;
-        _failedProviderIds.clear();
-        _errorMessage = null;
-      });
-    }
-    if (selectProvider && sources.isNotEmpty) {
-      final firstAvailable = sources.firstWhere(
-        (source) => source.isAvailable,
-        orElse: () => sources.first,
-      );
-      unawaited(_selectProviderSource(firstAvailable));
-    }
-  }
-
-  Future<void> _loadTvSeasonEpisodes(
-    int seasonNumber, {
-    bool selectProvider = false,
-  }) async {
     if (widget.movie.tmdbId <= 0 || _isDisposed) return;
     final requestToken = ++_tvSeasonRequestToken;
     if (mounted) {
@@ -6689,17 +9825,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       _loadingTvEpisodes = false;
       _tvEpisodeError = errorMessage;
     });
-    _refreshTvProviderSources(selectProvider: selectProvider);
   }
 
   void _selectTvEpisode(int episodeNumber) {
-    if (episodeNumber <= 0 || episodeNumber == _selectedEpisodeNumber) return;
+    if (episodeNumber <= 0 ||
+        episodeNumber == _selectedEpisodeNumber ||
+        _loadingQualities ||
+        _isOpening) return;
     setState(() => _selectedEpisodeNumber = episodeNumber);
-    _refreshTvProviderSources(selectProvider: true);
+    if (widget.movie.isMovieBox) {
+      unawaited(_loadMovieBoxStreams(
+        season: _selectedSeasonNumber,
+        episode: episodeNumber,
+        openPlayer: true,
+      ));
+      return;
+    }
   }
 
   Widget _tvEpisodeSelector() {
-    if (widget.movie.mediaType != 'tv') return const SizedBox.shrink();
+    if (widget.movie.mediaType != 'tv' || widget.localFilePath != null) {
+      return const SizedBox.shrink();
+    }
 
     final seasonNumbers = _tvSeasons
         .map((season) => _toInt(season['season_number']))
@@ -6800,15 +9947,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ),
                 )
                 .toList(),
-            onChanged: _loadingTvEpisodes
+            onChanged: (_loadingTvEpisodes || _loadingQualities || _isOpening)
                 ? null
                 : (number) {
                     if (number != null &&
                         number != _selectedSeasonNumber) {
-                      _loadTvSeasonEpisodes(
-                        number,
-                        selectProvider: true,
-                      );
+                      _loadTvSeasonEpisodes(number);
                     }
                   },
           ),
@@ -6857,7 +10001,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         label: Text(number.toString().padLeft(2, '0')),
                         selected: selected,
                         showCheckmark: false,
-                        onSelected: _loadingTvEpisodes
+                        onSelected: (_loadingTvEpisodes || _loadingQualities || _isOpening)
                             ? null
                             : (_) => _selectTvEpisode(number),
                         selectedColor: playerGold.withValues(alpha: 0.22),
@@ -6915,208 +10059,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           ],
         ],
       ),
-    );
-  }
-
-  Future<void> _selectProviderSource(ProviderEmbedSource source) async {
-    if (!source.isAvailable || !_playerIsOnline || _isDisposed) return;
-    _cancelHideTimer();
-
-    // Release the native decoder before mounting an embedded provider. The
-    // last position is already persisted by the position listener.
-    try {
-      await _player.pause();
-      await _player.stop();
-    } catch (_) {}
-
-    if (!mounted || _isDisposed) return;
-    _failedProviderIds.clear();
-    setState(() {
-      _selectedProviderSource = source;
-      _errorMessage = null;
-      _showControls = false;
-      _initialized = false;
-    });
-  }
-
-  Future<void> _selectDefaultProviderIfNeeded({bool force = false}) async {
-    if (!mounted ||
-        _isDisposed ||
-        !_playerIsOnline ||
-        widget.localFilePath != null ||
-        (!force && _validVideoUrl) ||
-        _selectedProviderSource != null ||
-        _isSelectingDefaultProvider) {
-      return;
-    }
-
-    _isSelectingDefaultProvider = true;
-    try {
-      // Resolve IMDb metadata before choosing Play4U. This is also important
-      // when a direct Admin source fails before the metadata request completes.
-      await _movieDetailsFuture;
-      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
-
-      // An Admin-supplied Dailymotion link takes priority for that title.
-      // Otherwise preserve the existing Play4U-first provider order.
-      final adminSource = ProviderCatalog.fromAdminUrl(widget.movie.videoUrl);
-      final preferredId = adminSource?.id ?? 'play4u';
-      final preferred = _providerSources.where(
-        (source) => source.id == preferredId && source.isAvailable,
-      );
-    final fallback = preferred.isNotEmpty
-        ? preferred.first
-        : _providerSources.cast<ProviderEmbedSource?>().firstWhere(
-              (source) => source?.isAvailable == true,
-              orElse: () => null,
-            );
-
-      if (fallback == null) return;
-
-      // Stop the native engine before the WebView is mounted, releasing its
-      // decoder and network request while retaining the saved resume position.
-      try {
-        await _saveResumePosition(_position);
-        await _player.pause();
-        await _player.stop();
-      } catch (_) {}
-      if (!mounted || _isDisposed || _selectedProviderSource != null) return;
-
-      _failedProviderIds.clear();
-      setState(() {
-        _selectedProviderSource = fallback;
-        _showControls = false;
-        _initialized = false;
-        _errorMessage = null;
-      });
-    } finally {
-      _isSelectingDefaultProvider = false;
-    }
-  }
-
-  void _tryNextProvider(ProviderEmbedSource failedSource) {
-    if (!mounted ||
-        _isDisposed ||
-        _selectedProviderSource?.id != failedSource.id) {
-      return; // Ignore stale callbacks from a provider that is no longer active.
-    }
-
-    _failedProviderIds.add(failedSource.id);
-    final selectedNextSource = ProviderCatalog.nextAvailableAfter(
-      _providerSources,
-      failedSource.id,
-      excludedIds: _failedProviderIds,
-    );
-
-    if (selectedNextSource == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No more available provider streams. Choose another stream below.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      _selectedProviderSource = selectedNextSource;
-      _errorMessage = null;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${failedSource.name} failed to load. Trying ${selectedNextSource.name}...',
-        ),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
-
-  Future<void> _closeProviderSource() async {
-    if (!mounted || _isDisposed) return;
-    setState(() {
-      _selectedProviderSource = null;
-      _errorMessage = null;
-      _showControls = true;
-    });
-    if (widget.localFilePath != null || _resolveInitialNetworkUrl().isNotEmpty) {
-      await _initializePlayer();
-    }
-  }
-
-  Widget _providerSelector() {
-    if (widget.localFilePath != null ||
-        (widget.movie.tmdbId <= 0 && _providerSources.isEmpty)) {
-      return const SizedBox.shrink();
-    }
-    if (_providerSources.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Available Streams',
-          style: TextStyle(
-            color: playerWhite,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          _playerIsOnline
-              ? 'Choose a movie, series or anime stream to play inside FLIXORA'
-              : 'Connect to the internet to use online streams',
-          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-        ),
-        const SizedBox(height: 9),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: _providerSources.map((source) {
-            final selected = _selectedProviderSource?.id == source.id;
-            final label = source.name.replaceFirst(RegExp(r'^STREAM \d+ · '), '');
-            return ChoiceChip(
-              label: Text(label),
-              selected: selected,
-              onSelected: source.isAvailable && _playerIsOnline
-                  ? (_) => _selectProviderSource(source)
-                  : null,
-              selectedColor: playerGold.withValues(alpha: 0.24),
-              backgroundColor: playerPanel,
-              disabledColor: playerPanel.withValues(alpha: 0.55),
-              side: BorderSide(
-                color: selected ? playerGold : const Color(0x3DFFFFFF),
-              ),
-              labelStyle: TextStyle(
-                color: source.isAvailable ? playerWhite : const Color(0x66FFFFFF),
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-              avatar: Icon(
-                source.isAvailable ? Icons.play_circle_outline : Icons.info_outline,
-                size: 16,
-                color: source.isAvailable ? playerGoldLight : const Color(0x66FFFFFF),
-              ),
-            );
-          }).toList(),
-        ),
-        if (_providerSources.any((source) =>
-            source.id == 'dailymotion' && !source.isAvailable)) ...[
-          const SizedBox(height: 7),
-          const Text(
-            'Dailymotion needs a Player ID. Add DAILYMOTION_PLAYER_ID in GitHub Actions secrets to enable playback.',
-            style: TextStyle(color: Color(0xFFFFC76A), fontSize: 11),
-          ),
-        ],
-        if (_selectedProviderSource != null) ...[
-          const SizedBox(height: 7),
-          Text(
-            'Playing with ${_selectedProviderSource!.name}',
-            style: const TextStyle(color: playerGoldLight, fontSize: 11),
-          ),
-        ],
-      ],
     );
   }
 
@@ -7265,24 +10207,579 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     );
   }
 
-  Future<void> _prepareAndInitializePlayer() async {
-    // Load Admin quality URLs before opening the player. This allows playback
-    // even when the legacy movies.video_url field is empty.
-    await _loadVideoQualities();
-    if (!mounted || _isDisposed) return;
-
-    // Admin-managed MP4/HLS always gets the first chance to play.
-    await _initializePlayer();
-    if (!mounted || _isDisposed || _validVideoUrl ||
-        widget.localFilePath != null) {
+  Future<void> _prepareMovieBoxPlayback() async {
+    if (_isDisposed || !_playerIsOnline) {
+      if (mounted) {
+        setState(() => _errorMessage = 'Connect to the internet to load this MovieBox title.');
+      }
       return;
     }
 
-    // Resolve the real IMDb ID before choosing the default provider. This
-    // avoids opening Play4U with a guessed or incomplete identifier.
-    await _movieDetailsFuture;
+    if (mounted) {
+      setState(() {
+        _loadingQualities = true;
+        _errorMessage = null;
+      });
+    }
+    try {
+      final rawItem = widget.movie.toMovieBoxMap();
+      final pendingRequests = <Future<dynamic>>[
+        MovieBoxService.playDetail(rawItem)
+            .timeout(const Duration(seconds: 18)),
+      ];
+      if (widget.movie.movieBoxIsSeries) {
+        pendingRequests.add(
+          MovieBoxService.seasons(widget.movie.movieBoxId)
+              .timeout(const Duration(seconds: 18)),
+        );
+      }
+
+      // These requests do not depend on one another. Resolve them together,
+      // and keep rich cast/detail metadata out of the playback critical path.
+      final resolved = await Future.wait<dynamic>(pendingRequests);
+      _movieBoxDetail = Map<String, dynamic>.from(resolved.first as Map);
+
+      if (widget.movie.movieBoxIsSeries) {
+        _movieBoxSeasons = (resolved[1] as List)
+            .whereType<Map>()
+            .map((season) => Map<String, dynamic>.from(season))
+            .toList(growable: false);
+        final normalizedSeasons = _movieBoxSeasons
+            .map((season) {
+              final episodes = (season['episodes'] as List? ?? const [])
+                  .map(_toInt)
+                  .where((number) => number > 0)
+                  .toList(growable: false);
+              return <String, dynamic>{
+                'season_number': _toInt(season['se']),
+                'episode_count': _toInt(season['maxEp']),
+                'episodes': episodes,
+              };
+            })
+            .where((season) => _toInt(season['season_number']) > 0)
+            .toList(growable: false)
+          ..sort((a, b) => _toInt(a['season_number'])
+              .compareTo(_toInt(b['season_number'])));
+
+        if (normalizedSeasons.isNotEmpty) {
+          final firstSeason = _toInt(normalizedSeasons.first['season_number']);
+          if (mounted && !_isDisposed) {
+            setState(() {
+              _tvSeasons = normalizedSeasons;
+              _selectedSeasonNumber = firstSeason;
+              _selectedEpisodeNumber = 1;
+            });
+          }
+          await _loadMovieBoxSeasonEpisodes(
+            firstSeason,
+            resolveStreams: false,
+          );
+        }
+      }
+
+      await _loadMovieBoxStreams(
+        season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
+        episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
+        openPlayer: true,
+      );
+    } catch (error) {
+      debugPrint('MovieBox playback preparation failed: $error');
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _errorMessage = 'MovieBox could not resolve a playable stream. Please retry.';
+          _tvEpisodeError = error.toString();
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingQualities = false);
+      }
+    }
+  }
+
+  Future<void> _loadMovieBoxSeasonEpisodes(
+    int seasonNumber, {
+    required bool resolveStreams,
+  }) async {
+    if (_isDisposed) return;
+    final requestToken = resolveStreams
+        ? ++_movieBoxPlaybackRequestToken
+        : _movieBoxPlaybackRequestToken;
+    if (resolveStreams && _initialized) {
+      _playbackErrorTimer?.cancel();
+      try {
+        await _player.pause();
+      } catch (_) {}
+      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+    }
+
+    final season = _movieBoxSeasons.cast<Map<String, dynamic>?>().firstWhere(
+      (item) => _toInt(item?['se']) == seasonNumber,
+      orElse: () => null,
+    );
+    final episodeNumbers = (season?['episodes'] as List? ?? const [])
+        .map(_toInt)
+        .where((number) => number > 0)
+        .toList(growable: false);
+    final episodes = episodeNumbers
+        .map((number) => <String, dynamic>{
+              'episode_number': number,
+              'name': 'Episode $number',
+            })
+        .toList(growable: false);
+    final firstEpisode = episodeNumbers.isNotEmpty ? episodeNumbers.first : 1;
+
     if (!mounted || _isDisposed) return;
-    await _selectDefaultProviderIfNeeded();
+    setState(() {
+      _selectedSeasonNumber = seasonNumber;
+      _selectedEpisodeNumber = firstEpisode;
+      _tvEpisodes = episodes;
+      _loadingTvEpisodes = false;
+      _tvEpisodeError = episodes.isEmpty
+          ? 'No episode list was returned for this season.'
+          : null;
+      if (resolveStreams) {
+        _loadingQualities = true;
+        _errorMessage = null;
+      }
+    });
+
+    if (resolveStreams) {
+      await _loadMovieBoxStreams(
+        season: seasonNumber,
+        episode: firstEpisode,
+        openPlayer: true,
+      );
+    }
+  }
+
+  String _movieBoxVariant(Map<String, dynamic> link) {
+    final label = (link['label'] ?? '').toString();
+    return label.split(' · ').first.trim();
+  }
+
+  List<Map<String, String>> _movieBoxOptionsForLanguage(String language) {
+    return _movieBoxAllLinks.where((link) {
+      return _movieBoxVariant(link) == language;
+    }).map((link) {
+      final headers = link['headers'] is Map
+          ? Map<String, String>.from(
+              (link['headers'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : <String, String>{};
+      return <String, String>{
+        'quality': (link['label'] ?? 'Original').toString(),
+        'video_url': (link['url'] ?? '').toString(),
+        'headers': jsonEncode(headers),
+      };
+    }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+  }
+
+  Future<void> _loadMovieBoxStreams({
+    required int season,
+    required int episode,
+    required bool openPlayer,
+  }) async {
+    final detail = _movieBoxDetail;
+    if (detail == null || _isDisposed) return;
+    final requestToken = ++_movieBoxPlaybackRequestToken;
+
+    if (openPlayer && _initialized) {
+      _playbackErrorTimer?.cancel();
+      try {
+        await _player.pause();
+      } catch (_) {}
+      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+      if (mounted) {
+        setState(() {
+          _updatePosition(Duration.zero);
+          _duration = Duration.zero;
+          _errorMessage = null;
+          _tvEpisodeError = null;
+        });
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _loadingQualities = true;
+        _tvEpisodeError = null;
+      });
+    }
+
+    try {
+      for (var attempt = 0; attempt < 2; attempt++) {
+        Map<String, dynamic> result;
+        try {
+          result = await MovieBoxService.streams(
+            detail,
+            season: season,
+            episode: episode,
+            isSeries: widget.movie.movieBoxIsSeries,
+            forceRefresh: attempt > 0,
+          ).timeout(const Duration(seconds: 15));
+        } catch (error) {
+          if (attempt == 0) {
+            debugPrint('MovieBox stream request failed; refreshing once: $error');
+            continue;
+          }
+          rethrow;
+        }
+        if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+
+        final rawLinks = result['links'] as List? ?? const [];
+        final links = rawLinks
+            .whereType<Map>()
+            .map((link) => Map<String, dynamic>.from(link))
+            .where((link) {
+              final uri = Uri.tryParse((link['url'] ?? '').toString());
+              return uri != null &&
+                  (uri.scheme == 'http' || uri.scheme == 'https') &&
+                  uri.host.isNotEmpty;
+            })
+            .toList(growable: false);
+        if (links.isEmpty) {
+          throw StateError('No HLS, DASH or MP4 streams were returned for this episode.');
+        }
+
+        final subtitles = (result['subtitles'] as List? ?? const [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .where((item) => (item['url'] ?? '').toString().isNotEmpty)
+            .toList(growable: false);
+        final languages = <String>[];
+        _movieBoxHeadersByUrl.clear();
+        for (final link in links) {
+          final language = _movieBoxVariant(link);
+          if (language.isNotEmpty && !languages.contains(language)) {
+            languages.add(language);
+          }
+          final url = (link['url'] ?? '').toString();
+          final rawHeaders = link['headers'];
+          if (url.isNotEmpty && rawHeaders is Map) {
+            _movieBoxHeadersByUrl[url] = Map<String, String>.from(
+              rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            );
+          }
+        }
+
+        final selectedLanguage = _selectedMovieBoxLanguage != null &&
+                languages.contains(_selectedMovieBoxLanguage)
+            ? _selectedMovieBoxLanguage!
+            : (languages.contains('Original') ? 'Original' : languages.first);
+        final options = links.where((link) {
+          return _movieBoxVariant(link) == selectedLanguage;
+        }).map((link) {
+          final headers = link['headers'] is Map
+              ? Map<String, String>.from(
+                  (link['headers'] as Map).map(
+                    (key, value) =>
+                        MapEntry(key.toString(), value.toString()),
+                  ),
+                )
+              : <String, String>{};
+          return <String, String>{
+            'quality': (link['label'] ?? 'Original').toString(),
+            'video_url': (link['url'] ?? '').toString(),
+            'headers': jsonEncode(headers),
+          };
+        }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+        if (options.isEmpty) {
+          throw StateError('No playable quality was returned for $selectedLanguage.');
+        }
+
+        if (!mounted || _isDisposed ||
+            requestToken != _movieBoxPlaybackRequestToken) return;
+        setState(() {
+          _movieBoxAllLinks = links;
+          _movieBoxSubtitles = subtitles;
+          _movieBoxLanguages = languages;
+          _selectedMovieBoxLanguage = selectedLanguage;
+          _availableQualities = options;
+          _selectedQuality = options.first['quality'];
+          _errorMessage = null;
+        });
+
+        if (!openPlayer) return;
+        final opened = await _openMovieBoxEpisode(options.first, requestToken);
+        if (opened) return;
+        if (attempt == 1) {
+          throw StateError('Fresh MovieBox links were also unavailable.');
+        }
+      }
+    } catch (error) {
+      debugPrint('MovieBox stream resolution failed: $error');
+      if (mounted && !_isDisposed &&
+          requestToken == _movieBoxPlaybackRequestToken) {
+        setState(() {
+          _tvEpisodeError = error.toString();
+          _errorMessage = 'Unable to resolve this MovieBox stream.';
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed &&
+          requestToken == _movieBoxPlaybackRequestToken) {
+        setState(() => _loadingQualities = false);
+      }
+    }
+  }
+
+  Future<bool> _openMovieBoxEpisode(
+    Map<String, String> item,
+    int requestToken,
+  ) async {
+    final candidates = <Map<String, String>>[
+      item,
+      ..._availableQualities.where(
+        (quality) => quality['video_url'] != item['video_url'],
+      ),
+    ].take(4).toList(growable: false);
+    Object? lastError;
+
+    _isOpening = true;
+    _currentVideoUrl = '';
+    _playbackErrorTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _initialized = false;
+        _errorMessage = null;
+        _tvEpisodeError = null;
+      });
+    }
+    try {
+      for (final candidate in candidates) {
+        if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+          return false;
+        }
+
+        final url = candidate['video_url']?.trim() ?? '';
+        final uri = Uri.tryParse(url);
+        if (url.isEmpty ||
+            uri == null ||
+            (uri.scheme != 'https' && uri.scheme != 'http') ||
+            uri.host.isEmpty) {
+          lastError = StateError('The selected episode returned an invalid stream URL.');
+          continue;
+        }
+
+        try {
+          await _player.open(
+            Media(url, httpHeaders: _headersForQuality(candidate)),
+            play: false,
+          );
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return false;
+          }
+
+          try {
+            await _player.setAudioTrack(AudioTrack.auto());
+          } catch (_) {}
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return false;
+          }
+
+          _currentVideoUrl = url;
+          _updatePosition(Duration.zero);
+          _duration = Duration.zero;
+          _selectedAudioTrackIndex = 0;
+          await _player.play();
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return false;
+          }
+
+          if (mounted) {
+            setState(() {
+              _initialized = true;
+              _selectedQuality = candidate['quality'];
+              _errorMessage = null;
+              _tvEpisodeError = null;
+            });
+          }
+          await _restoreResumePosition();
+          _startHideTimer();
+          _prewarmNextMovieBoxEpisode();
+          return true;
+        } catch (error) {
+          lastError = error;
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
+      }
+
+      throw lastError ?? StateError('No working stream quality was returned.');
+    } catch (error) {
+      if (mounted &&
+          !_isDisposed &&
+          requestToken == _movieBoxPlaybackRequestToken) {
+        setState(() {
+          _errorMessage = 'Could not start this MovieBox stream. Please try again.';
+          _tvEpisodeError = error.toString();
+        });
+      }
+      return false;
+    } finally {
+      if (requestToken == _movieBoxPlaybackRequestToken) {
+        _isOpening = false;
+      }
+    }
+  }
+
+  void _prewarmNextMovieBoxEpisode() {
+    if (!_playerIsOnline ||
+        !widget.movie.movieBoxIsSeries ||
+        _movieBoxDetail == null ||
+        _movieBoxSeasons.isEmpty) {
+      return;
+    }
+
+    final seasons = _movieBoxSeasons.toList()
+      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+    final currentIndex = seasons.indexWhere(
+      (season) => _toInt(season['se']) == _selectedSeasonNumber,
+    );
+    if (currentIndex < 0) return;
+
+    var nextSeason = _selectedSeasonNumber;
+    var nextEpisode = 0;
+    final currentEpisodes = (seasons[currentIndex]['episodes'] as List? ?? const [])
+        .map(_toInt)
+        .where((number) => number > 0)
+        .toList(growable: false);
+    for (final number in currentEpisodes) {
+      if (number > _selectedEpisodeNumber) {
+        nextEpisode = number;
+        break;
+      }
+    }
+
+    if (nextEpisode == 0 && currentIndex + 1 < seasons.length) {
+      nextSeason = _toInt(seasons[currentIndex + 1]['se']);
+      final nextEpisodes =
+          (seasons[currentIndex + 1]['episodes'] as List? ?? const [])
+              .map(_toInt)
+              .where((number) => number > 0)
+              .toList(growable: false);
+      if (nextEpisodes.isNotEmpty) nextEpisode = nextEpisodes.first;
+    }
+    if (nextSeason <= 0 || nextEpisode <= 0) return;
+
+    final detail = _movieBoxDetail!;
+    unawaited(() async {
+      try {
+        await MovieBoxService.streams(
+          detail,
+          season: nextSeason,
+          episode: nextEpisode,
+          isSeries: true,
+        ).timeout(const Duration(seconds: 22));
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _selectMovieBoxLanguage(String language) async {
+    if (language == _selectedMovieBoxLanguage || _isDisposed) return;
+    final options = _movieBoxOptionsForLanguage(language);
+    if (options.isEmpty) return;
+    setState(() {
+      _selectedMovieBoxLanguage = language;
+      _availableQualities = options;
+      _selectedQuality = options.first['quality'];
+    });
+    if (_initialized) {
+      await _changeVideoQuality(options.first);
+    }
+  }
+
+  Widget _movieBoxLanguageSelector() {
+    if (!widget.movie.isMovieBox || _movieBoxLanguages.length < 2) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: playerPanel,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x3DFFFFFF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.translate_rounded, color: playerGoldLight, size: 18),
+          const SizedBox(width: 9),
+          const Text(
+            'Language',
+            style: TextStyle(
+              color: playerWhite,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _movieBoxLanguages.contains(_selectedMovieBoxLanguage)
+                    ? _selectedMovieBoxLanguage
+                    : _movieBoxLanguages.first,
+                isExpanded: true,
+                dropdownColor: playerPanel,
+                style: const TextStyle(
+                  color: playerGoldLight,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+                items: _movieBoxLanguages.map((language) {
+                  return DropdownMenuItem<String>(
+                    value: language,
+                    child: Text(language, overflow: TextOverflow.ellipsis),
+                  );
+                }).toList(),
+                onChanged: _loadingQualities
+                    ? null
+                    : (language) {
+                        if (language != null) {
+                          _selectMovieBoxLanguage(language);
+                        }
+                      },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _prepareAndInitializePlayer() async {
+    // A downloaded MovieBox movie/episode must play from local storage without
+    // trying to resolve online seasons or CDN streams again.
+    if (widget.localFilePath != null) {
+      await _initializePlayer();
+      return;
+    }
+
+    if (widget.movie.isMovieBox) {
+      await _prepareMovieBoxPlayback();
+      return;
+    }
+
+    // Admin-managed direct MP4/HLS sources are played by the native player.
+    await _loadVideoQualities();
+    if (!mounted || _isDisposed) return;
+
+    await _initializePlayer();
+    if (!mounted || _isDisposed) return;
+
+    if (!_validVideoUrl && widget.localFilePath == null && _errorMessage == null) {
+      setState(() {
+        _errorMessage =
+            'No playable Admin video or matching MovieBox/WeFeed stream is available.';
+      });
+    }
   }
 
   Future<void> _loadVideoQualities() async {
@@ -7332,7 +10829,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  Map<String, String> _headersForQuality(Map<String, String> item) {
+    try {
+      final decoded = jsonDecode(item['headers'] ?? '{}');
+      if (decoded is Map) {
+        return Map<String, String>.from(
+          decoded.map((key, value) => MapEntry(key.toString(), value.toString())),
+        );
+      }
+    } catch (_) {}
+    return const <String, String>{};
+  }
+
   Future<void> _changeVideoQuality(Map<String, String> item) async {
+    _playbackErrorTimer?.cancel();
     final url = item['video_url']?.trim() ?? '';
     if (url.isEmpty || _isDisposed || widget.localFilePath != null) return;
     final uri = Uri.tryParse(url);
@@ -7343,7 +10853,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     if (_isOpening || url == _currentVideoUrl) return;
-
+    final requestToken = _movieBoxPlaybackRequestToken;
     final previousQuality = _selectedQuality;
     final previousUrl = _currentVideoUrl;
     final wasPlaying = _isPlaying;
@@ -7358,14 +10868,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      await _player.open(Media(url));
-      if (!mounted || _isDisposed) return;
+      await _player.open(
+        Media(url, httpHeaders: _headersForQuality(item)),
+        play: false,
+      );
+      if (!mounted || _isDisposed ||
+          requestToken != _movieBoxPlaybackRequestToken) return;
       if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
       if (wasPlaying) {
         await _player.play();
       } else {
         await _player.pause();
       }
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
 
       _currentVideoUrl = url;
       if (mounted && !_isDisposed) {
@@ -7374,19 +10890,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _initialized = true;
         });
       }
-    } catch (e) {
-      // Re-open the previous encoded URL so a failed quality change does not
-      // leave the player stuck on a broken source.
+    } catch (error) {
+      // A newer episode selection cancels this quality request; it must not
+      // restore or restart the previous episode over the user's selection.
+      if (requestToken != _movieBoxPlaybackRequestToken) return;
+
       var restored = false;
       if (previousUrl.isNotEmpty && !_isDisposed) {
         try {
-          await _player.open(Media(previousUrl));
+          await _player.open(
+            Media(
+              previousUrl,
+              httpHeaders: _movieBoxHeadersByUrl[previousUrl] ??
+                  const <String, String>{},
+            ),
+            play: false,
+          );
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           if (resumeAt > Duration.zero) await _player.seek(resumeAt);
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           if (wasPlaying) {
             await _player.play();
           } else {
             await _player.pause();
           }
+          if (requestToken != _movieBoxPlaybackRequestToken) return;
           _currentVideoUrl = previousUrl;
           restored = true;
         } catch (_) {
@@ -7394,7 +10922,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         }
       }
 
-      if (mounted && !_isDisposed) {
+      if (mounted && !_isDisposed &&
+          requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
           _selectedQuality = previousQuality;
           _initialized = restored;
@@ -7404,7 +10933,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
     } finally {
-      _isOpening = false;
+      if (requestToken == _movieBoxPlaybackRequestToken) {
+        _isOpening = false;
+      }
     }
   }
 
@@ -7426,13 +10957,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     setState(() => _playerIsOnline = online);
     if (online &&
         widget.localFilePath == null &&
-        !_validVideoUrl &&
-        _selectedProviderSource == null) {
-      unawaited(_movieDetailsFuture.then((_) async {
-        if (mounted && !_isDisposed) {
-          await _selectDefaultProviderIfNeeded();
-        }
-      }));
+        widget.movie.isMovieBox &&
+        !_validVideoUrl) {
+      unawaited(_prepareAndInitializePlayer());
     }
   }
 
@@ -7465,12 +10992,45 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return RustPlaybackCore.playbackError(code);
   }
 
+  void _handlePlayerError(String value) {
+    debugPrint('FLIXORA playback event: $value');
+    _playbackErrorTimer?.cancel();
+    final positionAtError = _position;
+    _playbackErrorTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (!mounted || _isDisposed) return;
+      if (_isOpening) {
+        _handlePlayerError(value);
+        return;
+      }
+      final shouldShow = PlaybackErrorPolicy.shouldShowError(
+        isOpening: _isOpening,
+        isPlaying: _isPlaying,
+        positionAtError: positionAtError,
+        currentPosition: _position,
+      );
+      if (!shouldShow) {
+        debugPrint('Ignoring non-fatal player error while playback continues.');
+        if (_errorMessage != null) setState(() => _errorMessage = null);
+        return;
+      }
+      setState(() => _errorMessage = _friendlyPlaybackError(value));
+    });
+  }
+
   // Listeners are attached once. Retrying playback will not create
   // duplicate stream subscriptions.
+  void _updatePosition(Duration value) {
+    _position = value;
+    _positionNotifier.value = value;
+  }
+
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() => _position = value);
+      _updatePosition(value);
+      if (_errorMessage != null && value > Duration.zero) {
+        setState(() => _errorMessage = null);
+      }
 
       if (_duration.inSeconds > 0) {
         _saveResumePosition(value);
@@ -7485,9 +11045,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _playingSubscription = _player.stream.playing.listen((value) {
       if (!mounted || _isDisposed) return;
 
-      setState(() => _isPlaying = value);
+      setState(() {
+        _isPlaying = value;
+        if (value && _errorMessage != null) _errorMessage = null;
+      });
       unawaited(PictureInPictureService.setEnabled(
-        value && widget.enablePip && _selectedProviderSource == null,
+        value && widget.enablePip,
       ));
 
       if (value) {
@@ -7505,17 +11068,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
-      debugPrint('FLIXORA playback error: $value');
-      setState(() => _errorMessage = _friendlyPlaybackError(value));
-      if (value.trim().isNotEmpty &&
-          !_isOpening &&
-          widget.localFilePath == null &&
-          _selectedProviderSource == null &&
-          _playerIsOnline) {
-        // A broken Admin direct stream should not strand the viewer. Keep it
-        // first priority, then fall back to the reference provider sequence.
-        unawaited(_selectDefaultProviderIfNeeded(force: true));
-      }
+      _handlePlayerError(value);
     });
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
@@ -7542,6 +11095,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Future<void> _initializePlayer() async {
     if (_isOpening || _isDisposed) return;
+    _playbackErrorTimer?.cancel();
 
     if (!_validVideoUrl) {
       if (mounted) {
@@ -7554,7 +11108,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     _isOpening = true;
-
     try {
       if (mounted) {
         setState(() {
@@ -7563,35 +11116,86 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      if (widget.localFilePath != null &&
-          !await File(widget.localFilePath!).exists()) {
-        throw Exception('Downloaded file is missing.');
-      }
-      final playbackSource = widget.localFilePath ?? _resolveInitialNetworkUrl();
-      if (playbackSource.trim().isEmpty) {
-        throw Exception('No playable video URL is available.');
-      }
-      await _player.open(Media(playbackSource));
-      if (widget.localFilePath == null) {
-        _currentVideoUrl = playbackSource;
+      final candidates = <Map<String, String>>[];
+      if (widget.localFilePath != null) {
+        if (!await File(widget.localFilePath!).exists()) {
+          throw Exception('Downloaded file is missing.');
+        }
+        candidates.add({
+          'quality': 'Offline',
+          'video_url': widget.localFilePath!,
+          'headers': '{}',
+        });
+      } else {
+        final preferredUrl = _resolveInitialNetworkUrl();
+        if (preferredUrl.trim().isNotEmpty) {
+          candidates.add({
+            'quality': _selectedQuality ?? 'Original',
+            'video_url': preferredUrl,
+            'headers': '{}',
+          });
+        }
+        for (final quality in _availableQualities) {
+          final url = quality['video_url']?.trim() ?? '';
+          if (url.isNotEmpty &&
+              !candidates.any((candidate) => candidate['video_url'] == url)) {
+            candidates.add(quality);
+          }
+        }
       }
 
-      if (!mounted || _isDisposed) return;
+      Object? lastError;
+      for (final candidate in candidates.take(4)) {
+        final playbackSource = candidate['video_url']?.trim() ?? '';
+        final uri = Uri.tryParse(playbackSource);
+        final isLocal = widget.localFilePath != null;
+        if (playbackSource.isEmpty ||
+            (!isLocal &&
+                (uri == null ||
+                    (uri.scheme != 'http' && uri.scheme != 'https') ||
+                    uri.host.isEmpty))) {
+          lastError = Exception('No playable video URL is available.');
+          continue;
+        }
 
-      setState(() => _initialized = true);
+        try {
+          await _player.open(
+            Media(
+              playbackSource,
+              httpHeaders: isLocal
+                  ? const <String, String>{}
+                  : _headersForQuality(candidate),
+            ),
+            play: false,
+          );
+          if (!mounted || _isDisposed) return;
+          await _player.play();
+          if (!mounted || _isDisposed) return;
 
-      await _restoreResumePosition();
-      _startHideTimer();
+          if (!isLocal) _currentVideoUrl = playbackSource;
+          setState(() {
+            _selectedQuality = candidate['quality'];
+            _initialized = true;
+            _errorMessage = null;
+          });
+          await _restoreResumePosition();
+          _startHideTimer();
+          return;
+        } catch (error) {
+          lastError = error;
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
+      }
+
+      throw lastError ?? Exception('No working video source was available.');
     } catch (e) {
       if (!mounted || _isDisposed) return;
-
       setState(() {
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
-      if (widget.localFilePath == null && _playerIsOnline) {
-        unawaited(_selectDefaultProviderIfNeeded(force: true));
-      }
     } finally {
       _isOpening = false;
     }
@@ -7615,7 +11219,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _player.seek(savedPosition);
 
       if (mounted && !_isDisposed) {
-        setState(() => _position = savedPosition);
+        setState(() => _updatePosition(savedPosition));
       }
     } catch (_) {}
   }
@@ -7782,7 +11386,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _player.seek(previewPosition);
       if (mounted && !_isDisposed) {
         setState(() {
-          _position = previewPosition;
+          _updatePosition(previewPosition);
         });
       }
     }
@@ -7816,7 +11420,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.seek(clamped);
 
     if (mounted && !_isDisposed) {
-      setState(() => _position = clamped);
+      setState(() => _updatePosition(clamped));
     }
 
     _startHideTimer();
@@ -7828,7 +11432,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     await _player.seek(target);
 
     if (mounted && !_isDisposed) {
-      setState(() => _position = target);
+      setState(() => _updatePosition(target));
     }
   }
 
@@ -7868,11 +11472,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _toggleMiniPlayer() {
     if (_isFullscreen || _isDisposed) return;
+    final enteringMiniPlayer = !_isMiniPlayer;
     setState(() {
-      _isMiniPlayer = !_isMiniPlayer;
-      _showControls = true;
+      _isMiniPlayer = enteringMiniPlayer;
+      _showControls = !enteringMiniPlayer;
+      if (!enteringMiniPlayer) _miniPlayerOffset = null;
     });
-    _startHideTimer();
+    if (enteringMiniPlayer) {
+      _cancelHideTimer();
+    } else {
+      _startHideTimer();
+    }
+  }
+
+  void _moveMiniPlayer(
+    DragUpdateDetails details, {
+    required double maxRight,
+    required double maxBottom,
+  }) {
+    if (!mounted || !_isMiniPlayer) return;
+    final current = _miniPlayerOffset ?? const Offset(14, 18);
+    final rightLimit = maxRight < 8 ? 8.0 : maxRight;
+    final bottomLimit = maxBottom < 8 ? 8.0 : maxBottom;
+    setState(() {
+      _miniPlayerOffset = Offset(
+        (current.dx - details.delta.dx).clamp(8.0, rightLimit).toDouble(),
+        (current.dy - details.delta.dy).clamp(8.0, bottomLimit).toDouble(),
+      );
+    });
   }
 
   Future<void> _toggleFullscreen() async {
@@ -7920,6 +11547,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         );
       }
     }
+  }
+
+  Future<void> _selectMovieBoxSubtitle(Map<String, dynamic> subtitle) async {
+    final url = (subtitle['url'] ?? '').toString().trim();
+    if (url.isEmpty) return;
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      return;
+    }
+    await _selectSubtitleTrack(SubtitleTrack.uri(
+      url,
+      title: (subtitle['label'] ?? 'MovieBox subtitle').toString(),
+      language: (subtitle['label'] ?? '').toString(),
+    ));
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
@@ -8013,111 +11655,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  String _originalAudioLanguageLabel() {
-    final code = widget.movie.originalLanguage
-        .trim()
-        .toLowerCase()
-        .split('-')
-        .first;
-    const names = <String, String>{
-      'en': 'English',
-      'hi': 'Hindi',
-      'bn': 'Bangla',
-      'ta': 'Tamil',
-      'te': 'Telugu',
-      'ml': 'Malayalam',
-      'kn': 'Kannada',
-      'ja': 'Japanese',
-      'ko': 'Korean',
-      'zh': 'Chinese',
-      'es': 'Spanish',
-      'fr': 'French',
-      'de': 'German',
-      'ur': 'Urdu',
-      'ar': 'Arabic',
-    };
-    return names[code] ?? (code.isEmpty ? 'Not listed' : code.toUpperCase());
-  }
-
-  void _showProviderAudioHelp() {
-    final source = _selectedProviderSource;
-    if (source == null) {
-      _showAudioTracks();
-      return;
-    }
-    _cancelHideTimer();
-    final listedLanguages = widget.movie.audioLanguages
-        .map((language) => language.trim())
-        .where((language) => language.isNotEmpty)
-        .toSet()
-        .toList();
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: playerPanel,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 26),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.audiotrack_rounded, color: playerGold, size: 23),
-                SizedBox(width: 10),
-                Text(
-                  'Audio language',
-                  style: TextStyle(
-                    color: playerWhite,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Text(
-              'Original language: ${_originalAudioLanguageLabel()}',
-              style: const TextStyle(color: playerWhite, fontSize: 13),
-            ),
-            if (listedLanguages.isNotEmpty) ...[
-              const SizedBox(height: 7),
-              Text(
-                'Admin-listed languages: ${listedLanguages.join(', ')}',
-                style: const TextStyle(color: playerGoldLight, fontSize: 12),
-              ),
-            ],
-            const SizedBox(height: 12),
-            Text(
-              'This video is playing through ${source.name}. Tap the settings or gear icon inside the video, then open Audio / Language to choose a track if the provider offers one. FLIXORA cannot add a Hindi or English dub that is not included in the stream.',
-              style: const TextStyle(
-                color: Color(0xFFD0D5DE),
-                fontSize: 12,
-                height: 1.45,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => Navigator.pop(sheetContext),
-                child: const Text('Got it'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _showAudioTracks() {
-    if (_selectedProviderSource != null) {
-      _showProviderAudioHelp();
-      return;
-    }
     final audioTracks = _tracks.audio;
     final selectedIndex = audioTracks.isEmpty
         ? -1
@@ -8369,6 +11907,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     SubtitleTrack.no(),
                   ),
                 ),
+                ..._movieBoxSubtitles.map((subtitle) {
+                  final label = (subtitle['label'] ?? 'External subtitle').toString();
+                  return ListTile(
+                    leading: const Icon(Icons.subtitles, color: playerGoldLight),
+                    title: Text(label, style: const TextStyle(color: playerWhite)),
+                    onTap: () => _selectMovieBoxSubtitle(subtitle),
+                  );
+                }),
                 ...subtitleTracks.map((track) {
                   return ListTile(
                     leading: const Icon(
@@ -8644,18 +12190,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         style: TextStyle(color: playerWhite),
                       ),
                       subtitle: Text(
-                        _selectedProviderSource != null
-                            ? 'Change language in the provider player'
-                            : (_tracks.audio.isEmpty
-                                ? 'No alternate audio tracks detected'
-                                : _audioTrackLabel(
-                                    _tracks.audio[_selectedAudioTrackIndex
-                                        .clamp(0, _tracks.audio.length - 1)
-                                        .toInt()],
-                                    _selectedAudioTrackIndex
-                                        .clamp(0, _tracks.audio.length - 1)
-                                        .toInt(),
-                                  )),
+                        _tracks.audio.isEmpty
+                            ? 'No alternate audio tracks detected'
+                            : _audioTrackLabel(
+                                _tracks.audio[_selectedAudioTrackIndex
+                                    .clamp(0, _tracks.audio.length - 1)
+                                    .toInt()],
+                                _selectedAudioTrackIndex
+                                    .clamp(0, _tracks.audio.length - 1)
+                                    .toInt(),
+                              ),
                         style: const TextStyle(
                           color: Color(0x99FFFFFF),
                           fontSize: 11,
@@ -8665,12 +12209,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         Icons.chevron_right,
                         color: Color(0x8AFFFFFF),
                       ),
-                      onTap: _selectedProviderSource != null
-                          ? null
-                          : () {
-                              Navigator.pop(sheetContext);
-                              _showAudioTracks();
-                            },
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showAudioTracks();
+                      },
                     ),
                     ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -8769,63 +12311,67 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _bottomControls() {
     final max = _duration.inMilliseconds.toDouble();
-    final current = _position.inMilliseconds
-        .toDouble()
-        .clamp(0.0, max > 0 ? max : 1.0);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Text(
-                _formatDuration(_position),
-                style: const TextStyle(
-                  color: playerWhite,
-                  fontSize: 11,
-                ),
-              ),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 2.5,
-                    activeTrackColor: playerGold,
-                    inactiveTrackColor: const Color(0x4DFFFFFF),
-                    thumbColor: playerWhite,
-                    overlayColor: playerGold.withValues(alpha: 0.16),
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 5.5,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 10,
+          ValueListenableBuilder<Duration>(
+            valueListenable: _positionNotifier,
+            builder: (context, position, _) {
+              final current = position.inMilliseconds
+                  .toDouble()
+                  .clamp(0.0, max > 0 ? max : 1.0)
+                  .toDouble();
+
+              return Row(
+                children: [
+                  Text(
+                    _formatDuration(position),
+                    style: const TextStyle(
+                      color: playerWhite,
+                      fontSize: 11,
                     ),
                   ),
-                  child: Slider(
-                    value: current,
-                    min: 0,
-                    max: max > 0 ? max : 1,                    onChanged: max > 0
-                        ? (value) {
-                            setState(() {
-                              _position = Duration(
-                                milliseconds: value.round(),
-                              );
-                            });
-                          }
-                        : null,
-                    onChangeEnd: max > 0 ? _seekTo : null,
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2.5,
+                        activeTrackColor: playerGold,
+                        inactiveTrackColor: const Color(0x4DFFFFFF),
+                        thumbColor: playerWhite,
+                        overlayColor: playerGold.withValues(alpha: 0.16),
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 5.5,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 10,
+                        ),
+                      ),
+                      child: Slider(
+                        value: current,
+                        min: 0,
+                        max: max > 0 ? max : 1,
+                        onChanged: max > 0
+                            ? (value) => _updatePosition(
+                                  Duration(milliseconds: value.round()),
+                                )
+                            : null,
+                        onChangeEnd: max > 0 ? _seekTo : null,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              Text(
-                _formatDuration(_duration),
-                style: const TextStyle(
-                  color: playerWhite,
-                  fontSize: 11,
-                ),
-              ),
-            ],
+                  Text(
+                    _formatDuration(_duration),
+                    style: const TextStyle(
+                      color: playerWhite,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           Row(
             children: [
@@ -8969,18 +12515,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               onPressed: _showQualitySelector,
             ),
           ],
-          if (_selectedProviderSource != null || _tracks.audio.isNotEmpty) ...[
+          if (_tracks.audio.isNotEmpty) ...[
             const SizedBox(width: 3),
             Material(
               color: Colors.black.withValues(alpha: 0.48),
               shape: const CircleBorder(),
               child: IconButton(
-                tooltip: _selectedProviderSource != null
-                    ? 'Audio options in provider player'
-                    : 'Audio language: $audioLabel',
-                onPressed: _selectedProviderSource != null
-                    ? _showProviderAudioHelp
-                    : _showAudioTracks,
+                tooltip: 'Audio language: $audioLabel',
+                onPressed: _showAudioTracks,
                 icon: const Icon(
                   Icons.audiotrack_rounded,
                   color: playerGoldLight,
@@ -9119,7 +12661,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 backgroundColor: playerGold,
                 foregroundColor: Colors.black,
               ),
-              onPressed: _initializePlayer,
+              onPressed: widget.movie.isMovieBox
+                  ? _prepareAndInitializePlayer
+                  : _initializePlayer,
               icon: const Icon(Icons.refresh),
               label: const Text('Retry'),
             ),
@@ -9130,14 +12674,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerBody() {
-    final providerSource = _selectedProviderSource;
-    if (providerSource != null) {
-      return ProviderEmbedPlayer(
-        key: ValueKey<String>('provider-${providerSource.id}-${providerSource.url}'),
-        source: providerSource,
-        onClose: _closeProviderSource,
-        onFailure: () => _tryNextProvider(providerSource),
+    if (widget.movie.isMovieBox && _loadingQualities) {
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  color: playerGold,
+                  strokeWidth: 2.4,
+                ),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'Preparing stream...',
+                style: TextStyle(color: playerWhite, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
       );
+    }
+
+    if (widget.movie.isMovieBox && _errorMessage != null) {
+      return Container(color: Colors.black, child: _playerError());
     }
 
     if (widget.localFilePath == null && !_validVideoUrl) {
@@ -9151,12 +12715,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               Icon(Icons.play_circle_outline_rounded,
                   color: playerGold, size: 48),
               SizedBox(height: 10),
-              Text('Choose a stream below',
+              Text('No playable stream is available',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: playerWhite,
                       fontSize: 15, fontWeight: FontWeight.w800)),
               SizedBox(height: 5),
-              Text('Select an available movie, TV or anime provider to start playback inside FLIXORA.',
+              Text('This title needs a valid Admin video source or a matching MovieBox/WeFeed stream.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
             ],
@@ -9365,6 +12929,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     unawaited(PictureInPictureService.setEnabled(false));
     _gestureFeedbackTimer?.cancel();
     _playerConnectionTimer?.cancel();
+    _playbackErrorTimer?.cancel();
     unawaited(_resetApplicationBrightness());
     _cancelHideTimer();
 
@@ -9375,6 +12940,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _errorSubscription?.cancel();
     _tracksSubscription?.cancel();
     _completedSubscription?.cancel();
+    _positionNotifier.dispose();
 
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -9597,23 +13163,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   Widget _playerResources() {
-    final isProviderStream = _selectedProviderSource != null;
-    final providerLanguages = widget.movie.audioLanguages
-        .map((language) => language.trim())
-        .where((language) => language.isNotEmpty)
-        .toSet()
-        .toList();
-    if (providerLanguages.isEmpty) {
-      final originalLabel = _originalAudioLanguageLabel();
-      providerLanguages.add(
-        originalLabel == 'Not listed' ? 'Original / Auto' : originalLabel,
-      );
-    }
-
     final selectedIndex = _tracks.audio.isEmpty
         ? 0
         : _selectedAudioTrackIndex.clamp(0, _tracks.audio.length - 1).toInt();
-    final originalLanguage = _originalAudioLanguageLabel().toLowerCase();
 
     return Container(
       margin: const EdgeInsets.only(top: 8),
@@ -9628,11 +13180,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         children: [
           const Row(
             children: [
-              Icon(
-                Icons.language_rounded,
-                color: playerGoldLight,
-                size: 18,
-              ),
+              Icon(Icons.language_rounded, color: playerGoldLight, size: 18),
               SizedBox(width: 7),
               Text(
                 'Resources',
@@ -9645,46 +13193,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-            isProviderStream
-                ? 'Available audio languages'
-                : 'Select audio language',
-            style: const TextStyle(
-              color: Color(0x99FFFFFF),
-              fontSize: 11,
-            ),
+          const Text(
+            'Select audio language',
+            style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
           ),
           const SizedBox(height: 10),
-          if (isProviderStream)
-            Wrap(
-              spacing: 7,
-              runSpacing: 7,
-              children: providerLanguages.map((language) {
-                final selected =
-                    language.toLowerCase() == originalLanguage;
-                return ChoiceChip(
-                  label: Text(language),
-                  selected: selected,
-                  showCheckmark: false,
-                  onSelected: (_) => _showProviderAudioHelp(),
-                  selectedColor: playerGold.withValues(alpha: 0.22),
-                  backgroundColor: playerBg,
-                  side: BorderSide(
-                    color: selected
-                        ? playerGold
-                        : const Color(0x3DFFFFFF),
-                  ),
-                  labelStyle: TextStyle(
-                    color: selected ? playerGoldLight : playerWhite,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                );
-              }).toList(),
-            )
-          else if (_tracks.audio.isNotEmpty)
+          if (_tracks.audio.isNotEmpty)
             Wrap(
               spacing: 7,
               runSpacing: 7,
@@ -9701,9 +13215,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   selectedColor: playerGold.withValues(alpha: 0.22),
                   backgroundColor: playerBg,
                   side: BorderSide(
-                    color: selected
-                        ? playerGold
-                        : const Color(0x3DFFFFFF),
+                    color: selected ? playerGold : const Color(0x3DFFFFFF),
                   ),
                   labelStyle: TextStyle(
                     color: selected ? playerGoldLight : playerWhite,
@@ -9718,21 +13230,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           else
             const Text(
               'No alternate audio languages are available.',
-              style: TextStyle(
-                color: Color(0x99FFFFFF),
-                fontSize: 11,
-              ),
+              style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
             ),
-          if (isProviderStream) ...[
-            const SizedBox(height: 8),
-            const Text(
-              'For embedded streams, change the audio track in the video player settings.',
-              style: TextStyle(
-                color: Color(0x80FFFFFF),
-                fontSize: 10,
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -10130,6 +13629,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             genre.toLowerCase().contains('action') ||
             genre.toLowerCase().contains('adventure')))
         .take(20).toList();
+    final screenSize = MediaQuery.sizeOf(context);
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final miniWidth = (screenSize.width * 0.56)
+        .clamp(180.0, 280.0)
+        .toDouble();
+    final miniHeight = miniWidth * 9 / 16 + 30;
+    final maxMiniRight = screenSize.width - miniWidth - 8;
+    final maxMiniBottom = screenSize.height - viewPadding.top -
+        viewPadding.bottom - miniHeight - 8;
+    final miniRight = (_miniPlayerOffset?.dx ?? 14.0)
+        .clamp(8.0, maxMiniRight < 8 ? 8.0 : maxMiniRight)
+        .toDouble();
+    final miniBottom = (_miniPlayerOffset?.dy ?? 18.0)
+        .clamp(8.0, maxMiniBottom < 8 ? 8.0 : maxMiniBottom)
+        .toDouble();
 
     return Stack(
       children: [
@@ -10178,7 +13692,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
                 _playerMetadata(),
                 const SizedBox(height: 16),
-                _providerSelector(),
                 const SizedBox(height: 13),
                 Wrap(
                   spacing: 8,
@@ -10192,7 +13705,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
                       ),
                     ),
-                    _detailAction(Icons.download_outlined, 'Download', widget.onDownload),
+                    _detailAction(
+                      Icons.download_outlined,
+                      'Download',
+                      widget.movie.isMovieBox && widget.movie.movieBoxIsSeries
+                          ? () => widget.onDownloadEpisode?.call(
+                                _selectedSeasonNumber,
+                                _selectedEpisodeNumber,
+                              )
+                          : widget.onDownload,
+                    ),
                     _detailAction(
                       Icons.video_library_outlined,
                       'View downloads',
@@ -10202,6 +13724,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 ),
                 const SizedBox(height: 18),
                 _playerResources(),
+                _movieBoxLanguageSelector(),
                 _tvEpisodeSelector(),
                 const SizedBox(height: 16),
                 const Text(
@@ -10226,45 +13749,94 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     ),
         if (_isMiniPlayer)
           Positioned(
-            right: 14,
-            bottom: 18,
+            right: miniRight,
+            bottom: miniBottom,
             child: Material(
               color: Colors.black,
               elevation: 18,
               borderRadius: BorderRadius.circular(13),
               clipBehavior: Clip.antiAlias,
               child: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.48,
-                child: AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: Stack(
-                    children: [
-                      Positioned.fill(child: _playerBody()),
-                      Positioned(
-                        top: 3,
-                        right: 3,
-                        child: Material(
-                          color: Colors.black.withValues(alpha: 0.72),
-                          shape: const CircleBorder(),
-                          child: IconButton(
-                            visualDensity: VisualDensity.compact,
-                            constraints: const BoxConstraints(
-                              minWidth: 34,
-                              minHeight: 34,
-                            ),
-                            padding: EdgeInsets.zero,
-                            tooltip: 'Expand player',
-                            onPressed: _toggleMiniPlayer,
-                            icon: const Icon(
-                              Icons.open_in_full_rounded,
-                              color: Colors.white,
-                              size: 17,
+                width: miniWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      height: 30,
+                      color: const Color(0xFF171717),
+                      padding: const EdgeInsets.only(left: 7, right: 3),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleMiniPlayer,
+                              onPanUpdate: (details) => _moveMiniPlayer(
+                                details,
+                                maxRight: maxMiniRight,
+                                maxBottom: maxMiniBottom,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.drag_indicator_rounded,
+                                    color: playerGold,
+                                    size: 19,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    'MINI PLAYER',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
+                          IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: _isPlaying ? 'Pause' : 'Play',
+                              onPressed: _togglePlay,
+                              icon: Icon(
+                                _isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: 'Expand player',
+                              onPressed: _toggleMiniPlayer,
+                              icon: const Icon(
+                                Icons.open_in_full_rounded,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                    AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: _playerBody(),
+                    ),
+                  ],
                 ),
               ),
             ),

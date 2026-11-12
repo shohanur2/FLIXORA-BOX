@@ -112,6 +112,7 @@ class ResumableDownloadService {
     required String url,
     required String fileName,
     required int uniqueId,
+    Map<String, String> headers = const <String, String>{},
     String? existingPartialPath,
     required DownloadProgressCallback onProgress,
     required void Function(String path, int offset) onQueued,
@@ -177,6 +178,7 @@ class ResumableDownloadService {
         options: Options(
           responseType: ResponseType.stream,
           headers: <String, String>{
+            ...headers,
             'Accept-Encoding': 'identity',
             if (offset > 0) 'Range': 'bytes=${offset}-',
           },
