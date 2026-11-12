@@ -12375,7 +12375,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           color: playerWhite,
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          fontFeatures: [FontFeature.tabularFigures()],
                         ),
                       ),
                       Expanded(
@@ -12412,7 +12411,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                           color: playerWhite,
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
-                          fontFeatures: [FontFeature.tabularFigures()],
                         ),
                       ),
                     ],
