@@ -3591,7 +3591,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _openMovie(Movie movie) async {
     if (!_beginTitleOpening(movie)) return;
     try {
-      final hasInternet = await InternetService.isOnline();
+      final hasInternet = _online ||
+          await InternetService.isOnline(forceRefresh: true);
       if (!mounted) return;
       if (!hasInternet) {
         setState(() {
@@ -3659,6 +3660,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (closeCurrentPlayer) {
         if (!mounted) return;
         Navigator.of(context).pop();
+      }
+
+      if (!_online) {
+        final online = await InternetService.isOnline(forceRefresh: true);
+        if (!mounted) return;
+        setState(() {
+          _online = online;
+          _connectionKnown = true;
+          if (!online && _allMovies().isEmpty) homeError = 'offline';
+        });
+        if (!online) {
+          _showNoInternetScreen();
+          return;
+        }
       }
 
       final selectedMovie = await _resolveMovieForOpening(movie);
@@ -3733,12 +3748,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    if (!selectedMovie.canAttemptPlayback) {
-      _showMessage('This title has no supported FLIXORA playback source.');
-      return;
-    }
-
-    final hasInternet = await InternetService.isOnline();
+    final hasInternet = _online ||
+        await InternetService.isOnline(forceRefresh: true);
     if (!mounted) return;
     if (!hasInternet) {
       setState(() {
@@ -3750,6 +3761,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!_online) setState(() => _online = true);
+    if (!selectedMovie.canAttemptPlayback) {
+      _showMessage('This title has no supported FLIXORA playback source.');
+      return;
+    }
     if (selectedMovie.isMovieBox) {
       unawaited(MovieBoxService.prewarm(
         selectedMovie.toMovieBoxMap(),
