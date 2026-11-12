@@ -1444,6 +1444,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _connectionKnown = false;
   bool _refreshing = false;
   bool _refreshingSecondaryCatalogues = false;
+  DateTime? _lastHomeRefreshAt;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
   String? _openingTitleKey;
@@ -2242,6 +2243,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshConnectionStatus();
+      final lastRefresh = _lastHomeRefreshAt;
+      if (lastRefresh == null ||
+          DateTime.now().difference(lastRefresh) >=
+              const Duration(minutes: 15)) {
+        // Refresh MovieBox home and current releases when the app returns
+        // after a while, without polling while the user is actively watching.
+        unawaited(loadHome());
+      }
     }
   }
 
@@ -2567,6 +2576,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             .catchError((_) => <Movie>[]),
       ]);
 
+      _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
       setState(() {
         _tmdbTrendingMovies = results[0].isNotEmpty
