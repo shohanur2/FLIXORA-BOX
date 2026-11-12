@@ -2161,13 +2161,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final audioLanguages =
           await _movieBoxPlayableAudioLanguages(movieBoxMatch);
-      if (audioLanguages.isEmpty) return null;
-
-      final verifiedMovie = Movie.fromCache({
-        ...movieBoxMatch.toJson(),
-        'audioLanguages': audioLanguages,
-      });
-      return MapEntry(category, verifiedMovie);
+      if (audioLanguages.isNotEmpty) {
+        final verifiedMovie = Movie.fromCache({
+          ...movieBoxMatch.toJson(),
+          'audioLanguages': audioLanguages,
+        });
+        return MapEntry(category, verifiedMovie);
+      }
+      // The MovieBox title exists but has no playable links. Continue to the
+      // published Admin fallback rather than marking this trending item dead.
     }
 
     final adminMatch = _cachedFlixoraMatch(candidate) ??
@@ -4279,6 +4281,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Opens a player for a title that has already been resolved to the
   /// canonical Admin/TMDB record. The caller owns the tap lock.
+  Future<Movie?> _resolvePublishedAdminFallback(Movie movie) async {
+    final client = supabaseClient;
+    if (client == null) return null;
+
+    try {
+      dynamic response;
+      if (movie.sourceId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('id', movie.sourceId)
+            .eq('is_published', true)
+            .limit(1);
+      } else if (movie.tmdbId > 0) {
+        response = await client
+            .from('movies')
+            .select()
+            .eq('tmdb_id', movie.tmdbId)
+            .eq('media_type', movie.mediaType)
+            .eq('is_published', true)
+            .order('created_at', ascending: false)
+            .limit(1);
+      } else {
+        final matches = await _findAdminRowsByTitleYear(client, movie);
+        response = matches
+            .where((row) => row is Map && row['is_published'] == true)
+            .toList(growable: false);
+      }
+
+      if (response is! List || response.isEmpty) return null;
+      final row = Map<String, dynamic>.from(response.first as Map);
+      if (row['is_published'] != true) return null;
+
+      final playable = await FlixoraMovieService.mapPlayableRows(
+        client,
+        [row],
+      );
+      if (playable.isEmpty || !playable.first.hasPlayableVideoUrl) return null;
+      return playable.first.withFallbackMetadata(movie);
+    } catch (error) {
+      debugPrint('Published Admin fallback lookup failed: $error');
+      return null;
+    }
+  }
+
   Future<void> _openResolvedPlayer(
     Movie selectedMovie,
     Movie requestedMovie,
@@ -4338,26 +4385,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!_online) setState(() => _online = true);
-    if (!selectedMovie.canAttemptPlayback) {
+
+    var movieToPlay = selectedMovie;
+    if (selectedMovie.isMovieBox) {
+      Map<String, dynamic>? prewarmedStreams;
+      try {
+        prewarmedStreams = await MovieBoxService.prewarmStreams(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ).timeout(const Duration(seconds: 18));
+      } catch (error) {
+        debugPrint('MovieBox stream preflight failed: $error');
+      }
+
+      if (prewarmedStreams == null ||
+          !MovieBoxStreamPolicy.hasPlayableLinks(prewarmedStreams)) {
+        final adminFallback =
+            await _resolvePublishedAdminFallback(selectedMovie);
+        if (adminFallback != null) {
+          movieToPlay = adminFallback;
+          _showMessage('MovieBox stream unavailable. Using published Admin source.');
+        }
+      }
+    }
+
+    if (!movieToPlay.canAttemptPlayback) {
       _showMessage('This title has no supported FLIXORA playback source.');
       return;
     }
-    if (selectedMovie.isMovieBox) {
-      unawaited(MovieBoxService.prewarm(
-        selectedMovie.toMovieBoxMap(),
-        isSeries: selectedMovie.movieBoxIsSeries,
-      ));
-    }
-    _recordWatch(selectedMovie);
+    _recordWatch(movieToPlay);
     Navigator.push(context, MaterialPageRoute(
       builder: (_) => MoviePlayerScreen(
-        movie: selectedMovie,
+        movie: movieToPlay,
         recommendedMovies: _allMovies(),
         onMovieSelected: _playMovieFromPlayer,
-        onSave: () => _toggleSaved(selectedMovie),
-        onDownload: () => addDownload(selectedMovie),
+        onSave: () => _toggleSaved(movieToPlay),
+        onDownload: () => addDownload(movieToPlay),
         onDownloadEpisode: (season, episode) => addDownload(
-          selectedMovie,
+          movieToPlay,
           seasonNumber: season,
           episodeNumber: episode,
         ),
