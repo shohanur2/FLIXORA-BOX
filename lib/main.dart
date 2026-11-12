@@ -3789,13 +3789,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     final visibilityKey = _catalogVisibilityKey(requested);
-    if (!_checkedCatalogVisibilityKeys.contains(visibilityKey)) {
-      await _refreshCatalogVisibility(
-        candidates: [requested],
-        forceRefresh: true,
-      );
-    }
-    if (_unpublishedCatalogKeys.contains(visibilityKey)) return null;
+    // Recheck the selected title on every open. The Admin Panel may have
+    // unpublished it since the last catalogue refresh; run this alongside
+    // the MovieBox lookup so it does not add serial startup latency.
+    final visibilityCheck = _refreshCatalogVisibility(
+      candidates: [requested],
+      forceRefresh: true,
+    );
 
     final cachedMovieBox = _cachedMovieBoxMatch(requested);
     final Future<Movie?>? parallelMovieBoxLookup = requested.isFlixora
@@ -3851,6 +3851,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         response = await _findAdminRowsByTitleYear(client, requested);
       }
 
+      await visibilityCheck;
+      if (!_checkedCatalogVisibilityKeys.contains(visibilityKey) ||
+          _unpublishedCatalogKeys.contains(visibilityKey)) {
+        return null;
+      }
+
       if (response is List && response.isNotEmpty) {
         final row = Map<String, dynamic>.from(response.first as Map);
         // Admin publication status remains authoritative over every catalogue.
@@ -3877,6 +3883,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (requested.hasPlayableVideoUrl) return requested;
       return resolveMovieBoxFallback(requested);
     } catch (error) {
+      await visibilityCheck;
+      if (!_checkedCatalogVisibilityKeys.contains(visibilityKey) ||
+          _unpublishedCatalogKeys.contains(visibilityKey)) {
+        return null;
+      }
       debugPrint('Could not resolve Admin movie record: $error');
       if (requested.isFlixora) {
         if (requested.hasPlayableVideoUrl) return requested;
