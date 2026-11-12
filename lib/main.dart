@@ -8237,7 +8237,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     Object? lastError;
 
     _isOpening = true;
-    _currentVideoUrl = null;
+    _currentVideoUrl = '';
     _playbackErrorTimer?.cancel();
     if (mounted) {
       setState(() {
