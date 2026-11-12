@@ -2692,7 +2692,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (!mounted) return;
 
-    final onlineNow = _online && await InternetService.isOnline();
+    final onlineNow = _online
+        ? await InternetService.isOnline()
+        : await InternetService.isOnline(forceRefresh: true);
     if (!mounted) return;
     if (!onlineNow) {
       setState(() {
@@ -2716,8 +2718,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _searchLoading = true;
       _searchError = null;
     });
+
+    final adminSearch = FlixoraMovieService.searchPublishedMovies(text)
+        .catchError((_) => <Movie>[]);
+    final tmdbSearch = TmdbService.search(text)
+        .catchError((_) => <Movie>[]);
     final movieBoxSearch = MovieBoxService.search(text)
-        .timeout(const Duration(seconds: 7))
+        .timeout(const Duration(seconds: 10))
         .then((result) {
       final items = result['items'] as List? ?? const [];
       return items
@@ -2727,24 +2734,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .toList(growable: false);
     }).catchError((_) => <Movie>[]);
 
-    final results = await Future.wait<List<Movie>>([
-      TmdbService.search(text).catchError((_) => <Movie>[]),
-      FlixoraMovieService.searchPublishedMovies(text)
-          .catchError((_) => <Movie>[]),
-      movieBoxSearch,
+    // Show Admin/TMDB results as soon as they arrive. MovieBox is merged in
+    // afterwards, so a slow provider search does not blank the Search screen.
+    final firstResults = await Future.wait<List<Movie>>([
+      adminSearch,
+      tmdbSearch,
     ]);
-
     if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
 
-    final combined = <Movie>[
-      ...results[1], // FLIXORA Admin records keep precedence.
-      ...results[2], // MovieBox/WeFeed is the central playback catalogue.
-      ...results[0], // TMDB remains the metadata/discovery fallback.
-    ];
+    final initialUnique = _deduplicateMovies([
+      ...firstResults[0],
+      ...firstResults[1],
+    ]);
+    setState(() {
+      searchResults = initialUnique;
+      _searchLoading = true;
+      _searchError = null;
+    });
 
-    final unique = _deduplicateMovies(combined);
+    final movieBoxItems = await movieBoxSearch;
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
+    // Admin records keep precedence, followed by MovieBox/WeFeed and TMDB.
+    final unique = _deduplicateMovies([
+      ...firstResults[0],
+      ...movieBoxItems,
+      ...firstResults[1],
+    ]);
 
     setState(() {
       searchResults = unique;
