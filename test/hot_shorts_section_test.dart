@@ -36,6 +36,26 @@ void main() {
     expect(section.items.single.movieBoxSubjectType, 7);
   });
 
+  test('Short TV Drama subject type 3 is treated as an episodic series', () {
+    final section = MovieBoxHomeSection.fromApi({
+      'title': 'Hot Shorts TV',
+      'items': [
+        {
+          'id': 'short-series-3',
+          'title': 'Example Short Drama',
+          'detailPath': 'series/example-short-drama',
+          'cover': 'https://cdn.example.test/short-drama.jpg',
+          'year': '2026',
+          'subjectType': 3,
+        },
+      ],
+    });
+
+    expect(section.items.single.movieBoxIsSeries, isTrue);
+    expect(section.items.single.mediaType, 'tv');
+    expect(section.items.single.movieBoxSubjectType, 3);
+  });
+
   test('Hot Shorts episode parser accepts object-shaped episode records', () {
     final episodes = MovieBoxShortEpisode.fromSeasons([
       {
