@@ -1948,8 +1948,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// Keep the Home hero and Trending Movies row populated if TMDB's
-  /// trending endpoint temporarily returns an empty response. Admin records
-  /// stay first so they retain precedence over matching TMDB catalogue items.
+  /// trending endpoint temporarily returns an empty response. Matching
+  /// MovieBox records remain canonical; published Admin rows are fallback.
   MovieBoxHomeSection? get _hotShortsSection {
     for (final section in _movieBoxSections) {
       if (section.isHotShorts && section.items.isNotEmpty) return section;
@@ -3135,7 +3135,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
-    final cachedSearch = await MovieCache.getSearch(text);
+    final cachedSearch =
+        _deduplicateMovies(await MovieCache.getSearch(text));
     if (!mounted ||
         requestToken != _searchRequestToken ||
         _search.trim().toLowerCase() != text.toLowerCase()) {
