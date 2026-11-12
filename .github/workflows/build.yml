@@ -486,6 +486,109 @@ jobs:
           new_h5_call = 'self.detail_mobile(&item.id, "", item.subject_type).await'
           if old_h5_call not in h5:
               raise SystemExit("SparkBoxCore detail_rich call changed; review Short TV support.")
+          parse_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/parse.rs")
+          parse_source = parse_path.read_text()
+          old_parse_season = """pub fn parse_season(o: &Map<String, Value>) -> Option<Season> {
+              let se = as_i64(o.get("se"))?;
+              if se < 0 {
+                  return None;
+              }
+              let mut listed: Vec<i64> = s(o, "allEp")
+                  .split([',', ';', ' '])
+                  .filter_map(|t| t.trim().parse::<i64>().ok())
+                  .collect();
+              listed.sort_unstable();
+              listed.dedup();
+              let max_ep = as_i64(o.get("maxEp")).unwrap_or(0);
+              let episodes = if !listed.is_empty() {
+                  listed
+              } else {
+                  (1..=max_ep.max(0)).collect()
+              };
+              if episodes.is_empty() {
+                  return None;
+              }
+              let max = *episodes.iter().max().unwrap();
+              Some(Season {
+                  se,
+                  max_ep: max,
+                  episodes,
+              })
+          }"""
+          new_parse_season = """pub fn parse_season(o: &Map<String, Value>) -> Option<Season> {
+              let se = as_i64(o.get("se"))
+                  .or_else(|| as_i64(o.get("season")))
+                  .or_else(|| as_i64(o.get("seasonNumber")))?;
+              if se < 0 {
+                  return None;
+              }
+              let mut listed: Vec<i64> = s(o, "allEp")
+                  .split([',', ';', ' '])
+                  .filter_map(|t| t.trim().parse::<i64>().ok())
+                  .collect();
+              if listed.is_empty() {
+                  for raw in get_arr(o.get("episodes")) {
+                      let episode = as_i64(Some(raw))
+                          .or_else(|| as_i64(raw.get("ep")))
+                          .or_else(|| as_i64(raw.get("episode")))
+                          .or_else(|| as_i64(raw.get("episodeNumber")))
+                          .or_else(|| as_i64(raw.get("number")));
+                      if let Some(number) = episode {
+                          if number > 0 {
+                              listed.push(number);
+                          }
+                      }
+                  }
+              }
+              listed.sort_unstable();
+              listed.dedup();
+              let max_ep = as_i64(o.get("maxEp"))
+                  .or_else(|| as_i64(o.get("totalEpisode")))
+                  .unwrap_or(0);
+              let episodes = if !listed.is_empty() {
+                  listed
+              } else {
+                  (1..=max_ep.max(0)).collect()
+              };
+              if episodes.is_empty() {
+                  return None;
+              }
+              let max = *episodes.iter().max().unwrap();
+              Some(Season {
+                  se,
+                  max_ep: max,
+                  episodes,
+              })
+          }"""
+          if old_parse_season not in parse_source:
+              raise SystemExit("SparkBoxCore parse_season changed; review Short TV episode parsing.")
+          parse_source = parse_source.replace(old_parse_season, new_parse_season, 1)
+          parse_test = """#[cfg(test)]
+          mod short_tv_season_tests {
+              use super::*;
+              use serde_json::json;
+
+              #[test]
+              fn parses_short_tv_episode_object_lists() {
+                  let raw = json!({
+                      "seasonNumber": 2,
+                      "episodes": [
+                          { "ep": 3 },
+                          { "episodeNumber": 1 },
+                          2
+                      ]
+                  });
+                  let season = parse_season(raw.as_object().unwrap()).expect("season parses");
+                  assert_eq!(season.se, 2);
+                  assert_eq!(season.episodes, vec![1, 2, 3]);
+              }
+          }
+
+          """
+          if "mod short_tv_season_tests" not in parse_source:
+              parse_source += "\n" + parse_test
+          parse_path.write_text(parse_source)
+
           h5_path.write_text(h5.replace(old_h5_call, new_h5_call, 1))
 
           ffi_path = Path("/tmp/SparkBoxCore/sparkbox-ffi/src/lib.rs")
