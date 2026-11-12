@@ -9,25 +9,13 @@ const corsHeaders = {
 
 type Candidate = {
   key: string;
-  tmdbId: number;
-  mediaType: "movie" | "tv";
-  title: string;
-  year: string;
+  sourceId: number;
 };
 
 type AdminRow = {
   id: number;
-  tmdb_id: number | null;
-  title: string | null;
-  release_date: string | null;
-  media_type: string | null;
   is_published: boolean | null;
-  created_at: string | null;
 };
-
-let cachedRows: AdminRow[] | null = null;
-let cachedAt = 0;
-let rowsInFlight: Promise<AdminRow[]> | null = null;
 
 function jsonResponse(
   body: Record<string, unknown>,
@@ -40,19 +28,6 @@ function jsonResponse(
       "Cache-Control": "no-store",
     },
   });
-}
-
-function normalizeTitle(value: string): string {
-  // Keep the same punctuation/whitespace normalization used by FLIXORA.
-  return value
-    .toLowerCase()
-    .replace(/[\s\-_.:,;!?()\[\]{}]+/g, " ")
-    .trim();
-}
-
-function yearOf(value: unknown): string {
-  const date = String(value ?? "").trim();
-  return /^\d{4}/.test(date) ? date.substring(0, 4) : "";
 }
 
 function serviceKey(): string {
@@ -76,117 +51,47 @@ function serviceKey(): string {
   throw new Error("Supabase server key is not configured.");
 }
 
-async function loadAdminRows(): Promise<AdminRow[]> {
-  if (cachedRows && Date.now() - cachedAt < 60_000) return cachedRows;
-  if (rowsInFlight) return rowsInFlight;
-
-  rowsInFlight = (async () => {
-    const url = Deno.env.get("SUPABASE_URL") ?? "";
-    if (!url) throw new Error("Supabase URL is not configured.");
-
-    const admin = createClient(url, serviceKey(), {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
-
-    const rows: AdminRow[] = [];
-    const pageSize = 500;
-    const maximumRows = 10_000;
-
-    for (let offset = 0; offset < maximumRows; offset += pageSize) {
-      const { data, error } = await admin
-        .from("movies")
-        .select("id, tmdb_id, title, release_date, media_type, is_published, created_at")
-        .order("created_at", { ascending: false })
-        .order("id", { ascending: false })
-        .range(offset, offset + pageSize - 1);
-
-      if (error) throw error;
-      const page = (data ?? []) as AdminRow[];
-      rows.push(...page);
-      if (page.length < pageSize) break;
-    }
-
-    cachedRows = rows;
-    cachedAt = Date.now();
-    return rows;
-  })();
-
-  try {
-    return await rowsInFlight;
-  } finally {
-    rowsInFlight = null;
-  }
-}
-
 function normalizeCandidates(value: unknown): Candidate[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 250).flatMap((raw): Candidate[] => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
     const key = String(item.key ?? "").trim().slice(0, 256);
-    const title = String(item.title ?? "").trim().slice(0, 180);
-    const mediaType = item.mediaType === "tv" ? "tv" : "movie";
-    const tmdbId = Number(item.tmdbId ?? 0);
-    const rawYear = String(item.year ?? "").trim();
-    const year = /^\d{4}$/.test(rawYear) ? rawYear : "";
+    const source = String(item.source ?? "");
+    const sourceId = Number(item.sourceId ?? 0);
 
-    if (!key || !title || !Number.isSafeInteger(tmdbId) || tmdbId < 0) {
+    // Only exact Admin row identities are eligible for publication filtering.
+    // MovieBox/TMDB candidates are deliberately ignored even if they share a
+    // TMDB ID or title/year with an unpublished Admin row.
+    if (
+      source !== "admin" ||
+      !key.startsWith("admin:id:") ||
+      !Number.isSafeInteger(sourceId) ||
+      sourceId <= 0 ||
+      key !== `admin:id:${sourceId}`
+    ) {
       return [];
     }
-    return [{ key, title, mediaType, tmdbId, year }];
+
+    return [{ key, sourceId }];
   });
 }
 
-function findBlockedKeys(rows: AdminRow[], candidates: Candidate[]): string[] {
-  const latestByTmdb = new Map<string, AdminRow>();
-  const latestByTitleYear = new Map<string, AdminRow>();
-  const latestByTitleWithoutYear = new Map<string, AdminRow>();
-  const latestByTitle = new Map<string, AdminRow>();
+function findBlockedKeys(
+  rows: AdminRow[],
+  candidates: Candidate[],
+): string[] {
+  const rowsById = new Map<number, AdminRow>(
+    rows.map((row) => [Number(row.id), row]),
+  );
 
-  // Rows arrive newest-first. The first matching Admin record is authoritative.
-  for (const row of rows) {
-    const mediaType = row.media_type === "tv" ? "tv" : "movie";
-    const tmdbId = Number(row.tmdb_id ?? 0);
-    const title = normalizeTitle(String(row.title ?? ""));
-    const year = yearOf(row.release_date);
-
-    if (tmdbId > 0) {
-      const key = `${mediaType}:${tmdbId}`;
-      if (!latestByTmdb.has(key)) latestByTmdb.set(key, row);
-    }
-
-    if (!title) continue;
-    const base = `${mediaType}:${title}`;
-    if (!latestByTitle.has(base)) latestByTitle.set(base, row);
-
-    if (year) {
-      const key = `${base}:${year}`;
-      if (!latestByTitleYear.has(key)) latestByTitleYear.set(key, row);
-    } else if (!latestByTitleWithoutYear.has(base)) {
-      latestByTitleWithoutYear.set(base, row);
-    }
-  }
-
-  const blocked: string[] = [];
-  for (const candidate of candidates) {
-    const title = normalizeTitle(candidate.title);
-    const base = `${candidate.mediaType}:${title}`;
-    const idMatch = candidate.tmdbId > 0
-      ? latestByTmdb.get(`${candidate.mediaType}:${candidate.tmdbId}`)
-      : undefined;
-    const titleMatch = candidate.year
-      ? latestByTitleYear.get(`${base}:${candidate.year}`) ??
-        latestByTitleWithoutYear.get(base)
-      : latestByTitle.get(base);
-    const match = idMatch ?? titleMatch;
-
-    if (match && match.is_published !== true) blocked.push(candidate.key);
-  }
-
-  return [...new Set(blocked)];
+  return candidates
+    .filter((candidate) => {
+      const row = rowsById.get(candidate.sourceId);
+      // Missing/deleted Admin rows and unpublished rows are both hidden.
+      return !row || row.is_published !== true;
+    })
+    .map((candidate) => candidate.key);
 }
 
 Deno.serve(async (request: Request) => {
@@ -207,7 +112,23 @@ Deno.serve(async (request: Request) => {
       return jsonResponse({ blockedKeys: [], checked: 0 });
     }
 
-    const rows = await loadAdminRows();
+    const url = Deno.env.get("SUPABASE_URL") ?? "";
+    if (!url) throw new Error("Supabase URL is not configured.");
+
+    const admin = createClient(url, serviceKey(), {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+    const sourceIds = [...new Set(candidates.map((item) => item.sourceId))];
+    const { data, error } = await admin
+      .from("movies")
+      .select("id, is_published")
+      .in("id", sourceIds);
+
+    if (error) throw error;
+    const rows = (data ?? []) as AdminRow[];
     return jsonResponse({
       blockedKeys: findBlockedKeys(rows, candidates),
       checked: candidates.length,
