@@ -124,9 +124,11 @@ class MovieBoxService {
   static Future<T> _retry<T>(
     Future<T> Function() load, {
     bool Function(T value)? isUsable,
+    int? maxAttempts,
   }) async {
     Object? lastError;
-    for (var attempt = 0; attempt < MovieBoxStreamPolicy.maxAttempts; attempt++) {
+    final attempts = maxAttempts ?? MovieBoxStreamPolicy.maxAttempts;
+    for (var attempt = 0; attempt < attempts; attempt++) {
       try {
         final value = await load();
         if (isUsable == null || isUsable(value)) return value;
@@ -134,7 +136,7 @@ class MovieBoxService {
       } catch (error) {
         lastError = error;
       }
-      if (attempt + 1 < MovieBoxStreamPolicy.maxAttempts) {
+      if (attempt + 1 < attempts) {
         await Future.delayed(MovieBoxStreamPolicy.retryDelay);
       }
     }
@@ -176,6 +178,7 @@ class MovieBoxService {
       return _retry(
         () => SparkBoxCore.playDetail(item),
         isUsable: (value) => value.isNotEmpty,
+        maxAttempts: 2,
       );
     }
     return _remember(
@@ -185,6 +188,7 @@ class MovieBoxService {
       () => _retry(
         () => SparkBoxCore.playDetail(item),
         isUsable: (value) => value.isNotEmpty,
+        maxAttempts: 2,
       ),
     );
   }
@@ -197,6 +201,7 @@ class MovieBoxService {
         () => _retry(
           () => SparkBoxCore.seasons(subjectId),
           isUsable: (items) => items.isNotEmpty,
+          maxAttempts: 2,
         ),
       );
 
@@ -227,6 +232,7 @@ class MovieBoxService {
           isSeries: isSeries,
         ),
         isUsable: MovieBoxStreamPolicy.hasPlayableLinks,
+        maxAttempts: 1,
       ),
     );
   }
