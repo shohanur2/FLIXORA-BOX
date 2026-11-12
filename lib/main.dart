@@ -574,32 +574,43 @@ class InternetService {
   }
 
   static Future<bool> _performCheck() async {
-    try {
-      final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) return false;
+    final endpoints = <Uri>[
+      Uri.parse('https://www.google.com/generate_204'),
+      Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
+      Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
+      Uri.parse('https://movie-box.co/'),
+      if (apiKey.isNotEmpty)
+        Uri.parse(
+          'https://api.themoviedb.org/3/configuration?api_key=$apiKey',
+        ),
+    ];
+    final completer = Completer<bool>();
+    var remaining = endpoints.length;
 
-      // Probe both reachability endpoints together. A slow first endpoint
-      // must not hold up every movie tap while the second is already online.
-      final endpoints = <Uri>[
-        Uri.parse('https://www.google.com/generate_204'),
-        Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
-      ];
-      final results = await Future.wait<bool>(
-        endpoints.map((endpoint) async {
-          try {
-            final response = await http
-                .get(endpoint)
-                .timeout(const Duration(seconds: 2));
-            return response.statusCode == 204 || response.statusCode == 200;
-          } catch (_) {
-            return false;
-          }
-        }),
-      );
-      return results.any((reachable) => reachable);
-    } catch (_) {
-      return false;
+    for (final endpoint in endpoints) {
+      unawaited(() async {
+        var reachable = false;
+        try {
+          final response = await http
+              .get(endpoint)
+              .timeout(const Duration(seconds: 3));
+          reachable = response.statusCode >= 200 && response.statusCode < 500;
+        } catch (_) {}
+
+        if (reachable && !completer.isCompleted) {
+          completer.complete(true);
+        }
+        remaining--;
+        if (remaining == 0 && !completer.isCompleted) {
+          completer.complete(false);
+        }
+      }());
     }
+
+    return completer.future.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => false,
+    );
   }
 }
 class MovieCache {
@@ -1430,6 +1441,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _online = false;
   bool _connectionKnown = false;
   bool _refreshing = false;
+  bool _refreshingSecondaryCatalogues = false;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
   String? _openingTitleKey;
@@ -1523,6 +1535,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _deduplicateMovies(List<Movie> movies) {
     final seenTmdbIds = <String>{};
     final seenTitleYears = <String>{};
+    final seenTitleBasesWithYear = <String>{};
+    final seenTitleBasesWithoutYear = <String>{};
     final seenFallbackIds = <String>{};
 
     return movies.where((movie) {
@@ -1535,9 +1549,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final year = movie.year.trim().length >= 4
           ? movie.year.trim().substring(0, 4)
           : '';
-      if (normalizedTitle.isNotEmpty && year.isNotEmpty && year != 'N/A') {
-        final titleYearKey = '${movie.mediaType}:$normalizedTitle:$year';
-        if (!seenTitleYears.add(titleYearKey)) return false;
+      if (normalizedTitle.isNotEmpty) {
+        final titleBase = '${movie.mediaType}:$normalizedTitle';
+        if (year.isNotEmpty && year != 'N/A') {
+          if (seenTitleBasesWithoutYear.contains(titleBase)) return false;
+          final titleYearKey = '$titleBase:$year';
+          if (!seenTitleYears.add(titleYearKey)) return false;
+          seenTitleBasesWithYear.add(titleBase);
+        } else {
+          if (seenTitleBasesWithYear.contains(titleBase) ||
+              !seenTitleBasesWithoutYear.add(titleBase)) {
+            return false;
+          }
+        }
       }
 
       if (movie.tmdbId <= 0) {
@@ -1656,27 +1680,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<List<String>> _movieBoxPlayableAudioLanguages(Movie movie) async {
-    final detail = await MovieBoxService.playDetail(movie.toMovieBoxMap())
+    final detail = await MovieBoxService.detail(movie.toMovieBoxMap())
         .timeout(const Duration(seconds: 8));
-    final response = await MovieBoxService.streams(
-      detail,
-      season: 0,
-      episode: 0,
-      isSeries: false,
-    ).timeout(const Duration(seconds: 8));
-    final links = response['links'] as List? ?? const [];
+    final rawDubs = detail['dubs'] as List? ?? const [];
     final languages = <String>[];
-    for (final rawLink in links.whereType<Map>()) {
-      final url = (rawLink['url'] ?? '').toString().trim();
-      final uri = Uri.tryParse(url);
-      final playable = uri != null &&
-          (uri.scheme == 'https' || uri.scheme == 'http') &&
-          uri.host.isNotEmpty;
-      if (!playable) continue;
-      final rawLabel = (rawLink['label'] ?? '').toString();
-      final label = rawLabel.split('·').first.trim();
-      final language = label.isEmpty ? 'Original' : label;
-      if (!languages.contains(language)) languages.add(language);
+    for (final rawDub in rawDubs.whereType<Map>()) {
+      final language = (rawDub['name'] ?? rawDub['lanName'] ?? '')
+          .toString()
+          .trim();
+      if (language.isNotEmpty &&
+          !language.toLowerCase().contains('subtitle') &&
+          !languages.contains(language)) {
+        languages.add(language);
+      }
     }
     return languages;
   }
@@ -1804,9 +1820,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final verifiedAll = <Movie>[];
       for (var start = 0;
-          start < candidates.length && verifiedAll.length < 24;
-          start += 4) {
-        final batch = candidates.skip(start).take(4);
+          start < candidates.length && verifiedAll.length < 16;
+          start += 3) {
+        final batch = candidates.skip(start).take(3);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map((candidate) async {
             final key = '${candidate.mediaType}:${candidate.tmdbId}';
@@ -1828,13 +1844,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
 
         for (final entry in resolved.whereType<MapEntry<String, Movie>>()) {
-          if (verifiedAll.length >= 24) break;
+          if (verifiedAll.length >= 16) break;
           verifiedAll.add(entry.value);
         }
       }
 
       final verified = _deduplicateMovies(verifiedAll)
-          .take(24)
+          .take(16)
           .toList(growable: false);
       final verifiedHindi = verified.where(_hasHindiAudio).toList();
       final verifiedBollywood = verified
@@ -2295,20 +2311,150 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(sections);
-      unawaited(_refreshPlayableTrendingMovies());
     } catch (error) {
       debugPrint('MovieBox/WeFeed home feed unavailable: $error');
     }
   }
 
+  Future<void> _refreshSecondaryCatalogues() async {
+    if (_refreshingSecondaryCatalogues || !_online) return;
+    _refreshingSecondaryCatalogues = true;
+    try {
+      final loaders = <Future<List<Movie>> Function()>[
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_genres': '16',
+          'with_origin_country': 'JP',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'ko',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'bn',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'bn',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'en',
+          'with_origin_country': 'US',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ta',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'te',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ml',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'kn',
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'ja',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'zh',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_original_language': 'th',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+      ];
+
+      final results = <List<Movie>>[];
+      // Keep the radio of background catalogue requests low so image loading
+      // and a user-started stream are not competing with a large API burst.
+      for (var start = 0; start < loaders.length; start += 4) {
+        final batch = await Future.wait<List<Movie>>(
+          loaders.skip(start).take(4).map((load) => load()),
+        );
+        results.addAll(batch);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        if (results[0].isNotEmpty) anime = results[0];
+        if (results[2].isNotEmpty) bengaliMovies = results[2];
+        if (results[3].isNotEmpty) bengaliTv = results[3];
+
+        final bollywood = [...results[4], ...results[14]];
+        if (bollywood.isNotEmpty) {
+          bollywoodMovies = _deduplicateMovies(bollywood);
+        }
+        if (results[5].isNotEmpty) hollywoodMovies = results[5];
+
+        final southIndian = [
+          ...results[6],
+          ...results[7],
+          ...results[8],
+          ...results[9],
+        ];
+        if (southIndian.isNotEmpty) {
+          southIndianMovies = _deduplicateMovies(southIndian);
+        }
+        if (results[10].isNotEmpty) indianDramaTv = results[10];
+
+        final asianDrama = [
+          ...results[1],
+          ...results[11],
+          ...results[12],
+          ...results[13],
+        ];
+        if (asianDrama.isNotEmpty) koreanDrama = _deduplicateMovies(asianDrama);
+      });
+
+      await Future.wait([
+        MovieCache.saveList(MovieCache.animeKey, anime),
+        MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
+        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
+        MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
+        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
+        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
+        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
+        MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
+      ]);
+    } catch (error) {
+      debugPrint('Background regional catalogue refresh failed: $error');
+    } finally {
+      _refreshingSecondaryCatalogues = false;
+    }
+  }
+
   Future<void> loadHome() async {
     if (_refreshing) return;
-
     _refreshing = true;
 
     try {
       final online = await InternetService.isOnline();
-
       if (!mounted) return;
 
       if (!online) {
@@ -2328,82 +2474,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         homeError = null;
       });
 
+      // MovieBox home is independent of TMDB and must not block the first paint.
       unawaited(_refreshMovieBoxHome());
 
+      // Load only the sections needed for the first Home screen. Regional
+      // catalogues and extra pages arrive in the background after first paint.
       final results = await Future.wait<List<Movie>>([
-        TmdbService.getMovies('trending/movie/week', pages: 3)
+        TmdbService.getMovies('trending/movie/week')
             .catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/popular', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/now_playing', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('movie/top_rated', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('trending/tv/week', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/popular', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('tv/top_rated', pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_genres': '16', 'with_origin_country': 'JP',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ko',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        FlixoraMovieService.getPublishedMovies().catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'en', 'with_origin_country': 'US',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ta', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'te', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'ml', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'kn', 'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_origin_country': 'IN',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'ja',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'zh',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        TmdbService.getMovies('discover/tv', extraParams: {
-          'with_original_language': 'th',
-          'sort_by': 'popularity.desc',
-        }, pages: 2).catchError((_) => <Movie>[]),
-        // Hindi-language films made outside India are also frequently
-        // catalogued as Bollywood titles; include them without the country gate.
-        TmdbService.getMovies('discover/movie', extraParams: {
-          'with_original_language': 'hi',
-          'sort_by': 'popularity.desc',
-        }, pages: 3).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/popular')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/now_playing')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('movie/top_rated')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('trending/tv/week')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/popular')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/top_rated')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/on_the_air')
+            .catchError((_) => <Movie>[]),
+        TmdbService.getMovies('tv/airing_today')
+            .catchError((_) => <Movie>[]),
+        FlixoraMovieService.getPublishedMovies()
+            .catchError((_) => <Movie>[]),
       ]);
 
       if (!mounted) return;
-
       setState(() {
         _tmdbTrendingMovies = results[0].isNotEmpty
             ? results[0]
@@ -2412,51 +2511,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         popular = results[1].isNotEmpty ? results[1] : popular;
         latest = results[2].isNotEmpty ? results[2] : latest;
         topRated = results[3].isNotEmpty ? results[3] : topRated;
-        // Keep the last successful catalogue when a transient TMDB request
-        // fails, so a temporary API issue does not empty a whole Home section.
-        trendingTv = results[4].isNotEmpty ? results[4] : trendingTv;
+
+        trendingTv = _deduplicateMovies([
+          ...results[4],
+          ...results[7],
+          ...results[8],
+        ]).isNotEmpty
+            ? _deduplicateMovies([...results[4], ...results[7], ...results[8]])
+            : trendingTv;
         popularTv = results[5].isNotEmpty ? results[5] : popularTv;
         topRatedTv = results[6].isNotEmpty ? results[6] : topRatedTv;
-        anime = results[7].isNotEmpty ? results[7] : anime;
-        bengaliMovies = results[9].isNotEmpty ? results[9] : bengaliMovies;
-        bengaliTv = results[10].isNotEmpty ? results[10] : bengaliTv;
-        flixoraMovies = results[11].isNotEmpty ? results[11] : flixoraMovies;
+        flixoraMovies = results[9].isNotEmpty ? results[9] : flixoraMovies;
 
         final refreshedTrendingMovies = _homeTrendingMovies();
         if (refreshedTrendingMovies.isNotEmpty) {
           trending = refreshedTrendingMovies;
         }
 
-        final refreshedBollywood = [...results[12], ...results[22]];
-        if (refreshedBollywood.isNotEmpty) {
-          bollywoodMovies = _deduplicateMovies(refreshedBollywood);
-        }
-        if (results[13].isNotEmpty) hollywoodMovies = results[13];
-
-        final refreshedSouthIndian = [
-          ...results[14], ...results[15], ...results[16], ...results[17],
-        ];
-        if (refreshedSouthIndian.isNotEmpty) {
-          southIndianMovies = _deduplicateMovies(refreshedSouthIndian);
-        }
-
-        if (results[18].isNotEmpty) indianDramaTv = results[18];
-        final refreshedKoreanDrama = [
-          ...results[8], ...results[19], ...results[20], ...results[21],
-        ];
-        if (refreshedKoreanDrama.isNotEmpty) {
-          koreanDrama = _deduplicateMovies(refreshedKoreanDrama);
-        }
         loading = false;
-
-        if (_allMovies().isEmpty) {
-          homeError = 'Unable to load movies.';
-        } else {
-          homeError = null;
-        }
+        homeError = _allMovies().isEmpty ? 'Unable to load movies.' : null;
 
         final visibleCount = _homeTrendingMovies().length;
-
         if (visibleCount == 0) {
           _slide = 0;
         } else if (_slide >= visibleCount) {
@@ -2466,32 +2541,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       _syncFeaturedCarouselAfterDataChange();
 
-      await Future.wait([
-        MovieCache.saveList(MovieCache.trendingKey, trending),
-        MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
-        MovieCache.saveList(MovieCache.popularKey, popular),
-        MovieCache.saveList(MovieCache.latestKey, latest),
-        MovieCache.saveList(MovieCache.topRatedKey, topRated),
-        MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
-        MovieCache.saveList(MovieCache.popularTvKey, popularTv),
-        MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
-        MovieCache.saveList(MovieCache.animeKey, anime),
-        MovieCache.saveList(MovieCache.koreanKey, koreanDrama),
-        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
-        MovieCache.saveList(MovieCache.bengaliTvKey, bengaliTv),
-        MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
-        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
-        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
-        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
-        MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
-      ]);
-      unawaited(_refreshPlayableTrendingMovies());
-    } catch (e) {
-      if (!mounted) return;
+      // Cache first-paint sections without delaying the visible Home screen.
+      unawaited(() async {
+        await Future.wait([
+          MovieCache.saveList(MovieCache.trendingKey, trending),
+          MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
+          MovieCache.saveList(MovieCache.popularKey, popular),
+          MovieCache.saveList(MovieCache.latestKey, latest),
+          MovieCache.saveList(MovieCache.topRatedKey, topRated),
+          MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+          MovieCache.saveList(MovieCache.popularTvKey, popularTv),
+          MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
+          MovieCache.saveList(MovieCache.flixoraKey, flixoraMovies),
+        ]);
+      }());
 
+      unawaited(_refreshSecondaryCatalogues());
+      unawaited(_refreshPlayableTrendingMovies());
+    } catch (error) {
+      if (!mounted) return;
       setState(() {
         loading = false;
-        if (_allMovies().isEmpty) homeError = e.toString();
+        if (_allMovies().isEmpty) homeError = error.toString();
       });
     } finally {
       _refreshing = false;
@@ -7890,7 +7961,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         season: season,
         episode: episode,
         isSeries: widget.movie.movieBoxIsSeries,
-      ).timeout(const Duration(seconds: 12));
+      ).timeout(const Duration(seconds: 25));
       if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
 
       final rawLinks = result['links'] as List? ?? const [];
@@ -7994,51 +8065,83 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     Map<String, String> item,
     int requestToken,
   ) async {
-    final url = item['video_url']?.trim() ?? '';
-    final uri = Uri.tryParse(url);
-    if (url.isEmpty ||
-        uri == null ||
-        (uri.scheme != 'https' && uri.scheme != 'http') ||
-        uri.host.isEmpty) {
-      throw StateError('The selected episode returned an invalid stream URL.');
-    }
+    final candidates = <Map<String, String>>[
+      item,
+      ..._availableQualities.where(
+        (quality) => quality['video_url'] != item['video_url'],
+      ),
+    ].take(4).toList(growable: false);
+    Object? lastError;
 
     _isOpening = true;
     _playbackErrorTimer?.cancel();
     try {
-      await _player.open(
-        Media(url, httpHeaders: _headersForQuality(item)),
-        play: false,
-      );
-      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+      for (final candidate in candidates) {
+        if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+          return;
+        }
 
-      // Reset the decoder's selected audio stream for the new episode.
-      try {
-        await _player.setAudioTrack(AudioTrack.auto());
-      } catch (_) {}
-      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+        final url = candidate['video_url']?.trim() ?? '';
+        final uri = Uri.tryParse(url);
+        if (url.isEmpty ||
+            uri == null ||
+            (uri.scheme != 'https' && uri.scheme != 'http') ||
+            uri.host.isEmpty) {
+          lastError = StateError('The selected episode returned an invalid stream URL.');
+          continue;
+        }
 
-      _currentVideoUrl = url;
-      _position = Duration.zero;
-      _duration = Duration.zero;
-      _selectedAudioTrackIndex = 0;
-      await _player.play();
-      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+        try {
+          await _player.open(
+            Media(url, httpHeaders: _headersForQuality(candidate)),
+            play: false,
+          );
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return;
+          }
 
-      if (mounted) {
-        setState(() {
-          _initialized = true;
-          _selectedQuality = item['quality'];
-          _errorMessage = null;
-          _tvEpisodeError = null;
-        });
+          // Reset the decoder's selected audio stream for the new episode.
+          try {
+            await _player.setAudioTrack(AudioTrack.auto());
+          } catch (_) {}
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return;
+          }
+
+          _currentVideoUrl = url;
+          _position = Duration.zero;
+          _duration = Duration.zero;
+          _selectedAudioTrackIndex = 0;
+          await _player.play();
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return;
+          }
+
+          if (mounted) {
+            setState(() {
+              _initialized = true;
+              _selectedQuality = candidate['quality'];
+              _errorMessage = null;
+              _tvEpisodeError = null;
+            });
+          }
+          _prewarmNextMovieBoxEpisode();
+          return;
+        } catch (error) {
+          lastError = error;
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
       }
-      _prewarmNextMovieBoxEpisode();
+
+      throw lastError ?? StateError('No working stream quality was returned.');
     } catch (error) {
-      if (mounted && !_isDisposed &&
+      if (mounted &&
+          !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
-          _errorMessage = 'Could not start the selected episode. Please retry.';
+          _errorMessage = 'Could not start this MovieBox stream. Please try again.';
           _tvEpisodeError = error.toString();
         });
       }
