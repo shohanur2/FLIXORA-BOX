@@ -150,7 +150,7 @@ jobs:
                     ins(&mut h, "authorization", format!("Bearer {t}"));
                 }
             }
-            let mut response = self.http.get(&url).headers(h.clone())
+            let response = self.http.get(&url).headers(h.clone())
                 .timeout(std::time::Duration::from_secs(12))
                 .send().await?;
             let mut status = response.status().as_u16();
@@ -167,11 +167,11 @@ jobs:
                     let mut retry_headers = h;
                     retry_headers.remove(reqwest::header::AUTHORIZATION);
                     ins(&mut retry_headers, "authorization", format!("Bearer {fresh_token}"));
-                    response = self.http.get(&url).headers(retry_headers)
+                    let retry_response = self.http.get(&url).headers(retry_headers)
                         .timeout(std::time::Duration::from_secs(12))
                         .send().await?;
-                    status = response.status().as_u16();
-                    text = response.text().await?;
+                    status = retry_response.status().as_u16();
+                    text = retry_response.text().await?;
                     root = try_json(&text).unwrap_or_default();
                 }
             }
