@@ -9637,6 +9637,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
   int _selectedAudioTrackIndex = 0;
+  double _audioDelay = 0.0;
   List<Map<String, dynamic>> _tvSeasons = [];
   List<Map<String, dynamic>> _tvEpisodes = [];
   List<Map<String, dynamic>> _movieBoxSeasons = [];
@@ -9765,6 +9766,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     _attachPlayerListeners();
     _loadSubtitlePreferences();
+    _loadAudioDelayPreference();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
     _prepareAndInitializePlayer();
@@ -11104,6 +11106,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Re-apply the user's audio sync preference when a new media exposes
+      // its tracks. This only changes the active Player's audio-delay property.
+      if (_audioDelay.abs() >= 0.01) {
+        unawaited(_applyAudioDelay(
+          _audioDelay,
+          persist: false,
+          showFeedback: false,
+        ));
+      }
     });
 
     _completedSubscription = _player.stream.completed.listen((completed) {
@@ -11881,6 +11892,104 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  String _audioTrackDetails(AudioTrack track) {
+    final details = <String>[];
+    final codec = track.codec?.trim();
+    if (codec != null && codec.isNotEmpty) {
+      details.add(codec.toUpperCase());
+    }
+
+    final channelLayout = track.channels?.trim() ?? '';
+    if (channelLayout.isNotEmpty) {
+      details.add(channelLayout);
+    } else {
+      final channelCount = track.channelscount ?? track.audiochannels;
+      if (channelCount != null && channelCount > 0) {
+        final label = switch (channelCount) {
+          1 => 'Mono',
+          2 => 'Stereo',
+          6 => '5.1',
+          8 => '7.1',
+          _ => '$channelCount channels',
+        };
+        details.add(label);
+      }
+    }
+
+    final sampleRate = track.samplerate;
+    if (sampleRate != null && sampleRate > 0) {
+      final rate = sampleRate / 1000;
+      details.add('${rate.toStringAsFixed(rate == rate.roundToDouble() ? 0 : 1)} kHz');
+    }
+
+    final bitrate = track.bitrate;
+    if (bitrate != null && bitrate > 0) {
+      details.add('${(bitrate / 1000).round()} kbps');
+    }
+
+    return details.join(' • ');
+  }
+
+  Future<void> _loadAudioDelayPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedDelay = (prefs.getDouble('flixora_audio_delay') ?? 0.0)
+          .clamp(-5.0, 5.0)
+          .toDouble();
+      if (!mounted || _isDisposed) return;
+      _audioDelay = savedDelay;
+      if (savedDelay.abs() >= 0.01) {
+        await _applyAudioDelay(
+          savedDelay,
+          persist: false,
+          showFeedback: false,
+        );
+      }
+    } catch (error) {
+      debugPrint('Audio delay preference load failed: $error');
+    }
+  }
+
+  Future<bool> _applyAudioDelay(
+    double value, {
+    bool persist = true,
+    bool showFeedback = true,
+  }) async {
+    final nextDelay = value.clamp(-5.0, 5.0).toDouble();
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Audio sync is not supported by this playback platform.')),
+        );
+      }
+      return false;
+    }
+
+    try {
+      // NativePlayer exposes libmpv's audio-delay property. Positive values
+      // delay audio; negative values advance it relative to the video.
+      await platformPlayer.setProperty(
+        'audio-delay',
+        nextDelay.toStringAsFixed(2),
+      );
+      if (!mounted || _isDisposed) return false;
+      setState(() => _audioDelay = nextDelay);
+      if (persist) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('flixora_audio_delay', nextDelay);
+      }
+      return true;
+    } catch (error) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not adjust audio sync: $error')),
+        );
+      }
+      return false;
+    }
+  }
+
   void _showAudioTracks() {
     final audioTracks = _tracks.audio;
     final selectedIndex = audioTracks.isEmpty
@@ -11894,204 +12003,482 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       builder: (sheetContext) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: playerPanel,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-            border: Border(top: BorderSide(color: Color(0x24FFFFFF))),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 38,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0x66FFFFFF),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
+        var showOutputDevices = false;
+        var sheetAudioDelay = _audioDelay;
+
+        return StatefulBuilder(
+          builder: (sheetContext, updateSheet) {
+            final availableDevices = _player.state.audioDevices;
+            final outputDevices = <AudioDevice>[
+              AudioDevice.auto(),
+              ...availableDevices.where((device) => device.name != 'auto'),
+            ];
+            final selectedDeviceName = _player.state.audioDevice.name;
+
+            Future<void> changeAudioDelay(double value) async {
+              final next = value.clamp(-5.0, 5.0).toDouble();
+              final applied = await _applyAudioDelay(next);
+              if (applied) {
+                updateSheet(() => sheetAudioDelay = next);
+              }
+            }
+
+            Future<void> selectOutputDevice(AudioDevice device) async {
+              try {
+                await _player.setAudioDevice(device);
+                if (!mounted || _isDisposed) return;
+                setState(() {});
+                updateSheet(() => showOutputDevices = false);
+                final label = device.name == 'auto'
+                    ? 'System default'
+                    : (device.description.trim().isNotEmpty
+                        ? device.description
+                        : device.name);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Audio output: $label')),
+                );
+              } catch (error) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Could not change audio output: $error')),
+                  );
+                }
+              }
+            }
+
+            return Container(
+              decoration: const BoxDecoration(
+                color: playerPanel,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+                border: Border(top: BorderSide(color: Color(0x24FFFFFF))),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: playerGold.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: const Icon(
-                          Icons.graphic_eq_rounded,
-                          color: playerGoldLight,
-                          size: 23,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Audio language',
-                              style: TextStyle(
-                                color: playerWhite,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            SizedBox(height: 3),
-                            Text(
-                              'Choose the audio track for this movie',
-                              style: TextStyle(
-                                color: Color(0x99FFFFFF),
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  if (audioTracks.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Center(
-                        child: Text(
-                          'This stream does not expose alternate audio tracks.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0x99FFFFFF),
-                            fontSize: 12,
+                      Center(
+                        child: Container(
+                          width: 38,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: const Color(0x66FFFFFF),
+                            borderRadius: BorderRadius.circular(20),
                           ),
                         ),
                       ),
-                    )
-                  else
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: MediaQuery.of(sheetContext).size.height * 0.52,
-                      ),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: audioTracks.length,
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final track = audioTracks[index];
-                          final selected = index == selectedIndex;
-                          final label = _audioTrackLabel(track, index);
-                          final rawTitle = track.title?.trim() ?? '';
-                          final showTrackDetail = rawTitle.isNotEmpty &&
-                              rawTitle.toLowerCase() != label.toLowerCase() &&
-                              !RegExp(
-                                r'^(audio|track)\s*#?\s*\d*$',
-                                caseSensitive: false,
-                              ).hasMatch(rawTitle);
-
-                          return Material(
-                            color: selected
-                                ? playerGold.withValues(alpha: 0.13)
-                                : playerBg,
-                            borderRadius: BorderRadius.circular(14),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(14),
-                              onTap: () => _selectAudioTrack(track),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 13,
-                                ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: selected
-                                        ? playerGold.withValues(alpha: 0.8)
-                                        : const Color(0x1FFFFFFF),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          if (showOutputDevices)
+                            IconButton(
+                              onPressed: () => updateSheet(() => showOutputDevices = false),
+                              icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
+                              tooltip: 'Back to audio tracks',
+                            )
+                          else
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: playerGold.withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(13),
+                              ),
+                              child: const Icon(
+                                Icons.graphic_eq_rounded,
+                                color: playerGoldLight,
+                                size: 23,
+                              ),
+                            ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  showOutputDevices ? 'Audio output' : 'Audio language',
+                                  style: const TextStyle(
+                                    color: playerWhite,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 38,
-                                      height: 38,
-                                      decoration: BoxDecoration(
+                                const SizedBox(height: 3),
+                                Text(
+                                  showOutputDevices
+                                      ? 'Choose an available output device'
+                                      : 'Choose the audio track for this movie',
+                                  style: const TextStyle(
+                                    color: Color(0x99FFFFFF),
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      if (showOutputDevices)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: MediaQuery.of(sheetContext).size.height * 0.52,
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: outputDevices.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final device = outputDevices[index];
+                              final selected = device.name == selectedDeviceName;
+                              final label = device.name == 'auto'
+                                  ? 'System default'
+                                  : (device.description.trim().isNotEmpty
+                                      ? device.description
+                                      : device.name);
+                              return Material(
+                                color: selected
+                                    ? playerGold.withValues(alpha: 0.13)
+                                    : playerBg,
+                                borderRadius: BorderRadius.circular(14),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: () => selectOutputDevice(device),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 13,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
                                         color: selected
-                                            ? playerGold.withValues(alpha: 0.18)
-                                            : const Color(0x14FFFFFF),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Icon(
-                                        Icons.audiotrack_rounded,
-                                        color: selected
-                                            ? playerGoldLight
-                                            : const Color(0xB3FFFFFF),
-                                        size: 19,
+                                            ? playerGold.withValues(alpha: 0.8)
+                                            : const Color(0x1FFFFFFF),
                                       ),
                                     ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            label,
-                                            style: TextStyle(
-                                              color: playerWhite,
-                                              fontSize: 14,
-                                              fontWeight: selected
-                                                  ? FontWeight.w800
-                                                  : FontWeight.w600,
-                                            ),
-                                          ),
-                                          if (showTrackDetail) ...[
-                                            const SizedBox(height: 3),
-                                            Text(
-                                              rawTitle,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                color: Color(0x80FFFFFF),
-                                                fontSize: 10,
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.speaker_rounded,
+                                          color: playerGoldLight,
+                                          size: 21,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                label,
+                                                style: const TextStyle(
+                                                  color: playerWhite,
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
                                               ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
+                                              if (device.name != 'auto' &&
+                                                  device.description.isNotEmpty &&
+                                                  device.description != device.name)
+                                                Text(
+                                                  device.name,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    color: Color(0x80FFFFFF),
+                                                    fontSize: 10,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (selected)
+                                          const Icon(
+                                            Icons.check_circle_rounded,
+                                            color: playerGoldLight,
+                                            size: 21,
+                                          ),
+                                      ],
                                     ),
-                                    if (selected)
-                                      const Icon(
-                                        Icons.check_circle_rounded,
-                                        color: playerGoldLight,
-                                        size: 22,
-                                      )
-                                    else
-                                      const Icon(
-                                        Icons.circle_outlined,
-                                        color: Color(0x55FFFFFF),
-                                        size: 21,
-                                      ),
-                                  ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      else ...[
+                        if (audioTracks.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 18),
+                            child: Center(
+                              child: Text(
+                                'This stream does not expose alternate audio tracks.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Color(0x99FFFFFF),
+                                  fontSize: 12,
                                 ),
                               ),
                             ),
-                          );
-                        },
-                      ),
-                    ),
-                ],
+                          )
+                        else
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: MediaQuery.of(sheetContext).size.height * 0.38,
+                            ),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: audioTracks.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final track = audioTracks[index];
+                                final selected = index == selectedIndex;
+                                final label = _audioTrackLabel(track, index);
+                                final rawTitle = track.title?.trim() ?? '';
+                                final showTrackTitle = rawTitle.isNotEmpty &&
+                                    rawTitle.toLowerCase() != label.toLowerCase() &&
+                                    !RegExp(
+                                      r'^(audio|track)\\s*#?\\s*\\d*$',
+                                      caseSensitive: false,
+                                    ).hasMatch(rawTitle);
+                                final technicalDetails = _audioTrackDetails(track);
+
+                                return Material(
+                                  color: selected
+                                      ? playerGold.withValues(alpha: 0.13)
+                                      : playerBg,
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(14),
+                                    onTap: () => _selectAudioTrack(track),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 13,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: selected
+                                              ? playerGold.withValues(alpha: 0.8)
+                                              : const Color(0x1FFFFFFF),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 38,
+                                            height: 38,
+                                            decoration: BoxDecoration(
+                                              color: selected
+                                                  ? playerGold.withValues(alpha: 0.18)
+                                                  : const Color(0x14FFFFFF),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              Icons.audiotrack_rounded,
+                                              color: selected
+                                                  ? playerGoldLight
+                                                  : const Color(0xB3FFFFFF),
+                                              size: 19,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  label,
+                                                  style: TextStyle(
+                                                    color: playerWhite,
+                                                    fontSize: 14,
+                                                    fontWeight: selected
+                                                        ? FontWeight.w800
+                                                        : FontWeight.w600,
+                                                  ),
+                                                ),
+                                                if (showTrackTitle) ...[
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    rawTitle,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Color(0x80FFFFFF),
+                                                      fontSize: 10,
+                                                    ),
+                                                  ),
+                                                ],
+                                                if (technicalDetails.isNotEmpty) ...[
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    technicalDetails,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Color(0x80FFFFFF),
+                                                      fontSize: 10,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                          if (selected)
+                                            const Icon(
+                                              Icons.check_circle_rounded,
+                                              color: playerGoldLight,
+                                              size: 22,
+                                            )
+                                          else
+                                            const Icon(
+                                              Icons.circle_outlined,
+                                              color: Color(0x55FFFFFF),
+                                              size: 21,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        Container(
+                          margin: const EdgeInsets.only(top: 14),
+                          padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                          decoration: BoxDecoration(
+                            color: playerBg,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0x1FFFFFFF)),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Audio sync',
+                                          style: TextStyle(
+                                            color: playerWhite,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          '− earlier  •  + later',
+                                          style: TextStyle(
+                                            color: Color(0x80FFFFFF),
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: sheetAudioDelay > -5.0
+                                        ? () => changeAudioDelay(sheetAudioDelay - 0.1)
+                                        : null,
+                                    icon: const Icon(Icons.remove_circle_outline_rounded),
+                                    color: playerGoldLight,
+                                    tooltip: 'Audio earlier by 0.1 seconds',
+                                  ),
+                                  Text(
+                                    '${sheetAudioDelay >= 0 ? '+' : ''}${sheetAudioDelay.toStringAsFixed(1)}s',
+                                    style: const TextStyle(
+                                      color: playerGoldLight,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: sheetAudioDelay < 5.0
+                                        ? () => changeAudioDelay(sheetAudioDelay + 0.1)
+                                        : null,
+                                    icon: const Icon(Icons.add_circle_outline_rounded),
+                                    color: playerGoldLight,
+                                    tooltip: 'Audio later by 0.1 seconds',
+                                  ),
+                                ],
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: sheetAudioDelay.abs() >= 0.01
+                                      ? () => changeAudioDelay(0)
+                                      : null,
+                                  child: const Text('Reset sync'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Material(
+                          color: playerBg,
+                          borderRadius: BorderRadius.circular(13),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(13),
+                            onTap: () => updateSheet(() => showOutputDevices = true),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 13,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.speaker_group_rounded,
+                                    color: playerGoldLight,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
+                                    child: Text(
+                                      'Audio output device',
+                                      style: TextStyle(
+                                        color: playerWhite,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    selectedDeviceName == 'auto'
+                                        ? 'System default'
+                                        : selectedDeviceName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Color(0x99FFFFFF),
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: Color(0x99FFFFFF),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     ).whenComplete(_startHideTimer);
