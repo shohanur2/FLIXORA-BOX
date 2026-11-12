@@ -486,6 +486,8 @@ jobs:
           new_h5_call = 'self.detail_mobile(&item.id, "", item.subject_type).await'
           if old_h5_call not in h5:
               raise SystemExit("SparkBoxCore detail_rich call changed; review Short TV support.")
+          h5_path.write_text(h5.replace(old_h5_call, new_h5_call, 1))
+
           parse_path = Path("/tmp/SparkBoxCore/sparkbox-core/src/parse.rs")
           parse_source = parse_path.read_text()
           old_parse_season = """pub fn parse_season(o: &Map<String, Value>) -> Option<Season> {
