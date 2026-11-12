@@ -7671,6 +7671,19 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     return 0;
   }
 
+  Future<void> _prefetchShort(int index) async {
+    if (_disposed || index < 0 || index >= widget.items.length) return;
+    final movie = widget.items[index];
+    try {
+      await MovieBoxService.prewarmStreams(
+        movie.toMovieBoxMap(),
+        isSeries: movie.movieBoxIsSeries,
+      );
+    } catch (_) {
+      // The next short will resolve normally when the viewer swipes to it.
+    }
+  }
+
   Future<void> _loadShort(int index) async {
     if (_disposed || index < 0 || index >= widget.items.length) return;
     final requestToken = ++_requestToken;
@@ -7739,7 +7752,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
         season: seasonNumber,
         episode: episodeNumber,
         isSeries: movie.movieBoxIsSeries,
-        forceRefresh: true,
+        forceRefresh: false,
       ).timeout(const Duration(seconds: 25));
       if (_disposed || requestToken != _requestToken) return;
 
@@ -7806,6 +7819,9 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
             });
           }
           _scheduleControlsHide();
+          if (index + 1 < widget.items.length) {
+            unawaited(_prefetchShort(index + 1));
+          }
           return;
         } catch (error) {
           lastError = error;
