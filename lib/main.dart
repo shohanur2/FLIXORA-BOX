@@ -1442,7 +1442,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _trendingHindiDubbedMovies = [];
   List<Movie> _trendingBollywoodMovies = [];
   List<Movie> _trendingHollywoodMovies = [];
-  bool _refreshingHindiDubbedTrending = false;
   bool _refreshingPlayableTrendingMovies = false;
   bool _playableTrendingRefreshQueued = false;
   List<Movie> popular = [];
@@ -1652,7 +1651,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((movie) =>
         movie.mediaType == 'movie' &&
         (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
-      .take(84)
+      .take(48)
       .toList(growable: false);
   }
 
@@ -1805,9 +1804,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       final verifiedAll = <Movie>[];
       for (var start = 0;
-          start < candidates.length && verifiedAll.length < 36;
-          start += 6) {
-        final batch = candidates.skip(start).take(6);
+          start < candidates.length && verifiedAll.length < 24;
+          start += 4) {
+        final batch = candidates.skip(start).take(4);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map((candidate) async {
             final key = '${candidate.mediaType}:${candidate.tmdbId}';
@@ -1829,13 +1828,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
 
         for (final entry in resolved.whereType<MapEntry<String, Movie>>()) {
-          if (verifiedAll.length >= 36) break;
+          if (verifiedAll.length >= 24) break;
           verifiedAll.add(entry.value);
         }
       }
 
       final verified = _deduplicateMovies(verifiedAll)
-          .take(36)
+          .take(24)
           .toList(growable: false);
       final verifiedHindi = verified.where(_hasHindiAudio).toList();
       final verifiedBollywood = verified
@@ -6363,7 +6362,7 @@ class _NoInternetScreenState extends State<NoInternetScreen> {
           const SnackBar(content: Text('Still offline. Please try again.')),
         );
       }
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
       if (!silent) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -7305,7 +7304,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   void _selectTvEpisode(int episodeNumber) {
     if (episodeNumber <= 0 ||
         episodeNumber == _selectedEpisodeNumber ||
-        _loadingQualities) return;
+        _loadingQualities ||
+        _isOpening) return;
     setState(() => _selectedEpisodeNumber = episodeNumber);
     if (widget.movie.isMovieBox) {
       unawaited(_loadMovieBoxStreams(
@@ -7419,7 +7419,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   ),
                 )
                 .toList(),
-            onChanged: (_loadingTvEpisodes || _loadingQualities)
+            onChanged: (_loadingTvEpisodes || _loadingQualities || _isOpening)
                 ? null
                 : (number) {
                     if (number != null &&
@@ -7473,7 +7473,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         label: Text(number.toString().padLeft(2, '0')),
                         selected: selected,
                         showCheckmark: false,
-                        onSelected: (_loadingTvEpisodes || _loadingQualities)
+                        onSelected: (_loadingTvEpisodes || _loadingQualities || _isOpening)
                             ? null
                             : (_) => _selectTvEpisode(number),
                         selectedColor: playerGold.withValues(alpha: 0.22),
