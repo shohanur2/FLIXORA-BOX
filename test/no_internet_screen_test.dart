@@ -7,8 +7,8 @@ void main() {
   testWidgets('No Internet screen shows the requested offline guidance',
       (tester) async {
     await tester.pumpWidget(
-      const MaterialApp(
-        home: NoInternetScreen(),
+      MaterialApp(
+        home: NoInternetScreen(onRefresh: () async => false),
       ),
     );
 
@@ -20,6 +20,7 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(find.text('Refresh'), findsOneWidget);
     expect(find.text('Open Wi-Fi Settings'), findsOneWidget);
   });
 }
