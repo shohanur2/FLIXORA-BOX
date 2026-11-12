@@ -7686,6 +7686,15 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
       });
     }
 
+    // Serialize pause/open operations so a previous short cannot resume
+    // over the next page while its MovieBox stream is being resolved.
+    final pauseOperation = _playerOperation.then((_) async {
+      if (!_disposed && requestToken == _requestToken) {
+        await _player.pause();
+      }
+    });
+    _playerOperation = pauseOperation.catchError((Object _) {});
+
     try {
       final requests = <Future<dynamic>>[
         MovieBoxService.playDetail(movie.toMovieBoxMap())
@@ -7822,7 +7831,6 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
       _showControls = true;
       _loading = true;
     });
-    unawaited(_player.pause());
     unawaited(_loadShort(index));
   }
 
