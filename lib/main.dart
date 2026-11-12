@@ -1765,6 +1765,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ...bengaliMovies,
         ...bengaliTv,
         ...flixoraMovies,
+        ...searchResults,
         ...bollywoodMovies,
         ...hollywoodMovies,
         ...southIndianMovies,
@@ -1903,9 +1904,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final seenTitleBasesWithoutYear = <String>{};
     final seenFallbackIds = <String>{};
 
-    final orderedMovies = CatalogSourcePolicy.movieBoxFirst<Movie>(
+    final orderedMovies =
+        CatalogSourcePolicy.preferMovieBoxDuplicates<Movie>(
       movies,
       isMovieBox: (movie) => movie.isMovieBox,
+      matches: (movieBoxItem, candidate) {
+        if (movieBoxItem.mediaType != candidate.mediaType) return false;
+        if (movieBoxItem.tmdbId > 0 &&
+            candidate.tmdbId > 0 &&
+            movieBoxItem.tmdbId == candidate.tmdbId) {
+          return true;
+        }
+        final sameTitle = _normalizedMovieTitle(movieBoxItem.title) ==
+            _normalizedMovieTitle(candidate.title);
+        final sameYear = movieBoxItem.year == candidate.year ||
+            movieBoxItem.year == 'N/A' ||
+            candidate.year == 'N/A';
+        return sameTitle && sameYear;
+      },
     );
     return orderedMovies.where((movie) {
       if (CatalogSourcePolicy.isAdminBlocked(
