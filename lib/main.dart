@@ -575,8 +575,6 @@ class InternetService {
 
   static Future<bool> _performCheck() async {
     final endpoints = <Uri>[
-      Uri.parse('https://www.google.com/generate_204'),
-      Uri.parse('https://connectivitycheck.gstatic.com/generate_204'),
       Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
       Uri.parse('https://movie-box.co/'),
       if (apiKey.isNotEmpty)
