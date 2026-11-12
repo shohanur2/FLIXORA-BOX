@@ -4548,6 +4548,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
 
+      if (selectedMovie.isMovieBox &&
+          !_hasCompletedLocalDownload(selectedMovie)) {
+        unawaited(MovieBoxService.prewarm(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ));
+      }
       await _openResolvedPlayer(selectedMovie, movie);
     } finally {
       _endTitleOpening();
@@ -9593,8 +9600,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   StreamSubscription<Tracks>? _tracksSubscription;
   StreamSubscription<bool>? _completedSubscription;
 
-  Duration _position = Duration.zero;
+  Duration _updatePosition(Duration.zero);
   Duration _duration = Duration.zero;
+  final ValueNotifier<Duration> _positionNotifier =
+      ValueNotifier<Duration>(Duration.zero);
 
   bool _isPlaying = false;
   bool _isBuffering = false;
@@ -10271,7 +10280,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _loadMovieBoxStreams(
         season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
         episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
-        openPlayer: false,
+        openPlayer: true,
       );
     } catch (error) {
       debugPrint('MovieBox playback preparation failed: $error');
@@ -10385,7 +10394,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
       if (mounted) {
         setState(() {
-          _position = Duration.zero;
+          _updatePosition(Duration.zero);
           _duration = Duration.zero;
           _errorMessage = null;
           _tvEpisodeError = null;
@@ -10574,7 +10583,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           }
 
           _currentVideoUrl = url;
-          _position = Duration.zero;
+          _updatePosition(Duration.zero);
           _duration = Duration.zero;
           _selectedAudioTrackIndex = 0;
           await _player.play();
@@ -10755,14 +10764,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     if (widget.movie.isMovieBox) {
       await _prepareMovieBoxPlayback();
-      if (!mounted || _isDisposed) return;
-      if (_availableQualities.isNotEmpty) {
-        await _loadMovieBoxStreams(
-          season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
-          episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
-          openPlayer: true,
-        );
-      }
       return;
     }
 
@@ -11018,15 +11019,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   // Listeners are attached once. Retrying playback will not create
   // duplicate stream subscriptions.
+  void _updatePosition(Duration value) {
+    _position = value;
+    _positionNotifier.value = value;
+  }
+
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
       if (!mounted || _isDisposed) return;
-      setState(() {
-        _position = value;
-        if (_errorMessage != null && value > Duration.zero) {
-          _errorMessage = null;
-        }
-      });
+      _updatePosition(value);
+      if (_errorMessage != null && value > Duration.zero) {
+        setState(() => _errorMessage = null);
+      }
 
       if (_duration.inSeconds > 0) {
         _saveResumePosition(value);
@@ -11382,7 +11386,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _player.seek(previewPosition);
       if (mounted && !_isDisposed) {
         setState(() {
-          _position = previewPosition;
+          _updatePosition(previewPosition);
         });
       }
     }
@@ -12307,63 +12311,67 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _bottomControls() {
     final max = _duration.inMilliseconds.toDouble();
-    final current = _position.inMilliseconds
-        .toDouble()
-        .clamp(0.0, max > 0 ? max : 1.0);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Text(
-                _formatDuration(_position),
-                style: const TextStyle(
-                  color: playerWhite,
-                  fontSize: 11,
-                ),
-              ),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 2.5,
-                    activeTrackColor: playerGold,
-                    inactiveTrackColor: const Color(0x4DFFFFFF),
-                    thumbColor: playerWhite,
-                    overlayColor: playerGold.withValues(alpha: 0.16),
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 5.5,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 10,
+          ValueListenableBuilder<Duration>(
+            valueListenable: _positionNotifier,
+            builder: (context, position, _) {
+              final current = position.inMilliseconds
+                  .toDouble()
+                  .clamp(0.0, max > 0 ? max : 1.0)
+                  .toDouble();
+
+              return Row(
+                children: [
+                  Text(
+                    _formatDuration(position),
+                    style: const TextStyle(
+                      color: playerWhite,
+                      fontSize: 11,
                     ),
                   ),
-                  child: Slider(
-                    value: current,
-                    min: 0,
-                    max: max > 0 ? max : 1,                    onChanged: max > 0
-                        ? (value) {
-                            setState(() {
-                              _position = Duration(
-                                milliseconds: value.round(),
-                              );
-                            });
-                          }
-                        : null,
-                    onChangeEnd: max > 0 ? _seekTo : null,
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2.5,
+                        activeTrackColor: playerGold,
+                        inactiveTrackColor: const Color(0x4DFFFFFF),
+                        thumbColor: playerWhite,
+                        overlayColor: playerGold.withValues(alpha: 0.16),
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 5.5,
+                        ),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 10,
+                        ),
+                      ),
+                      child: Slider(
+                        value: current,
+                        min: 0,
+                        max: max > 0 ? max : 1,
+                        onChanged: max > 0
+                            ? (value) => _updatePosition(
+                                  Duration(milliseconds: value.round()),
+                                )
+                            : null,
+                        onChangeEnd: max > 0 ? _seekTo : null,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              Text(
-                _formatDuration(_duration),
-                style: const TextStyle(
-                  color: playerWhite,
-                  fontSize: 11,
-                ),
-              ),
-            ],
+                  Text(
+                    _formatDuration(_duration),
+                    style: const TextStyle(
+                      color: playerWhite,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
           Row(
             children: [
@@ -12932,6 +12940,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _errorSubscription?.cancel();
     _tracksSubscription?.cancel();
     _completedSubscription?.cancel();
+    _positionNotifier.dispose();
 
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
