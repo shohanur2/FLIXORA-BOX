@@ -215,7 +215,7 @@ class Movie {
     if (stableId == 0) stableId = 1;
 
     final subjectType = _toInt(json['subjectType']);
-    final isSeries = json['isSeries'] == true || subjectType == 2;
+    final isSeries = json['isSeries'] == true || subjectType == 2 || subjectType == 3 || subjectType == 7;
     final rawYear = (json['year'] ?? '').toString().trim();
     final genreText = (json['genre'] ?? '').toString();
     final genres = genreText
@@ -417,16 +417,32 @@ class MovieBoxShortEpisode {
   static List<MovieBoxShortEpisode> fromSeasons(
     Iterable<Map<String, dynamic>> seasons,
   ) {
+    int seasonNumberOf(Map<String, dynamic> season) => _toInt(
+          season['se'] ?? season['season'] ?? season['seasonNumber'],
+        );
+
     final orderedSeasons = seasons.toList()
-      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+      ..sort((a, b) => seasonNumberOf(a).compareTo(seasonNumberOf(b)));
     final episodes = <MovieBoxShortEpisode>[];
     final seen = <String>{};
 
     for (final season in orderedSeasons) {
-      final seasonNumber = _toInt(season['se']);
+      final seasonNumber = seasonNumberOf(season);
       if (seasonNumber <= 0) continue;
-      final rawEpisodes = season['episodes'] as List? ?? const [];
-      for (final rawEpisode in rawEpisodes) {
+
+      final rawEpisodes = season['episodes'] ??
+          season['episodeList'] ??
+          season['eps'];
+      final episodeValues = rawEpisodes is List
+          ? rawEpisodes
+          : (season['allEp'] is String
+              ? (season['allEp'] as String)
+                  .split(RegExp(r'[,; ]+'))
+                  .where((value) => value.isNotEmpty)
+                  .toList()
+              : const <dynamic>[]);
+
+      for (final rawEpisode in episodeValues) {
         final value = rawEpisode is Map
             ? (rawEpisode['ep'] ??
                 rawEpisode['episode'] ??
@@ -4455,6 +4471,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return items;
   }
 
+  Future<List<Movie>> _loadHotShortsCatalog() async {
+    if (!_online) return const <Movie>[];
+    final response = await MovieBoxService.shorts(
+      perPage: 24,
+      maxPages: 10,
+    ).timeout(const Duration(seconds: 45));
+    final rawItems = response['items'] as List? ?? const [];
+    return rawItems
+        .whereType<Map>()
+        .map((item) => Movie.fromMovieBox(
+              Map<String, dynamic>.from(item),
+            ))
+        .where((movie) => movie.movieBoxId.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  void _cacheHotShortsCatalog(List<Movie> items) {
+    if (!mounted || items.isEmpty) return;
+    final existing = _movieBoxSections
+        .where((section) => section.isHotShorts)
+        .expand((section) => section.items)
+        .toList(growable: false);
+    final merged = _deduplicateMovies([...existing, ...items]);
+    if (merged.isEmpty) return;
+
+    final updatedSections = <MovieBoxHomeSection>[
+      ..._movieBoxSections.where((section) => !section.isHotShorts),
+      MovieBoxHomeSection(title: 'Hot Shorts TV', items: merged),
+    ];
+    for (final item in merged) {
+      _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
+    }
+    setState(() => _movieBoxSections = updatedSections);
+    unawaited(MovieCache.saveMovieBoxSections(updatedSections));
+  }
+
   void _openHotShorts(
     List<Movie> source, {
     int initialIndex = 0,
@@ -4472,6 +4524,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           initialIndex: initialIndex.clamp(0, shorts.length - 1).toInt(),
           initialSeasonNumber: initialSeasonNumber,
           initialEpisodeNumber: initialEpisodeNumber,
+          loadCatalogue: _online ? _loadHotShortsCatalog : null,
+          onCatalogueLoaded: _cacheHotShortsCatalog,
         ),
       ),
     );
@@ -7961,6 +8015,8 @@ class HotShortsScreen extends StatefulWidget {
   final int initialIndex;
   final int? initialSeasonNumber;
   final int? initialEpisodeNumber;
+  final Future<List<Movie>> Function()? loadCatalogue;
+  final ValueChanged<List<Movie>>? onCatalogueLoaded;
 
   const HotShortsScreen({
     super.key,
@@ -7968,6 +8024,8 @@ class HotShortsScreen extends StatefulWidget {
     this.initialIndex = 0,
     this.initialSeasonNumber,
     this.initialEpisodeNumber,
+    this.loadCatalogue,
+    this.onCatalogueLoaded,
   });
 
   @override
@@ -7975,6 +8033,9 @@ class HotShortsScreen extends StatefulWidget {
 }
 
 class _HotShortsScreenState extends State<HotShortsScreen> {
+  late List<Movie> _items;
+  bool _catalogueRequested = false;
+  bool _catalogueLoading = false;
   late final Player _player;
   late final VideoController _videoController;
   late final PageController _pageController;
@@ -7998,13 +8059,15 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   Duration _duration = Duration.zero;
   int? _activeSeasonNumber;
   int? _activeEpisodeNumber;
+  List<MovieBoxShortEpisode> _availableEpisodes = [];
 
   @override
   void initState() {
     super.initState();
-    _activeIndex = widget.items.isEmpty
+    _items = List<Movie>.from(widget.items);
+    _activeIndex = _items.isEmpty
         ? 0
-        : widget.initialIndex.clamp(0, widget.items.length - 1).toInt();
+        : widget.initialIndex.clamp(0, _items.length - 1).toInt();
     _pageController = PageController(initialPage: _activeIndex);
     _player = Player(
       configuration: PlayerConfiguration(
@@ -8045,7 +8108,41 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
       unawaited(_player.seek(Duration.zero).then((_) => _player.play()));
     });
 
-    if (widget.items.isNotEmpty) unawaited(_loadShort(_activeIndex));
+    if (_items.isNotEmpty) {
+      unawaited(_loadShort(_activeIndex).whenComplete(_loadCatalogue));
+    } else {
+      unawaited(_loadCatalogue());
+    }
+  }
+
+  Future<void> _loadCatalogue() async {
+    final loader = widget.loadCatalogue;
+    if (_catalogueRequested || loader == null || _disposed) return;
+    _catalogueRequested = true;
+    if (mounted) setState(() => _catalogueLoading = true);
+    try {
+      final loaded = await loader();
+      if (!mounted || _disposed || loaded.isEmpty) return;
+
+      final seen = <String>{};
+      final merged = <Movie>[];
+      for (final movie in [..._items, ...loaded]) {
+        final key = movie.movieBoxId.isNotEmpty
+            ? movie.movieBoxId
+            : '\${movie.title.toLowerCase().trim()}|\${movie.year}';
+        if (seen.add(key)) merged.add(movie);
+      }
+      if (merged.length > _items.length) {
+        setState(() => _items = merged);
+        widget.onCatalogueLoaded?.call(List<Movie>.unmodifiable(merged));
+      }
+    } catch (error) {
+      debugPrint('Hot Shorts background catalogue load failed: $error');
+    } finally {
+      if (mounted && !_disposed) {
+        setState(() => _catalogueLoading = false);
+      }
+    }
   }
 
   void _scheduleControlsHide() {
@@ -8078,6 +8175,127 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     }
   }
 
+  Future<void> _showEpisodePicker() async {
+    if (!mounted || _disposed) return;
+    final episodes = _availableEpisodes;
+    if (episodes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _loading
+                ? 'Episodes are loading. Please wait.'
+                : 'No episodes are available for this short series.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final seasons = episodes.map((episode) => episode.season).toSet().toList()
+      ..sort();
+    final selectedEpisode =
+        await showModalBottomSheet<MovieBoxShortEpisode>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.of(sheetContext).size.height * 0.68,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Choose Episode',
+                        style: TextStyle(
+                          color: white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      icon: const Icon(Icons.close_rounded, color: white),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      for (final season in seasons)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Season $season',
+                                style: const TextStyle(
+                                  color: gold,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: episodes
+                                    .where((episode) =>
+                                        episode.season == season)
+                                    .map((episode) {
+                                  final selected =
+                                      episode.season == _activeSeasonNumber &&
+                                          episode.episode ==
+                                              _activeEpisodeNumber;
+                                  return ChoiceChip(
+                                    label: Text('EP ${episode.episode}'),
+                                    selected: selected,
+                                    onSelected: (_) =>
+                                        Navigator.of(sheetContext)
+                                            .pop(episode),
+                                    selectedColor: gold,
+                                    backgroundColor: panel,
+                                    labelStyle: TextStyle(
+                                      color: selected
+                                          ? Colors.black
+                                          : Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                    side: BorderSide(
+                                      color: selected ? gold : ink24,
+                                    ),
+                                  );
+                                }).toList(growable: false),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    if (selectedEpisode != null && mounted && !_disposed) {
+      await _loadShort(
+        _activeIndex,
+        requestedSeasonNumber: selectedEpisode.season,
+        requestedEpisodeNumber: selectedEpisode.episode,
+      );
+    }
+  }
+
   Map<String, String> _linkHeaders(Map<String, dynamic> link) {
     final rawHeaders = link['headers'];
     if (rawHeaders is! Map) return const <String, String>{};
@@ -8099,8 +8317,8 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   }
 
   Future<void> _prefetchShort(int index) async {
-    if (_disposed || index < 0 || index >= widget.items.length) return;
-    final movie = widget.items[index];
+    if (_disposed || index < 0 || index >= _items.length) return;
+    final movie = _items[index];
     try {
       await MovieBoxService.prewarmStreams(
         movie.toMovieBoxMap(),
@@ -8111,10 +8329,14 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
     }
   }
 
-  Future<void> _loadShort(int index) async {
-    if (_disposed || index < 0 || index >= widget.items.length) return;
+  Future<void> _loadShort(
+    int index, {
+    int? requestedSeasonNumber,
+    int? requestedEpisodeNumber,
+  }) async {
+    if (_disposed || index < 0 || index >= _items.length) return;
     final requestToken = ++_requestToken;
-    final movie = widget.items[index];
+    final movie = _items[index];
 
     if (mounted) {
       setState(() {
@@ -8124,6 +8346,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
         _duration = Duration.zero;
         _activeSeasonNumber = null;
         _activeEpisodeNumber = null;
+        _availableEpisodes = [];
         _playing = false;
       });
     }
@@ -8155,45 +8378,47 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
 
       var seasonNumber = 0;
       var episodeNumber = 0;
+      var availableEpisodes = <MovieBoxShortEpisode>[];
       if (movie.movieBoxIsSeries) {
         final seasons = (resolved[1] as List)
             .whereType<Map>()
             .map((season) => Map<String, dynamic>.from(season))
-            .toList()
-          ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
-        final requestedSeason = index == widget.initialIndex
-            ? widget.initialSeasonNumber
-            : null;
-        final requestedEpisode = index == widget.initialIndex
-            ? widget.initialEpisodeNumber
-            : null;
-        for (final season in seasons) {
-          final currentSeason = _toInt(season['se']);
-          final episodes = (season['episodes'] as List? ?? const [])
-              .map(_toInt)
-              .where((number) => number > 0)
-              .toList(growable: false);
-          if (episodes.isEmpty || currentSeason <= 0) continue;
+            .toList(growable: false);
+        availableEpisodes = MovieBoxShortEpisode.fromSeasons(seasons);
+        if (availableEpisodes.isEmpty) {
+          throw StateError('No episodes were returned for this short series.');
+        }
 
-          if (requestedSeason == currentSeason &&
-              requestedEpisode != null &&
-              episodes.contains(requestedEpisode)) {
-            seasonNumber = currentSeason;
-            episodeNumber = requestedEpisode;
-            break;
-          }
-          if (seasonNumber <= 0) {
-            seasonNumber = currentSeason;
-            episodeNumber = episodes.first;
+        final wantedSeason = requestedSeasonNumber ??
+            (index == widget.initialIndex ? widget.initialSeasonNumber : null);
+        final wantedEpisode = requestedEpisodeNumber ??
+            (index == widget.initialIndex ? widget.initialEpisodeNumber : null);
+        MovieBoxShortEpisode? selectedEpisode;
+        if (wantedSeason != null && wantedEpisode != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason &&
+                episode.episode == wantedEpisode) {
+              selectedEpisode = episode;
+              break;
+            }
           }
         }
-        if (seasonNumber <= 0 || episodeNumber <= 0) {
-          throw StateError('No playable short episode was returned.');
+        if (selectedEpisode == null && wantedSeason != null) {
+          for (final episode in availableEpisodes) {
+            if (episode.season == wantedSeason) {
+              selectedEpisode = episode;
+              break;
+            }
+          }
         }
+        selectedEpisode ??= availableEpisodes.first;
+        seasonNumber = selectedEpisode.season;
+        episodeNumber = selectedEpisode.episode;
       }
 
       if (mounted && requestToken == _requestToken) {
         setState(() {
+          _availableEpisodes = availableEpisodes;
           _activeSeasonNumber =
               movie.movieBoxIsSeries ? seasonNumber : null;
           _activeEpisodeNumber =
@@ -8273,7 +8498,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
             });
           }
           _scheduleControlsHide();
-          if (index + 1 < widget.items.length) {
+          if (index + 1 < _items.length) {
             unawaited(_prefetchShort(index + 1));
           }
           return;
@@ -8385,7 +8610,11 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                   ),
                   const SizedBox(height: 14),
                   FilledButton.icon(
-                    onPressed: () => _loadShort(_activeIndex),
+                    onPressed: () => _loadShort(
+                      _activeIndex,
+                      requestedSeasonNumber: _activeSeasonNumber,
+                      requestedEpisodeNumber: _activeEpisodeNumber,
+                    ),
                     icon: const Icon(Icons.refresh_rounded),
                     label: const Text('Retry'),
                     style: FilledButton.styleFrom(
@@ -8428,8 +8657,23 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                             ),
                           ),
                         ),
+                        if (movie.movieBoxIsSeries)
+                          TextButton.icon(
+                            onPressed: _showEpisodePicker,
+                            icon: const Icon(
+                              Icons.list_alt_rounded,
+                              size: 17,
+                            ),
+                            label: const Text('EP'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: gold,
+                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                              minimumSize: const Size(0, 32),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
                         Text(
-                          '${index + 1}/${widget.items.length}',
+                          '${index + 1}/${_items.length}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -8547,7 +8791,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.items.isEmpty) {
+    if (_items.isEmpty) {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(
@@ -8565,10 +8809,10 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
         controller: _pageController,
         scrollDirection: Axis.vertical,
         physics: const PageScrollPhysics(),
-        itemCount: widget.items.length,
+        itemCount: _items.length,
         onPageChanged: _onPageChanged,
         itemBuilder: (context, index) =>
-            _shortPage(widget.items[index], index),
+            _shortPage(_items[index], index),
       ),
     );
   }
