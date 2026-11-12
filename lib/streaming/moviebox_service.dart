@@ -19,12 +19,32 @@ class MovieBoxService {
   static Future<List<String>> suggest(String query) =>
       SparkBoxCore.suggest(query);
 
+  static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
+      _searchCache = {};
+
   static Future<Map<String, dynamic>> search(
     String query, {
     int page = 1,
     int perPage = 20,
-  }) =>
-      SparkBoxCore.search(query, page: page, perPage: perPage);
+  }) {
+    final normalizedQuery = query.trim();
+    if (normalizedQuery.isEmpty) {
+      return Future<Map<String, dynamic>>.value(
+        <String, dynamic>{'items': <dynamic>[]},
+      );
+    }
+    final key = '${normalizedQuery.toLowerCase()}:$page:$perPage';
+    return _remember(
+      _searchCache,
+      key,
+      const Duration(minutes: 2),
+      () => SparkBoxCore.search(
+        normalizedQuery,
+        page: page,
+        perPage: perPage,
+      ),
+    );
+  }
 
   static Future<Map<String, dynamic>> detail(
     Map<String, dynamic> item,
