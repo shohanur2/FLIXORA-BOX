@@ -460,6 +460,21 @@ class MovieBoxHomeSection {
 /// Displays network images online, but reads disk cache only while offline.
 /// A cache miss offline never starts a network request.
 class FlixoraCachedImage extends StatelessWidget {
+  static final Map<String, Future<FileInfo?>> _offlineLookups = {};
+
+  static Future<FileInfo?> _offlineFile(String url) {
+    final existing = _offlineLookups[url];
+    if (existing != null) return existing;
+    final future = DefaultCacheManager().getFileFromCache(url);
+    _offlineLookups[url] = future;
+    future.then<void>((info) {
+      if (info == null || !info.file.existsSync()) _offlineLookups.remove(url);
+    }, onError: (Object error, StackTrace stackTrace) {
+      _offlineLookups.remove(url);
+    });
+    return future;
+  }
+
   final String imageUrl;
   final BoxFit fit;
   final bool isOnline;
@@ -516,7 +531,7 @@ class FlixoraCachedImage extends StatelessWidget {
         }
 
         return FutureBuilder<FileInfo?>(
-          future: DefaultCacheManager().getFileFromCache(imageUrl),
+          future: _offlineFile(imageUrl),
           builder: (context, snapshot) {
             final file = snapshot.data?.file;
             if (file != null && file.existsSync()) {
@@ -576,7 +591,7 @@ class InternetService {
   static Future<bool> _performCheck() async {
     final endpoints = <Uri>[
       Uri.parse('https://www.cloudflare.com/cdn-cgi/trace'),
-      Uri.parse('https://movie-box.co/'),
+      Uri.parse('https://movie-box.co/robots.txt'),
       if (apiKey.isNotEmpty)
         Uri.parse(
           'https://api.themoviedb.org/3/configuration?api_key=$apiKey',
@@ -590,7 +605,7 @@ class InternetService {
         var reachable = false;
         try {
           final response = await http
-              .get(endpoint)
+              .head(endpoint)
               .timeout(const Duration(seconds: 3));
           reachable = response.statusCode >= 200 && response.statusCode < 500;
         } catch (_) {}
@@ -1418,6 +1433,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _networkTimer;
   Timer? _searchTimer;
+  Timer? _catalogueRefreshTimer;
+  int _searchRequestToken = 0;
+  bool _homeRefreshQueued = false;
+  DateTime? _lastSecondaryCataloguesRefreshAt;
   DateTime? _lastCarouselInteractionAt;
   DateTime? _lastHomeScrollAt;
 
@@ -1676,29 +1695,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((movie) =>
         movie.mediaType == 'movie' &&
         (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
-      .take(48)
+      .take(24)
       .toList(growable: false);
   }
 
   Future<List<String>> _movieBoxPlayableAudioLanguages(Movie movie) async {
-    final detail = await MovieBoxService.detail(movie.toMovieBoxMap())
-        .timeout(const Duration(seconds: 8));
-    final rawDubs = detail['dubs'] as List? ?? const [];
+    final result = await MovieBoxService.prewarmStreams(
+      movie.toMovieBoxMap(),
+      isSeries: false,
+    ).timeout(const Duration(seconds: 18));
+    if (result == null || !MovieBoxStreamPolicy.hasPlayableLinks(result)) {
+      return <String>[];
+    }
+
+    final links = result['links'] as List? ?? const [];
     final languages = <String>[];
-    for (final rawDub in rawDubs.whereType<Map>()) {
-      final language = (rawDub['name'] ?? rawDub['lanName'] ?? '')
-          .toString()
-          .trim();
-      if (language.isNotEmpty &&
+    for (final rawLink in links.whereType<Map>()) {
+      final label = (rawLink['label'] ?? '').toString().trim();
+      if (label.isEmpty) continue;
+      final language = label.split('·').first.trim();
+      final isQualityOnly = RegExp(r'^\d{3,4}p$', caseSensitive: false)
+          .hasMatch(language);
+      if (!isQualityOnly &&
           !language.toLowerCase().contains('subtitle') &&
           !languages.contains(language)) {
         languages.add(language);
       }
     }
-    final detailItem = detail['item'];
-    if (languages.isEmpty && detailItem is Map && detailItem.isNotEmpty) {
-      languages.add('Original');
-    }
+    if (languages.isEmpty) languages.add('Original');
     return languages;
   }
 
@@ -1960,6 +1984,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       const Duration(seconds: 12),
       (_) => _refreshConnectionStatus(),
     );
+    _catalogueRefreshTimer = Timer.periodic(
+      const Duration(minutes: 20),
+      (_) {
+        if (!mounted ||
+            !_online ||
+            _tab != 0 ||
+            _searchOpen ||
+            !(ModalRoute.of(context)?.isCurrent ?? true)) {
+          return;
+        }
+        unawaited(loadHome(forceRefresh: true));
+      },
+    );
 
     _timer = Timer.periodic(
       const Duration(seconds: 5),
@@ -2219,6 +2256,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
         if (!mounted) return;
 
+        if (online == _online && _connectionKnown) return;
         final wasOffline = !_online;
 
         setState(() {
@@ -2227,10 +2265,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         });
 
         if (online && wasOffline) {
-          await loadHome();
+          await loadHome(forceRefresh: true);
 
           if (_search.trim().isNotEmpty) {
-            searchMovies(_search);
+            unawaited(searchMovies(_search));
           }
         }
       },
@@ -2247,7 +2285,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               const Duration(minutes: 15)) {
         // Refresh MovieBox home and current releases when the app returns
         // after a while, without polling while the user is actively watching.
-        unawaited(loadHome());
+        unawaited(loadHome(forceRefresh: true));
       }
     }
   }
@@ -2267,9 +2305,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (online && wasOffline) {
-        await loadHome();
+        await loadHome(forceRefresh: true);
         if (_search.trim().isNotEmpty) {
-          searchMovies(_search);
+          unawaited(searchMovies(_search));
         }
       }
     } finally {
@@ -2282,6 +2320,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _networkTimer?.cancel();
+    _catalogueRefreshTimer?.cancel();
     _searchTimer?.cancel();
     _connectivitySubscription?.cancel();
     _authSubscription?.cancel();
@@ -2292,7 +2331,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  Future<void> _refreshMovieBoxHome() async {
+  Future<void> _refreshMovieBoxHome({bool forceRefresh = false}) async {
     if (!_online) return;
     try {
       try {
@@ -2300,7 +2339,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } catch (error) {
         debugPrint('MovieBox safe-content filter setup failed: $error');
       }
-      final rawSections = await MovieBoxService.home()
+      final rawSections = await MovieBoxService.home(forceRefresh: forceRefresh)
           .timeout(const Duration(seconds: 15));
       final sections = rawSections
           .map(MovieBoxHomeSection.fromApi)
@@ -2324,8 +2363,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshSecondaryCatalogues() async {
+  Future<void> _refreshSecondaryCatalogues({bool forceRefresh = false}) async {
     if (_refreshingSecondaryCatalogues || !_online) return;
+    final lastRefresh = _lastSecondaryCataloguesRefreshAt;
+    if (!forceRefresh &&
+        lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < const Duration(minutes: 15)) {
+      return;
+    }
     _refreshingSecondaryCatalogues = true;
     try {
       final loaders = <Future<List<Movie>> Function()>[
@@ -2436,9 +2481,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final results = <List<Movie>>[];
       // Four requests at a time keeps the background catalogue refresh from
       // competing heavily with posters or a stream the user just selected.
-      for (var start = 0; start < loaders.length; start += 4) {
+      for (var start = 0; start < loaders.length; start += 2) {
         final batch = await Future.wait<List<Movie>>(
-          loaders.skip(start).take(4).map((load) => load()),
+          loaders.skip(start).take(2).map((load) => load()),
         );
         results.addAll(batch);
       }
@@ -2520,6 +2565,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       });
 
+      _lastSecondaryCataloguesRefreshAt = DateTime.now();
       await Future.wait([
         MovieCache.saveList(MovieCache.trendingKey, trending),
         MovieCache.saveList(MovieCache.tmdbTrendingMoviesKey, _tmdbTrendingMovies),
@@ -2546,12 +2592,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> loadHome() async {
-    if (_refreshing) return;
+  Future<void> loadHome({bool forceRefresh = false}) async {
+    if (_refreshing) {
+      _homeRefreshQueued = true;
+      return;
+    }
     _refreshing = true;
 
     try {
-      final online = await InternetService.isOnline();
+      final online = await InternetService.isOnline(forceRefresh: forceRefresh);
       if (!mounted) return;
 
       if (!online) {
@@ -2572,7 +2621,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       // MovieBox sections can render independently while TMDB is loading.
-      unawaited(_refreshMovieBoxHome());
+      unawaited(_refreshMovieBoxHome(forceRefresh: forceRefresh));
 
       var completedRequests = 0;
       const primaryRequestCount = 5;
@@ -2613,7 +2662,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // the slowest endpoint no longer blocks every Home card.
       await Future.wait([
         loadPrimarySection(
-          TmdbService.getMovies('trending/movie/week'),
+          TmdbService.getMovies('trending/movie/week', forceRefresh: forceRefresh),
           (movies) {
             _tmdbTrendingMovies = movies;
             trending = movies;
@@ -2631,17 +2680,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           },
         ),
         loadPrimarySection(
-          TmdbService.getMovies('movie/popular'),
+          TmdbService.getMovies('movie/popular', forceRefresh: forceRefresh),
           (movies) => popular = movies,
           () => MovieCache.saveList(MovieCache.popularKey, popular),
         ),
         loadPrimarySection(
-          TmdbService.getMovies('movie/now_playing'),
+          TmdbService.getMovies('movie/now_playing', forceRefresh: forceRefresh),
           (movies) => latest = movies,
           () => MovieCache.saveList(MovieCache.latestKey, latest),
         ),
         loadPrimarySection(
-          TmdbService.getMovies('movie/top_rated'),
+          TmdbService.getMovies('movie/top_rated', forceRefresh: forceRefresh),
           (movies) => topRated = movies,
           () => MovieCache.saveList(MovieCache.topRatedKey, topRated),
         ),
@@ -2664,7 +2713,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _lastHomeRefreshAt = DateTime.now();
       if (!mounted) return;
 
-      unawaited(_refreshSecondaryCatalogues());
+      unawaited(_refreshSecondaryCatalogues(forceRefresh: forceRefresh));
       unawaited(_refreshPlayableTrendingMovies());
     } catch (error) {
       if (!mounted) return;
@@ -2674,6 +2723,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
     } finally {
       _refreshing = false;
+      if (_homeRefreshQueued) {
+        _homeRefreshQueued = false;
+        if (mounted && _online) unawaited(loadHome(forceRefresh: true));
+      }
     }
   }
 
@@ -2704,10 +2757,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> searchMovies(String query) async {
     final text = query.trim();
+    final requestToken = ++_searchRequestToken;
 
     if (text.isEmpty) {
       if (!mounted) return;
-
       setState(() {
         _search = '';
         searchResults = [];
@@ -2718,11 +2771,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
-
     final cachedSearch = await MovieCache.getSearch(text);
-    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
+
     if (cachedSearch.isNotEmpty) {
       setState(() {
         searchResults = cachedSearch;
@@ -2734,13 +2789,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final onlineNow = _online
         ? await InternetService.isOnline()
         : await InternetService.isOnline(forceRefresh: true);
-    if (!mounted) return;
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
     if (!onlineNow) {
       setState(() {
         _online = false;
         _connectionKnown = true;
-      });
-      setState(() {
         _search = text;
         searchResults = cachedSearch;
         _searchLoading = false;
@@ -2752,6 +2810,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     setState(() {
       _online = true;
+      _connectionKnown = true;
       _search = text;
       if (cachedSearch.isNotEmpty) searchResults = cachedSearch;
       _searchLoading = true;
@@ -2773,52 +2832,74 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .toList(growable: false);
     }).catchError((_) => <Movie>[]);
 
-    // Show Admin/TMDB results as soon as they arrive. MovieBox is merged in
-    // afterwards, so a slow provider search does not blank the Search screen.
-    final firstResults = await Future.wait<List<Movie>>([
-      adminSearch,
-      tmdbSearch,
+    var adminResults = <Movie>[];
+    var tmdbResults = <Movie>[];
+    var movieBoxItems = <Movie>[];
+    var completedRequests = 0;
+
+    void applySearchResults() {
+      if (!mounted ||
+          requestToken != _searchRequestToken ||
+          _search.trim().toLowerCase() != text.toLowerCase()) {
+        return;
+      }
+      final unique = _deduplicateMovies([
+        ...adminResults,
+        ...movieBoxItems,
+        ...tmdbResults,
+      ]);
+      setState(() {
+        searchResults = unique;
+        _searchLoading = completedRequests < 3;
+        _searchError =
+            unique.isEmpty && completedRequests == 3 ? 'No movies found.' : null;
+      });
+    }
+
+    await Future.wait<void>([
+      adminSearch.then<void>((items) {
+        adminResults = items;
+        completedRequests++;
+        applySearchResults();
+      }),
+      tmdbSearch.then<void>((items) {
+        tmdbResults = items;
+        completedRequests++;
+        applySearchResults();
+      }),
+      movieBoxSearch.then<void>((items) {
+        movieBoxItems = items;
+        completedRequests++;
+        applySearchResults();
+      }),
     ]);
-    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+
+    if (!mounted ||
+        requestToken != _searchRequestToken ||
+        _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
 
-    final initialUnique = _deduplicateMovies([
-      ...firstResults[0],
-      ...firstResults[1],
-    ]);
-    setState(() {
-      searchResults = initialUnique;
-      _searchLoading = initialUnique.isEmpty;
-      _searchError = null;
-    });
-
-    final movieBoxItems = await movieBoxSearch;
-    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
-      return;
-    }
-
-    // Admin records keep precedence, followed by MovieBox/WeFeed and TMDB.
     final unique = _deduplicateMovies([
-      ...firstResults[0],
+      ...adminResults,
       ...movieBoxItems,
-      ...firstResults[1],
+      ...tmdbResults,
     ]);
-
     setState(() {
       searchResults = unique;
       _searchLoading = false;
       _searchError = unique.isEmpty ? 'No movies found.' : null;
     });
-
     await MovieCache.saveSearch(text, unique);
   }
 
   void _onSearchChanged(String value) {
+    _searchRequestToken++;
     _searchTimer?.cancel();
     final query = value.trim();
 
     if (query.isEmpty) {
+      _searchRequestToken++;
       setState(() {
         _search = '';
         _searchCategory = 'All';
@@ -3654,7 +3735,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _connectionKnown = true;
       homeError = null;
     });
-    await loadHome();
+    await loadHome(forceRefresh: true);
     if (_search.trim().isNotEmpty) {
       unawaited(searchMovies(_search));
     }
@@ -4744,6 +4825,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   void _closeSearch() {
+    _searchRequestToken++;
     _searchTimer?.cancel();
     FocusScope.of(context).unfocus();
     setState(() {
@@ -5360,7 +5442,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return RefreshIndicator(
       color: gold,
       backgroundColor: panel,
-      onRefresh: loadHome,
+      onRefresh: () => loadHome(forceRefresh: true),
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification.metrics.axis == Axis.vertical &&
@@ -5560,8 +5642,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return Column(
       children: [
         _searchFilterBar(searchResults),
+        if (_searchLoading && searchResults.isNotEmpty)
+          const LinearProgressIndicator(
+            minHeight: 2,
+            color: gold,
+            backgroundColor: panel,
+          ),
         Expanded(
-          child: _searchLoading
+          child: _searchLoading && searchResults.isEmpty
               ? const Center(
                   child: CircularProgressIndicator(color: gold),
                 )
@@ -6514,7 +6602,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
       ),
-      body: !_connectionKnown
+      body: (!_connectionKnown && _allMovies().isEmpty)
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
@@ -8093,10 +8181,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final detail = _movieBoxDetail;
     if (detail == null || _isDisposed) return;
     final requestToken = ++_movieBoxPlaybackRequestToken;
-    if (openPlayer) _isOpening = false;
 
-    // Stop the previous episode's audio immediately; never let it continue
-    // while the newly selected season/episode is resolving.
     if (openPlayer && _initialized) {
       _playbackErrorTimer?.cancel();
       try {
@@ -8121,91 +8206,97 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     try {
-      final result = await MovieBoxService.streams(
-        detail,
-        season: season,
-        episode: episode,
-        isSeries: widget.movie.movieBoxIsSeries,
-      ).timeout(const Duration(seconds: 25));
-      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final result = await MovieBoxService.streams(
+          detail,
+          season: season,
+          episode: episode,
+          isSeries: widget.movie.movieBoxIsSeries,
+          forceRefresh: attempt > 0,
+        ).timeout(const Duration(seconds: 25));
+        if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
 
-      final rawLinks = result['links'] as List? ?? const [];
-      final links = rawLinks
-          .whereType<Map>()
-          .map((link) => Map<String, dynamic>.from(link))
-          .where((link) {
-            final uri = Uri.tryParse((link['url'] ?? '').toString());
-            return uri != null &&
-                (uri.scheme == 'http' || uri.scheme == 'https') &&
-                uri.host.isNotEmpty;
-          })
-          .toList(growable: false);
-      if (links.isEmpty) {
-        throw StateError('No HLS, DASH or MP4 streams were returned for this episode.');
-      }
-
-      final subtitles = (result['subtitles'] as List? ?? const [])
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .where((item) => (item['url'] ?? '').toString().isNotEmpty)
-          .toList(growable: false);
-      final languages = <String>[];
-      _movieBoxHeadersByUrl.clear();
-      for (final link in links) {
-        final language = _movieBoxVariant(link);
-        if (language.isNotEmpty && !languages.contains(language)) {
-          languages.add(language);
+        final rawLinks = result['links'] as List? ?? const [];
+        final links = rawLinks
+            .whereType<Map>()
+            .map((link) => Map<String, dynamic>.from(link))
+            .where((link) {
+              final uri = Uri.tryParse((link['url'] ?? '').toString());
+              return uri != null &&
+                  (uri.scheme == 'http' || uri.scheme == 'https') &&
+                  uri.host.isNotEmpty;
+            })
+            .toList(growable: false);
+        if (links.isEmpty) {
+          throw StateError('No HLS, DASH or MP4 streams were returned for this episode.');
         }
-        final url = (link['url'] ?? '').toString();
-        final rawHeaders = link['headers'];
-        if (url.isNotEmpty && rawHeaders is Map) {
-          _movieBoxHeadersByUrl[url] = Map<String, String>.from(
-            rawHeaders.map(
-              (key, value) => MapEntry(key.toString(), value.toString()),
-            ),
-          );
+
+        final subtitles = (result['subtitles'] as List? ?? const [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .where((item) => (item['url'] ?? '').toString().isNotEmpty)
+            .toList(growable: false);
+        final languages = <String>[];
+        _movieBoxHeadersByUrl.clear();
+        for (final link in links) {
+          final language = _movieBoxVariant(link);
+          if (language.isNotEmpty && !languages.contains(language)) {
+            languages.add(language);
+          }
+          final url = (link['url'] ?? '').toString();
+          final rawHeaders = link['headers'];
+          if (url.isNotEmpty && rawHeaders is Map) {
+            _movieBoxHeadersByUrl[url] = Map<String, String>.from(
+              rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            );
+          }
         }
-      }
 
-      final selectedLanguage = _selectedMovieBoxLanguage != null &&
-              languages.contains(_selectedMovieBoxLanguage)
-          ? _selectedMovieBoxLanguage!
-          : (languages.contains('Original') ? 'Original' : languages.first);
-      final options = links.where((link) {
-        return _movieBoxVariant(link) == selectedLanguage;
-      }).map((link) {
-        final headers = link['headers'] is Map
-            ? Map<String, String>.from(
-                (link['headers'] as Map).map(
-                  (key, value) =>
-                      MapEntry(key.toString(), value.toString()),
-                ),
-              )
-            : <String, String>{};
-        return <String, String>{
-          'quality': (link['label'] ?? 'Original').toString(),
-          'video_url': (link['url'] ?? '').toString(),
-          'headers': jsonEncode(headers),
-        };
-      }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
-      if (options.isEmpty) {
-        throw StateError('No playable quality was returned for $selectedLanguage.');
-      }
+        final selectedLanguage = _selectedMovieBoxLanguage != null &&
+                languages.contains(_selectedMovieBoxLanguage)
+            ? _selectedMovieBoxLanguage!
+            : (languages.contains('Original') ? 'Original' : languages.first);
+        final options = links.where((link) {
+          return _movieBoxVariant(link) == selectedLanguage;
+        }).map((link) {
+          final headers = link['headers'] is Map
+              ? Map<String, String>.from(
+                  (link['headers'] as Map).map(
+                    (key, value) =>
+                        MapEntry(key.toString(), value.toString()),
+                  ),
+                )
+              : <String, String>{};
+          return <String, String>{
+            'quality': (link['label'] ?? 'Original').toString(),
+            'video_url': (link['url'] ?? '').toString(),
+            'headers': jsonEncode(headers),
+          };
+        }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+        if (options.isEmpty) {
+          throw StateError('No playable quality was returned for $selectedLanguage.');
+        }
 
-      if (!mounted || _isDisposed ||
-          requestToken != _movieBoxPlaybackRequestToken) return;
-      setState(() {
-        _movieBoxAllLinks = links;
-        _movieBoxSubtitles = subtitles;
-        _movieBoxLanguages = languages;
-        _selectedMovieBoxLanguage = selectedLanguage;
-        _availableQualities = options;
-        _selectedQuality = options.first['quality'];
-        _errorMessage = null;
-      });
+        if (!mounted || _isDisposed ||
+            requestToken != _movieBoxPlaybackRequestToken) return;
+        setState(() {
+          _movieBoxAllLinks = links;
+          _movieBoxSubtitles = subtitles;
+          _movieBoxLanguages = languages;
+          _selectedMovieBoxLanguage = selectedLanguage;
+          _availableQualities = options;
+          _selectedQuality = options.first['quality'];
+          _errorMessage = null;
+        });
 
-      if (openPlayer) {
-        await _openMovieBoxEpisode(options.first, requestToken);
+        if (!openPlayer) return;
+        final opened = await _openMovieBoxEpisode(options.first, requestToken);
+        if (opened) return;
+        if (attempt == 1) {
+          throw StateError('Fresh MovieBox links were also unavailable.');
+        }
       }
     } catch (error) {
       debugPrint('MovieBox stream resolution failed: $error');
@@ -8224,7 +8315,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
-  Future<void> _openMovieBoxEpisode(
+  Future<bool> _openMovieBoxEpisode(
     Map<String, String> item,
     int requestToken,
   ) async {
@@ -8249,7 +8340,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     try {
       for (final candidate in candidates) {
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-          return;
+          return false;
         }
 
         final url = candidate['video_url']?.trim() ?? '';
@@ -8268,15 +8359,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             play: false,
           );
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-            return;
+            return false;
           }
 
-          // Reset the decoder's selected audio stream for the new episode.
           try {
             await _player.setAudioTrack(AudioTrack.auto());
           } catch (_) {}
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-            return;
+            return false;
           }
 
           _currentVideoUrl = url;
@@ -8285,7 +8375,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _selectedAudioTrackIndex = 0;
           await _player.play();
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-            return;
+            return false;
           }
 
           if (mounted) {
@@ -8299,7 +8389,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           await _restoreResumePosition();
           _startHideTimer();
           _prewarmNextMovieBoxEpisode();
-          return;
+          return true;
         } catch (error) {
           lastError = error;
           try {
@@ -8318,6 +8408,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _tvEpisodeError = error.toString();
         });
       }
+      return false;
     } finally {
       if (requestToken == _movieBoxPlaybackRequestToken) {
         _isOpening = false;
@@ -8455,11 +8546,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       await _prepareMovieBoxPlayback();
       if (!mounted || _isDisposed) return;
       if (_availableQualities.isNotEmpty) {
-        // MovieBox sources may expose several qualities. Try them in order
-        // so one stale CDN URL does not force the user to press Retry.
-        await _openMovieBoxEpisode(
-          _availableQualities.first,
-          _movieBoxPlaybackRequestToken,
+        await _loadMovieBoxStreams(
+          season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
+          episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
+          openPlayer: true,
         );
       }
       return;
@@ -8803,7 +8893,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     _isOpening = true;
-
     try {
       if (mounted) {
         setState(() {
@@ -8812,31 +8901,82 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         });
       }
 
-      if (widget.localFilePath != null &&
-          !await File(widget.localFilePath!).exists()) {
-        throw Exception('Downloaded file is missing.');
-      }
-      final playbackSource = widget.localFilePath ?? _resolveInitialNetworkUrl();
-      if (playbackSource.trim().isEmpty) {
-        throw Exception('No playable video URL is available.');
-      }
-      await _player.open(Media(
-        playbackSource,
-        httpHeaders: _movieBoxHeadersByUrl[playbackSource] ?? const <String, String>{},
-      ));
-      if (widget.localFilePath == null) {
-        _currentVideoUrl = playbackSource;
+      final candidates = <Map<String, String>>[];
+      if (widget.localFilePath != null) {
+        if (!await File(widget.localFilePath!).exists()) {
+          throw Exception('Downloaded file is missing.');
+        }
+        candidates.add({
+          'quality': 'Offline',
+          'video_url': widget.localFilePath!,
+          'headers': '{}',
+        });
+      } else {
+        final preferredUrl = _resolveInitialNetworkUrl();
+        if (preferredUrl.trim().isNotEmpty) {
+          candidates.add({
+            'quality': _selectedQuality ?? 'Original',
+            'video_url': preferredUrl,
+            'headers': '{}',
+          });
+        }
+        for (final quality in _availableQualities) {
+          final url = quality['video_url']?.trim() ?? '';
+          if (url.isNotEmpty &&
+              !candidates.any((candidate) => candidate['video_url'] == url)) {
+            candidates.add(quality);
+          }
+        }
       }
 
-      if (!mounted || _isDisposed) return;
+      Object? lastError;
+      for (final candidate in candidates.take(4)) {
+        final playbackSource = candidate['video_url']?.trim() ?? '';
+        final uri = Uri.tryParse(playbackSource);
+        final isLocal = widget.localFilePath != null;
+        if (playbackSource.isEmpty ||
+            (!isLocal &&
+                (uri == null ||
+                    (uri.scheme != 'http' && uri.scheme != 'https') ||
+                    uri.host.isEmpty))) {
+          lastError = Exception('No playable video URL is available.');
+          continue;
+        }
 
-      setState(() => _initialized = true);
+        try {
+          await _player.open(
+            Media(
+              playbackSource,
+              httpHeaders: isLocal
+                  ? const <String, String>{}
+                  : _headersForQuality(candidate),
+            ),
+            play: false,
+          );
+          if (!mounted || _isDisposed) return;
+          await _player.play();
+          if (!mounted || _isDisposed) return;
 
-      await _restoreResumePosition();
-      _startHideTimer();
+          if (!isLocal) _currentVideoUrl = playbackSource;
+          setState(() {
+            _selectedQuality = candidate['quality'];
+            _initialized = true;
+            _errorMessage = null;
+          });
+          await _restoreResumePosition();
+          _startHideTimer();
+          return;
+        } catch (error) {
+          lastError = error;
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
+      }
+
+      throw lastError ?? Exception('No working video source was available.');
     } catch (e) {
       if (!mounted || _isDisposed) return;
-
       setState(() {
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
@@ -11401,36 +11541,43 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onPanUpdate: (details) => _moveMiniPlayer(
-                        details,
-                        maxRight: maxMiniRight,
-                        maxBottom: maxMiniBottom,
-                      ),
-                      child: Container(
-                        height: 30,
-                        color: const Color(0xFF171717),
-                        padding: const EdgeInsets.only(left: 7, right: 3),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.drag_indicator_rounded,
-                              color: playerGold,
-                              size: 19,
-                            ),
-                            const SizedBox(width: 4),
-                            const Text(
-                              'MINI PLAYER',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.5,
+                    Container(
+                      height: 30,
+                      color: const Color(0xFF171717),
+                      padding: const EdgeInsets.only(left: 7, right: 3),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleMiniPlayer,
+                              onPanUpdate: (details) => _moveMiniPlayer(
+                                details,
+                                maxRight: maxMiniRight,
+                                maxBottom: maxMiniBottom,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.drag_indicator_rounded,
+                                    color: playerGold,
+                                    size: 19,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    'MINI PLAYER',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            const Spacer(),
-                            IconButton(
+                          ),
+                          IconButton(
                               visualDensity: VisualDensity.compact,
                               constraints: const BoxConstraints.tightFor(
                                 width: 30,
@@ -11461,9 +11608,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                                 color: Colors.white,
                                 size: 16,
                               ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                     AspectRatio(
