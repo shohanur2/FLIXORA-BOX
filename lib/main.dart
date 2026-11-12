@@ -19,6 +19,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/featured_carousel_layout.dart';
+import 'streaming/hero_slider_mixer.dart';
 import 'streaming/tmdb_media_type.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
@@ -421,6 +422,15 @@ class MovieBoxHomeSection {
         .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
         .trim();
     return normalizedTitle.contains('flixora original');
+  }
+
+  bool get isHotShorts {
+    final normalizedTitle = title
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    return normalizedTitle.contains('hot short') ||
+        (normalizedTitle.contains('short') && normalizedTitle.contains('tv'));
   }
 
   factory MovieBoxHomeSection.fromApi(Map<String, dynamic> json) {
@@ -1843,49 +1853,91 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Keep the Home hero and Trending Movies row populated if TMDB's
   /// trending endpoint temporarily returns an empty response. Admin records
   /// stay first so they retain precedence over matching TMDB catalogue items.
+  MovieBoxHomeSection? get _hotShortsSection {
+    for (final section in _movieBoxSections) {
+      if (section.isHotShorts && section.items.isNotEmpty) return section;
+    }
+    return null;
+  }
+
+  /// Build a mixed hero from Trending Movies plus the strongest TV categories.
+  /// Movies and Web Series lead; Drama, Anime and general TV appear regularly.
   List<Movie> _homeTrendingMovies() {
-    final primaryMovies = _withoutFlixoraDuplicates(trending)
-        .where((title) => title.mediaType == 'movie')
-        .toList();
-    final primaryTv = _withoutFlixoraDuplicates(trendingTv)
-        .where((title) => title.mediaType == 'tv')
-        .toList();
-    final movieBoxBanners = _movieBoxSections
-        .where((section) =>
-            section.isBanner ||
-            section.title.toLowerCase().contains('trending'))
-        .expand((section) => section.items)
-        .toList();
-
-    // Admin-published entries stay first, followed by MovieBox banner titles,
-    // then TMDB trending movies and series. This keeps one synchronized hero
-    // carousel for both movies and TV/anime titles.
-    final candidates = <Movie>[
-      ...flixoraMovies.where(
-        (title) => title.mediaType == 'movie' || title.mediaType == 'tv',
-      ),
-      ...movieBoxBanners,
-      ...primaryMovies,
-      ...primaryTv,
-    ];
-
-    if (candidates.length < 8) {
-      candidates.addAll(_withoutFlixoraDuplicates(popular)
-          .where((title) => title.mediaType == 'movie'));
-      candidates.addAll(_withoutFlixoraDuplicates(latest)
-          .where((title) => title.mediaType == 'movie'));
-      candidates.addAll(_withoutFlixoraDuplicates(topRated)
-          .where((title) => title.mediaType == 'movie'));
-      candidates.addAll(_withoutFlixoraDuplicates(popularTv)
-          .where((title) => title.mediaType == 'tv'));
-      candidates.addAll(_withoutFlixoraDuplicates(topRatedTv)
-          .where((title) => title.mediaType == 'tv'));
+    List<Movie> preferAdminRecords(Iterable<Movie> titles) {
+      return _deduplicateMovies(
+        titles
+            .map((title) => _cachedFlixoraMatch(title) ?? title)
+            .toList(growable: false),
+      );
     }
 
-    return _deduplicateMovies(candidates)
-        .where((title) =>
-            title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
+    final movieBoxTrendingMovies = _movieBoxSections
+        .where((section) =>
+            !section.isHotShorts &&
+            (section.isBanner ||
+                section.title.toLowerCase().contains('trending')))
+        .expand((section) => section.items)
+        .where((title) => title.mediaType == 'movie')
         .toList(growable: false);
+
+    final movieTitles = preferAdminRecords([
+      ..._trendingMovies,
+      ...movieBoxTrendingMovies,
+      ..._tmdbTrendingMovies,
+      ...trending.where((title) => title.mediaType == 'movie'),
+    ]).where((title) => title.mediaType == 'movie').toList(growable: false);
+
+    final seriesCatalog = preferAdminRecords([
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+      ..._movieBoxSections
+          .where((section) => !section.isHotShorts)
+          .expand((section) => section.items)
+          .where((title) => title.mediaType == 'tv'),
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ]).where((title) => title.mediaType == 'tv').toList(growable: false);
+
+    final webSeries = preferAdminRecords(_webSeriesTitles())
+        .where((title) => title.mediaType == 'tv')
+        .take(12)
+        .toList(growable: false);
+    final webSeriesKeys = webSeries.map(_movieBoxMatchKey).toSet();
+
+    final dramaTitles = seriesCatalog
+        .where((title) => title.genres.any(
+              (genre) => genre.toLowerCase().contains('drama'),
+            ))
+        .toList(growable: false);
+
+    final animeTitles = preferAdminRecords([
+      ...anime,
+      ...seriesCatalog.where(_isAnimeTitle),
+    ]);
+
+    final tvShows = seriesCatalog
+        .where((title) =>
+            !webSeriesKeys.contains(_movieBoxMatchKey(title)) &&
+            !_isAnimeTitle(title) &&
+            !title.genres.any(
+              (genre) => genre.toLowerCase().contains('drama'),
+            ))
+        .toList(growable: false);
+
+    return HeroSliderMixer.mix<Movie>(
+      movies: movieTitles,
+      webSeries: webSeries,
+      dramas: dramaTitles,
+      anime: animeTitles,
+      tvShows: tvShows,
+      keyOf: _movieBoxMatchKey,
+      limit: 18,
+    ).where((title) =>
+        title.backdropUrl.isNotEmpty || title.posterUrl.isNotEmpty)
+      .toList(growable: false);
   }
 
   String _trendingMovieCategory(Movie movie) {
@@ -4330,6 +4382,184 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return items;
   }
 
+  void _openHotShorts(List<Movie> source, {int initialIndex = 0}) {
+    final shorts = _deduplicateMovies(
+      source.where((movie) => movie.isMovieBox).toList(growable: false),
+    );
+    if (shorts.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => HotShortsScreen(
+          items: shorts,
+          initialIndex: initialIndex.clamp(0, shorts.length - 1).toInt(),
+        ),
+      ),
+    );
+  }
+
+  Widget _hotShortsBlock(List<Movie> source) {
+    final shorts = _deduplicateMovies(
+      source.where((movie) => movie.isMovieBox).toList(growable: false),
+    );
+    if (shorts.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 22, 12, 9),
+          child: Row(
+            children: [
+              const Icon(Icons.smart_display_rounded, color: gold, size: 20),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hot Shorts TV',
+                      style: TextStyle(
+                        color: white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'Vertical videos · Swipe up to watch next',
+                      style: TextStyle(color: ink60, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => _openHotShorts(shorts),
+                style: TextButton.styleFrom(
+                  foregroundColor: gold,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(36, 28),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Watch',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 238,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            itemCount: shorts.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, index) {
+              final movie = shorts[index];
+              final imageUrl = movie.posterUrl.isNotEmpty
+                  ? movie.posterUrl
+                  : movie.backdropUrl;
+              return SizedBox(
+                width: 132,
+                child: Material(
+                  color: panel,
+                  borderRadius: BorderRadius.circular(13),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => _openHotShorts(shorts, initialIndex: index),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (imageUrl.isNotEmpty)
+                          FlixoraCachedImage(
+                            imageUrl: imageUrl,
+                            isOnline: _online,
+                            fit: BoxFit.cover,
+                            memCacheWidth: 396,
+                            memCacheHeight: 714,
+                            placeholder: const ColoredBox(color: panel),
+                            fallback: const ColoredBox(color: panel),
+                          )
+                        else
+                          const ColoredBox(color: panel),
+                        const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Color(0x55000000),
+                                Colors.transparent,
+                                Color(0xDD000000),
+                              ],
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 9,
+                          left: 9,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: gold,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: const Text(
+                              'SHORTS',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const Center(
+                          child: CircleAvatar(
+                            radius: 20,
+                            backgroundColor: Color(0xAA000000),
+                            child: Icon(
+                              Icons.play_arrow_rounded,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: 9,
+                          right: 9,
+                          bottom: 10,
+                          child: Text(
+                            movie.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              shadows: [
+                                Shadow(color: Colors.black, blurRadius: 8),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _sectionBlock(String title, List<Movie> movies) {
     final allFilters = _sectionFilterOptions(title);
     final filteredByOption = <String, List<Movie>>{
@@ -5708,6 +5938,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
+          if (_hotShortsSection != null)
+            _hotShortsBlock(_hotShortsSection!.items),
           _sectionBlock('Trending Movies', _trendingMovies),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._movieBoxSections.expand((section) => section.items)
@@ -5718,7 +5950,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..._movieBoxSections
               .where((section) => !section.isBanner &&
                   !section.title.toLowerCase().contains('trending') &&
-                  !section.isFlixoraOriginal)
+                  !section.isFlixoraOriginal &&
+                  !section.isHotShorts)
               .map((section) => _sectionBlock(
                     section.title,
                     _movieBoxSectionItems(section),
@@ -7294,6 +7527,556 @@ class DownloadsScreen extends StatelessWidget {
     );
   }
 }
+/// Dedicated vertical Reels-style player for MovieBox Hot Shorts TV.
+/// Every selected short is resolved through the central MovieBox/WeFeed core.
+class HotShortsScreen extends StatefulWidget {
+  final List<Movie> items;
+  final int initialIndex;
+
+  const HotShortsScreen({
+    super.key,
+    required this.items,
+    this.initialIndex = 0,
+  });
+
+  @override
+  State<HotShortsScreen> createState() => _HotShortsScreenState();
+}
+
+class _HotShortsScreenState extends State<HotShortsScreen> {
+  late final Player _player;
+  late final VideoController _videoController;
+  late final PageController _pageController;
+
+  StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  StreamSubscription<Duration>? _durationSubscription;
+  StreamSubscription<bool>? _completedSubscription;
+
+  Future<void> _playerOperation = Future<void>.value();
+  Timer? _controlsTimer;
+  int _activeIndex = 0;
+  int _requestToken = 0;
+  bool _loading = true;
+  bool _playing = false;
+  bool _showControls = true;
+  bool _disposed = false;
+  String? _error;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeIndex = widget.initialIndex.clamp(0, widget.items.length - 1).toInt();
+    _pageController = PageController(initialPage: _activeIndex);
+    _player = Player(
+      configuration: PlayerConfiguration(
+        title: 'FLIXORA Hot Shorts',
+        bufferSize: 24 * 1024 * 1024,
+        libass: true,
+      ),
+    );
+    _videoController = VideoController(_player);
+
+    _playingSubscription = _player.stream.playing.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() {
+        _playing = value;
+        if (!value) _showControls = true;
+      });
+      if (value) {
+        _scheduleControlsHide();
+      } else {
+        _controlsTimer?.cancel();
+      }
+    });
+    _positionSubscription = _player.stream.position.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() => _position = value);
+    });
+    _durationSubscription = _player.stream.duration.listen((value) {
+      if (!mounted || _disposed) return;
+      setState(() => _duration = value);
+    });
+    _completedSubscription = _player.stream.completed.listen((completed) {
+      if (!completed || _disposed || _loading) return;
+      unawaited(_player.seek(Duration.zero).then((_) => _player.play()));
+    });
+
+    if (widget.items.isNotEmpty) unawaited(_loadShort(_activeIndex));
+  }
+
+  void _scheduleControlsHide() {
+    _controlsTimer?.cancel();
+    _controlsTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted || _disposed || !_playing) return;
+      setState(() => _showControls = false);
+    });
+  }
+
+  void _toggleControls() {
+    if (!mounted || _disposed) return;
+    setState(() => _showControls = !_showControls);
+    if (_showControls) _scheduleControlsHide();
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_disposed) return;
+    try {
+      if (_playing) {
+        await _player.pause();
+      } else {
+        await _player.play();
+        _scheduleControlsHide();
+      }
+    } catch (error) {
+      if (mounted && !_disposed) {
+        setState(() => _error = 'Could not control this short video: $error');
+      }
+    }
+  }
+
+  Map<String, String> _linkHeaders(Map<String, dynamic> link) {
+    final rawHeaders = link['headers'];
+    if (rawHeaders is! Map) return const <String, String>{};
+    return Map<String, String>.from(
+      rawHeaders.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      ),
+    );
+  }
+
+  int _qualityRank(Map<String, dynamic> link) {
+    final label = (link['label'] ?? '').toString().toLowerCase();
+    if (label.contains('2160p') || label.contains('4k')) return 5;
+    if (label.contains('1080p')) return 4;
+    if (label.contains('720p')) return 3;
+    if (label.contains('480p')) return 2;
+    if (label.contains('360p')) return 1;
+    return 0;
+  }
+
+  Future<void> _loadShort(int index) async {
+    if (_disposed || index < 0 || index >= widget.items.length) return;
+    final requestToken = ++_requestToken;
+    final movie = widget.items[index];
+
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+        _position = Duration.zero;
+        _duration = Duration.zero;
+        _playing = false;
+      });
+    }
+
+    try {
+      final requests = <Future<dynamic>>[
+        MovieBoxService.playDetail(movie.toMovieBoxMap())
+            .timeout(const Duration(seconds: 18)),
+      ];
+      if (movie.movieBoxIsSeries) {
+        requests.add(
+          MovieBoxService.seasons(movie.movieBoxId)
+              .timeout(const Duration(seconds: 18)),
+        );
+      }
+
+      final resolved = await Future.wait<dynamic>(requests);
+      if (_disposed || requestToken != _requestToken) return;
+      final detail = Map<String, dynamic>.from(resolved.first as Map);
+
+      var seasonNumber = 0;
+      var episodeNumber = 0;
+      if (movie.movieBoxIsSeries) {
+        final seasons = (resolved[1] as List)
+            .whereType<Map>()
+            .map((season) => Map<String, dynamic>.from(season))
+            .toList()
+          ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+        for (final season in seasons) {
+          final episodes = (season['episodes'] as List? ?? const [])
+              .map(_toInt)
+              .where((number) => number > 0)
+              .toList(growable: false);
+          if (episodes.isEmpty) continue;
+          seasonNumber = _toInt(season['se']);
+          episodeNumber = episodes.first;
+          if (seasonNumber > 0) break;
+        }
+        if (seasonNumber <= 0 || episodeNumber <= 0) {
+          throw StateError('No playable short episode was returned.');
+        }
+      }
+
+      final streamResult = await MovieBoxService.streams(
+        detail,
+        season: seasonNumber,
+        episode: episodeNumber,
+        isSeries: movie.movieBoxIsSeries,
+        forceRefresh: true,
+      ).timeout(const Duration(seconds: 25));
+      if (_disposed || requestToken != _requestToken) return;
+
+      final rawLinks = streamResult['links'] as List? ?? const [];
+      final links = rawLinks
+          .whereType<Map>()
+          .map((link) => Map<String, dynamic>.from(link))
+          .where((link) {
+            final uri = Uri.tryParse((link['url'] ?? '').toString().trim());
+            return uri != null &&
+                (uri.scheme == 'http' || uri.scheme == 'https') &&
+                uri.host.isNotEmpty;
+          })
+          .toList(growable: false);
+      if (links.isEmpty) {
+        throw StateError('MovieBox did not return a playable short video.');
+      }
+
+      final languages = links
+          .map((link) => (link['label'] ?? '').toString().split('·').first.trim())
+          .where((language) => language.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      final preferredLanguage = languages.contains('Original')
+          ? 'Original'
+          : (languages.isNotEmpty ? languages.first : '');
+      final candidates = links
+          .where((link) => preferredLanguage.isEmpty ||
+              (link['label'] ?? '').toString().split('·').first.trim() ==
+                  preferredLanguage)
+          .toList()
+        ..sort((a, b) => _qualityRank(b).compareTo(_qualityRank(a)));
+
+      Object? lastError;
+      for (final link in candidates.take(5)) {
+        if (_disposed || requestToken != _requestToken) return;
+        final url = (link['url'] ?? '').toString().trim();
+        final headers = _linkHeaders(link);
+        try {
+          final operation = _playerOperation.then((_) async {
+            if (_disposed || requestToken != _requestToken) return;
+            await _player.stop();
+            if (_disposed || requestToken != _requestToken) return;
+            await _player.open(
+              Media(url, httpHeaders: headers),
+              play: false,
+            );
+            if (_disposed || requestToken != _requestToken) {
+              await _player.stop();
+              return;
+            }
+            await _player.play();
+            if (_disposed || requestToken != _requestToken) {
+              await _player.stop();
+            }
+          });
+          _playerOperation = operation.catchError((Object _) {});
+          await operation;
+          if (_disposed || requestToken != _requestToken) return;
+          if (mounted) {
+            setState(() {
+              _loading = false;
+              _error = null;
+            });
+          }
+          _scheduleControlsHide();
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError ?? StateError('No working MovieBox stream was found.');
+    } catch (error) {
+      if (mounted && !_disposed && requestToken == _requestToken) {
+        setState(() {
+          _loading = false;
+          _error = 'This short could not be played right now. Tap retry to resolve it again.';
+        });
+        debugPrint('Hot Shorts playback failed for ${movie.title}: $error');
+      }
+    }
+  }
+
+  void _onPageChanged(int index) {
+    if (_disposed || index == _activeIndex) return;
+    setState(() {
+      _activeIndex = index;
+      _showControls = true;
+      _loading = true;
+    });
+    unawaited(_player.pause());
+    unawaited(_loadShort(index));
+  }
+
+  Widget _shortArtwork(Movie movie) {
+    final imageUrl = movie.posterUrl.isNotEmpty
+        ? movie.posterUrl
+        : movie.backdropUrl;
+    if (imageUrl.isEmpty) return const ColoredBox(color: Colors.black);
+    return FlixoraCachedImage(
+      imageUrl: imageUrl,
+      isOnline: true,
+      fit: BoxFit.cover,
+      memCacheWidth: 900,
+      memCacheHeight: 1600,
+      placeholder: const ColoredBox(color: Colors.black),
+      fallback: const ColoredBox(color: Colors.black),
+    );
+  }
+
+  Widget _shortPage(Movie movie, int index) {
+    final active = index == _activeIndex;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: active ? _toggleControls : null,
+            child: active && !_loading && _error == null
+                ? Video(
+                    controller: _videoController,
+                    fit: BoxFit.cover,
+                    controls: NoVideoControls,
+                  )
+                : _shortArtwork(movie),
+          ),
+        ),
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Color(0x66000000),
+                  Colors.transparent,
+                  Color(0xCC000000),
+                ],
+                stops: [0, 0.48, 1],
+              ),
+            ),
+          ),
+        ),
+        if (active && _loading)
+          const Center(
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(
+                color: gold,
+                strokeWidth: 2.5,
+              ),
+            ),
+          ),
+        if (active && _error != null)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 34),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.play_circle_outline_rounded,
+                    color: gold,
+                    size: 48,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: () => _loadShort(_activeIndex),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Retry'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: gold,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (active && _showControls)
+          Positioned.fill(
+            child: SafeArea(
+              child: Stack(
+                children: [
+                  Positioned(
+                    left: 12,
+                    right: 12,
+                    top: 5,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                            size: 27,
+                          ),
+                        ),
+                        const Expanded(
+                          child: Text(
+                            'HOT SHORTS TV',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1.4,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${index + 1}/${widget.items.length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 18,
+                    right: 78,
+                    bottom: 31,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          movie.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w900,
+                            shadows: [
+                              Shadow(color: Colors.black, blurRadius: 8),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          movie.movieBoxIsSeries
+                              ? 'Short Series · First Episode'
+                              : 'MovieBox Shorts',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        const Text(
+                          'Swipe up for the next short',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    right: 15,
+                    bottom: 42,
+                    child: IconButton.filled(
+                      onPressed: _togglePlayback,
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0x99000000),
+                        foregroundColor: Colors.white,
+                        fixedSize: const Size(48, 48),
+                      ),
+                      icon: Icon(
+                        _playing
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        size: 27,
+                      ),
+                    ),
+                  ),
+                  if (_duration > Duration.zero)
+                    Positioned(
+                      left: 18,
+                      right: 18,
+                      bottom: 8,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: LinearProgressIndicator(
+                          value: (_position.inMilliseconds /
+                                  _duration.inMilliseconds)
+                              .clamp(0.0, 1.0)
+                              .toDouble(),
+                          minHeight: 3,
+                          backgroundColor: Colors.white30,
+                          valueColor: const AlwaysStoppedAnimation<Color>(gold),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _requestToken++;
+    _controlsTimer?.cancel();
+    _playingSubscription?.cancel();
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _completedSubscription?.cancel();
+    _pageController.dispose();
+    unawaited(_player.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.items.isEmpty) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Text(
+            'No shorts available.',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: PageView.builder(
+        controller: _pageController,
+        scrollDirection: Axis.vertical,
+        physics: const PageScrollPhysics(),
+        itemCount: widget.items.length,
+        onPageChanged: _onPageChanged,
+        itemBuilder: (context, index) =>
+            _shortPage(widget.items[index], index),
+      ),
+    );
+  }
+}
+
 class MovieDetailsScreen extends StatelessWidget {
   final Movie movie;
   final bool isOnline;
