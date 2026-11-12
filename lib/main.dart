@@ -20,6 +20,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
 import 'streaming/featured_carousel_layout.dart';
 import 'streaming/tmdb_media_type.dart';
+import 'streaming/external_catalog_service.dart';
 import 'archive_service.dart';
 import 'archive_screen.dart';
 import 'downloads/resumable_download_service.dart';
@@ -1417,7 +1418,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _timer;
   Timer? _networkTimer;
   Timer? _searchTimer;
-  int _searchRequestToken = 0;
   DateTime? _lastCarouselInteractionAt;
   DateTime? _lastHomeScrollAt;
 
@@ -2704,7 +2704,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> searchMovies(String query) async {
     final text = query.trim();
-    final requestToken = ++_searchRequestToken;
 
     if (text.isEmpty) {
       if (!mounted) return;
@@ -2721,16 +2720,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     final cachedSearch = await MovieCache.getSearch(text);
-    if (!mounted ||
-        requestToken != _searchRequestToken ||
-        _search.trim().toLowerCase() != text.toLowerCase()) {
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
     if (cachedSearch.isNotEmpty) {
-      // Show cached results immediately while fresh catalogue requests run.
       setState(() {
         searchResults = cachedSearch;
-        _searchLoading = false;
+        _searchLoading = true;
         _searchError = null;
       });
     }
@@ -2738,11 +2734,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final onlineNow = _online
         ? await InternetService.isOnline()
         : await InternetService.isOnline(forceRefresh: true);
-    if (!mounted || requestToken != _searchRequestToken) return;
+    if (!mounted) return;
     if (!onlineNow) {
       setState(() {
         _online = false;
         _connectionKnown = true;
+      });
+      setState(() {
         _search = text;
         searchResults = cachedSearch;
         _searchLoading = false;
@@ -2754,10 +2752,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     setState(() {
       _online = true;
-      _connectionKnown = true;
       _search = text;
       if (cachedSearch.isNotEmpty) searchResults = cachedSearch;
-      _searchLoading = cachedSearch.isEmpty;
+      _searchLoading = true;
       _searchError = null;
     });
 
@@ -2776,63 +2773,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           .toList(growable: false);
     }).catchError((_) => <Movie>[]);
 
-    var adminResults = <Movie>[];
-    var tmdbResults = <Movie>[];
-    var movieBoxItems = <Movie>[];
-    var completedRequests = 0;
-
-    void applySearchResults() {
-      if (!mounted ||
-          requestToken != _searchRequestToken ||
-          _search.trim().toLowerCase() != text.toLowerCase()) {
-        return;
-      }
-
-      // Admin entries win, followed by MovieBox/WeFeed, then TMDB metadata.
-      final unique = _deduplicateMovies([
-        ...adminResults,
-        ...movieBoxItems,
-        ...tmdbResults,
-      ]);
-      setState(() {
-        searchResults = unique;
-        _searchLoading = unique.isEmpty && completedRequests < 3;
-        _searchError =
-            unique.isEmpty && completedRequests == 3 ? 'No movies found.' : null;
-      });
-    }
-
-    // Update the screen as each source finishes instead of waiting for the
-    // slowest catalogue request before showing any search results.
-    await Future.wait<void>([
-      adminSearch.then<void>((items) {
-        adminResults = items;
-        completedRequests++;
-        applySearchResults();
-      }),
-      tmdbSearch.then<void>((items) {
-        tmdbResults = items;
-        completedRequests++;
-        applySearchResults();
-      }),
-      movieBoxSearch.then<void>((items) {
-        movieBoxItems = items;
-        completedRequests++;
-        applySearchResults();
-      }),
+    // Show Admin/TMDB results as soon as they arrive. MovieBox is merged in
+    // afterwards, so a slow provider search does not blank the Search screen.
+    final firstResults = await Future.wait<List<Movie>>([
+      adminSearch,
+      tmdbSearch,
     ]);
-
-    if (!mounted ||
-        requestToken != _searchRequestToken ||
-        _search.trim().toLowerCase() != text.toLowerCase()) {
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
       return;
     }
 
-    final unique = _deduplicateMovies([
-      ...adminResults,
-      ...movieBoxItems,
-      ...tmdbResults,
+    final initialUnique = _deduplicateMovies([
+      ...firstResults[0],
+      ...firstResults[1],
     ]);
+    setState(() {
+      searchResults = initialUnique;
+      _searchLoading = initialUnique.isEmpty;
+      _searchError = null;
+    });
+
+    final movieBoxItems = await movieBoxSearch;
+    if (!mounted || _search.trim().toLowerCase() != text.toLowerCase()) {
+      return;
+    }
+
+    // Admin records keep precedence, followed by MovieBox/WeFeed and TMDB.
+    final unique = _deduplicateMovies([
+      ...firstResults[0],
+      ...movieBoxItems,
+      ...firstResults[1],
+    ]);
+
     setState(() {
       searchResults = unique;
       _searchLoading = false;
@@ -6542,10 +6514,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ],
       ),
-      // Render cached Home content immediately while the first connectivity
-      // check is running. Only block the initial screen when no cached titles
-      // exist; offline users keep their previously cached posters and rails.
-      body: (!_connectionKnown && _allMovies().isEmpty)
+      body: !_connectionKnown
           ? const Center(
               child: CircularProgressIndicator(color: gold),
             )
@@ -7192,6 +7161,13 @@ class MovieDetailsScreen extends StatelessWidget {
                       fontSize: 14,
                     ),
                   ),
+                  ExternalCatalogSection(
+                    title: movie.title,
+                    year: movie.year,
+                    mediaType: movie.mediaType,
+                    tmdbId: movie.tmdbId,
+                    client: supabaseClient,
+                  ),
                   const SizedBox(height: 25),
                   if (movie.canAttemptPlayback)
                     SizedBox(
@@ -7281,7 +7257,7 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  if (movie.canAttemptPlayback && movie.mediaType == 'movie')
+                  if (movie.downloadUrl.trim().isNotEmpty)
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
