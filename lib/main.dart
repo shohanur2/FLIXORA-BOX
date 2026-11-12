@@ -27,6 +27,7 @@ import 'downloads/resumable_download_service.dart';
 import 'native/rust_playback_core.dart';
 import 'streaming/moviebox_service.dart';
 import 'streaming/moviebox_stream_policy.dart';
+import 'streaming/catalog_priority_policy.dart';
 import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
@@ -1707,7 +1708,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 _normalizedMovieTitle(item.title);
       });
     }).toList(growable: false);
-    return _deduplicateMovies([...adminMatches, ...section.items]);
+    return _deduplicateMovies([...section.items, ...adminMatches]);
   }
 
   String _catalogVisibilityKey(Movie movie) {
@@ -1865,14 +1866,47 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _deduplicateMovies(List<Movie> movies) {
+    // Resolve duplicates to MovieBox first, even when Admin or TMDB results
+    // arrive earlier in the same batch. Admin remains the fallback catalogue.
+    final movieBoxCandidates = movies
+        .where((movie) => movie.isMovieBox)
+        .toList(growable: false);
+
+    Movie prioritizeMovieBox(Movie movie) {
+      if (movie.isMovieBox) return movie;
+      for (final candidate in movieBoxCandidates) {
+        if (candidate.mediaType != movie.mediaType) continue;
+        final sameTitle = _normalizedMovieTitle(candidate.title) ==
+            _normalizedMovieTitle(movie.title);
+        final sameYear = candidate.year == movie.year ||
+            candidate.year == 'N/A' ||
+            movie.year == 'N/A';
+        if (sameTitle && sameYear) {
+          return candidate.withFallbackMetadata(movie);
+        }
+      }
+      return CatalogPriorityPolicy.preferMovieBox(
+        movie,
+        _cachedMovieBoxMatch(movie),
+      );
+    }
+
+    final prioritizedMovies = movies
+        .map(prioritizeMovieBox)
+        .toList(growable: false);
     final seenTmdbIds = <String>{};
     final seenTitleYears = <String>{};
     final seenTitleBasesWithYear = <String>{};
     final seenTitleBasesWithoutYear = <String>{};
     final seenFallbackIds = <String>{};
 
-    return movies.where((movie) {
-      if (_unpublishedCatalogKeys.contains(_catalogVisibilityKey(movie))) {
+    return prioritizedMovies.where((movie) {
+      final unpublished = _unpublishedCatalogKeys
+          .contains(_catalogVisibilityKey(movie));
+      if (CatalogPriorityPolicy.shouldHideUnpublished(
+        isMovieBox: movie.isMovieBox,
+        isUnpublished: unpublished,
+      )) {
         return false;
       }
       if (movie.tmdbId > 0 &&
@@ -1907,9 +1941,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).toList();
   }
 
-  /// Keep the Home hero and Trending Movies row populated if TMDB's
-  /// trending endpoint temporarily returns an empty response. Admin records
-  /// stay first so they retain precedence over matching TMDB catalogue items.
+  /// Keep the Home hero and Trending Movies row populated if a catalogue
+  /// endpoint temporarily returns an empty response. MovieBox leads; published
+  /// Admin entries remain available as a fallback when MovieBox has no match.
   MovieBoxHomeSection? get _hotShortsSection {
     for (final section in _movieBoxSections) {
       if (section.isHotShorts && section.items.isNotEmpty) return section;
@@ -1925,10 +1959,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Build a mixed hero from Trending Movies plus the strongest TV categories.
   /// Movies and Web Series lead; Drama, Anime and general TV appear regularly.
   List<Movie> _homeTrendingMovies() {
-    List<Movie> preferAdminRecords(Iterable<Movie> titles) {
+    List<Movie> preferMovieBoxRecords(Iterable<Movie> titles) {
       return _deduplicateMovies(
         titles
-            .map((title) => _cachedFlixoraMatch(title) ?? title)
+            .map((title) => _cachedMovieBoxMatch(title) ?? title)
             .toList(growable: false),
       );
     }
@@ -1942,19 +1976,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .where((title) => title.mediaType == 'movie')
         .toList(growable: false);
 
-    final movieTitles = preferAdminRecords([
-      ..._trendingMovies,
+    final movieTitles = preferMovieBoxRecords([
       ...movieBoxTrendingMovies,
+      ..._trendingMovies,
       ..._tmdbTrendingMovies,
       ...trending.where((title) => title.mediaType == 'movie'),
     ]).where((title) => title.mediaType == 'movie').toList(growable: false);
 
-    final seriesCatalog = preferAdminRecords([
-      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+    final seriesCatalog = preferMovieBoxRecords([
       ..._movieBoxSections
           .where((section) => !section.isHotShorts)
           .expand((section) => section.items)
           .where((title) => title.mediaType == 'tv'),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ...trendingTv,
       ...popularTv,
       ...topRatedTv,
@@ -1963,7 +1997,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...indianDramaTv,
     ]).where((title) => title.mediaType == 'tv').toList(growable: false);
 
-    final webSeries = preferAdminRecords(_webSeriesTitles())
+    final webSeries = preferMovieBoxRecords(_webSeriesTitles())
         .where((title) => title.mediaType == 'tv')
         .take(12)
         .toList(growable: false);
@@ -1975,7 +2009,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ))
         .toList(growable: false);
 
-    final animeTitles = preferAdminRecords([
+    final animeTitles = preferMovieBoxRecords([
       ...anime,
       ...seriesCatalog.where(_isAnimeTitle),
     ]);
@@ -2093,34 +2127,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Movie candidate,
   ) async {
     final category = _trendingMovieCategory(candidate);
-    final adminMatch = _cachedFlixoraMatch(candidate);
-    if (adminMatch != null && adminMatch.hasPlayableVideoUrl) {
-      // Published Admin sources always take precedence over MovieBox matches.
-      return MapEntry(category, adminMatch);
+    final movieBoxMatch = candidate.isMovieBox
+        ? candidate
+        : _cachedMovieBoxMatch(candidate) ??
+            await _searchMovieBoxMatch(candidate);
+
+    if (movieBoxMatch != null &&
+        movieBoxMatch.isMovieBox &&
+        !movieBoxMatch.movieBoxIsSeries) {
+      final audioLanguages =
+          await _movieBoxPlayableAudioLanguages(movieBoxMatch);
+      if (audioLanguages.isNotEmpty) {
+        final verifiedMovie = Movie.fromCache({
+          ...movieBoxMatch.toJson(),
+          'audioLanguages': audioLanguages,
+        });
+        return MapEntry(category, verifiedMovie);
+      }
     }
 
-    final requested = adminMatch ?? candidate;
-    if (requested.hasPlayableVideoUrl) {
-      return MapEntry(category, requested);
-    }
-
-    final movieBoxMatch = _cachedMovieBoxMatch(requested) ??
-        await _searchMovieBoxMatch(requested);
-    if (movieBoxMatch == null ||
-        !movieBoxMatch.isMovieBox ||
-        movieBoxMatch.movieBoxIsSeries) {
+    // Only fall back to Admin after MovieBox has no usable match. An
+    // unpublished Admin record must never suppress a valid MovieBox title.
+    if (_unpublishedCatalogKeys.contains(_catalogVisibilityKey(candidate))) {
       return null;
     }
-
-    final audioLanguages =
-        await _movieBoxPlayableAudioLanguages(movieBoxMatch);
-    if (audioLanguages.isEmpty) return null;
-
-    final verifiedMovie = Movie.fromCache({
-      ...movieBoxMatch.toJson(),
-      'audioLanguages': audioLanguages,
-    });
-    return MapEntry(category, verifiedMovie);
+    final adminMatch = _cachedFlixoraMatch(candidate);
+    if (adminMatch != null && adminMatch.hasPlayableVideoUrl) {
+      return MapEntry(category, adminMatch);
+    }
+    if (candidate.hasPlayableVideoUrl && !candidate.isMovieBox) {
+      return MapEntry(category, candidate);
+    }
+    return null;
   }
 
   Future<void> _refreshPlayableTrendingMovies() async {
@@ -2136,8 +2174,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       await _refreshCatalogVisibility(candidates: candidates);
       final visibleCandidates = candidates
-          .where((candidate) => !_unpublishedCatalogKeys
-              .contains(_catalogVisibilityKey(candidate)))
+          .where((candidate) => candidate.isMovieBox ||
+              !_unpublishedCatalogKeys.contains(_catalogVisibilityKey(candidate)))
           .toList(growable: false);
 
       final verifiedAll = <Movie>[];
@@ -2147,9 +2185,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final batch = visibleCandidates.skip(start).take(3);
         final resolved = await Future.wait<MapEntry<String, Movie>?>(
           batch.map((candidate) async {
-            if (_unpublishedCatalogKeys.contains(
-              _catalogVisibilityKey(candidate),
-            )) {
+            if (!candidate.isMovieBox &&
+                _unpublishedCatalogKeys.contains(
+                  _catalogVisibilityKey(candidate),
+                )) {
               return null;
             }
             return _verifyPlayableTrendingMovie(candidate);
@@ -3160,8 +3199,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
       final unique = _deduplicateMovies([
-        ...adminResults,
         ...movieBoxItems,
+        ...adminResults,
         ...tmdbResults,
       ]);
       setState(() {
@@ -3200,8 +3239,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       candidates: [...adminResults, ...movieBoxItems, ...tmdbResults],
     );
     final unique = _deduplicateMovies([
-      ...adminResults,
       ...movieBoxItems,
+      ...adminResults,
       ...tmdbResults,
     ]);
     setState(() {
@@ -3906,11 +3945,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final client = supabaseClient;
 
     if (!_online || client == null) {
-      return requested.isFlixora
-          ? requested
-          : (_cachedFlixoraMatch(requested) ??
-              _cachedMovieBoxMatch(requested) ??
-              requested);
+      return requested.isMovieBox
+            ? requested
+            : (_cachedMovieBoxMatch(requested) ??
+                _cachedFlixoraMatch(requested) ??
+                requested);
     }
 
     final visibilityKey = _catalogVisibilityKey(requested);
@@ -3923,11 +3962,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     final cachedMovieBox = _cachedMovieBoxMatch(requested);
-    final Future<Movie?>? parallelMovieBoxLookup = requested.isFlixora
-        ? null
-        : (cachedMovieBox != null
-            ? Future<Movie?>.value(cachedMovieBox)
-            : _searchMovieBoxMatch(requested));
+    final Future<Movie?>? parallelMovieBoxLookup = cachedMovieBox != null
+        ? Future<Movie?>.value(cachedMovieBox)
+        : _searchMovieBoxMatch(requested);
 
     Future<Movie?> resolveMovieBoxFallback(Movie base) async {
       final cached = _cachedMovieBoxMatch(base);
@@ -3952,6 +3989,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     try {
+      // MovieBox/WeFeed is the primary content source. Check it before using
+      // any Admin-managed source or publication fallback.
+      final preferredMovieBox = await parallelMovieBoxLookup;
+      if (preferredMovieBox != null && preferredMovieBox.isMovieBox) {
+        return preferredMovieBox.withFallbackMetadata(requested);
+      }
+
       dynamic response;
       if (requested.isFlixora && requested.sourceId > 0) {
         response = await client
