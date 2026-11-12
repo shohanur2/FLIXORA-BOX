@@ -79,15 +79,15 @@ void main() {
       );
     });
 
-    test('does not guess a regional category from unknown metadata', () {
+    test('keeps other international titles in the broad Trending feed', () {
       expect(
         TrendingMovieEligibility.category(
-          originalLanguage: 'ko',
-          originCountry: 'South Korea',
+          originalLanguage: 'ru',
+          originCountry: 'Russia',
           inBollywoodCatalogue: false,
           inHollywoodCatalogue: false,
         ),
-        isEmpty,
+        'International',
       );
     });
 
