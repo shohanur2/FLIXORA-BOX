@@ -1661,6 +1661,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie>? _gemsForYouCache;
   int? _gemsForYouCacheFingerprint;
   final Map<String, _CachedHomeSection> _homeSectionCache = {};
+  Future<void>? _secondaryCacheLoadFuture;
   DateTime? _lastSecondaryCataloguesRefreshAt;
   DateTime? _lastCatalogVisibilityRefreshAt;
   final Set<String> _unpublishedCatalogKeys = {};
@@ -2480,83 +2481,84 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _initializeApp() async {
     try {
+      // Start the reachability probe and small preference reads while the
+      // essential cached Home catalogue is being restored.
+      final onlineFuture = InternetService.isOnline();
+      final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
+      final prefsFuture = SharedPreferences.getInstance();
+      unawaited(_loadSavedPreferences().catchError((_) {}));
+      unawaited(_loadAppSettings());
+
       await _loadCachedMovies();
-    if (!mounted) return;
+      if (!mounted) return;
 
-    // Cached Home is the first priority. Independent settings/history/network
-    // reads start together instead of serially delaying the first data refresh.
-    unawaited(_loadSavedPreferences().catchError((_) {}));
-    unawaited(_loadAppSettings());
-    final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
-    final prefsFuture = SharedPreferences.getInstance();
-    final savedDownloadsFuture = MovieCache.getDownloads();
-    final onlineFuture = InternetService.isOnline();
+      final savedDownloadsFuture = MovieCache.getDownloads();
+      final savedHistory = await savedHistoryFuture;
+      final prefs = await prefsFuture;
+      final savedSearchHistory =
+          prefs.getStringList(_searchHistoryPrefsKey) ?? const <String>[];
+      // Publication state is scoped to the exact Admin row, never a MovieBox
+      // duplicate that happens to share its TMDB ID or title/year.
+      _unpublishedCatalogKeys
+        ..clear()
+        ..addAll(
+          (prefs.getStringList('flixora_unpublished_catalog_keys') ?? const [])
+              .where((key) => key.startsWith('admin:id:')),
+        );
+      _checkedCatalogVisibilityKeys
+        ..clear()
+        ..addAll(
+          (prefs.getStringList('flixora_checked_catalog_visibility_keys') ?? const [])
+              .where((key) => key.startsWith('admin:id:')),
+        );
+      final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
+      if (mounted) {
+        setState(() {
+          _watchHistory
+            ..clear()
+            ..addAll(savedHistory);
+          _searchHistory
+            ..clear()
+            ..addAll(
+              savedSearchHistory
+                  .map((query) => query.trim())
+                  .where((query) => query.isNotEmpty)
+                  .take(20),
+            );
+          _studyMode = savedStudyMode;
+        });
+      }
 
-    final savedHistory = await savedHistoryFuture;
-    final prefs = await prefsFuture;
-    final savedSearchHistory =
-        prefs.getStringList(_searchHistoryPrefsKey) ?? const <String>[];
-    // Discard legacy TMDB/title-wide visibility keys. Publication state is
-    // now scoped to the exact Admin row so it cannot hide MovieBox duplicates.
-    _unpublishedCatalogKeys
-      ..clear()
-      ..addAll(
-        (prefs.getStringList('flixora_unpublished_catalog_keys') ?? const [])
-            .where((key) => key.startsWith('admin:id:')),
-      );
-    _checkedCatalogVisibilityKeys
-      ..clear()
-      ..addAll(
-        (prefs.getStringList('flixora_checked_catalog_visibility_keys') ?? const [])
-            .where((key) => key.startsWith('admin:id:')),
-      );
-    final savedStudyMode = prefs.getBool('flixora_study_mode') ?? false;
-    if (mounted) {
-      setState(() {
-        _watchHistory
-          ..clear()
-          ..addAll(savedHistory);
-        _searchHistory
-          ..clear()
-          ..addAll(
-            savedSearchHistory
-                .map((query) => query.trim())
-                .where((query) => query.isNotEmpty)
-                .take(20),
-          );
-        _studyMode = savedStudyMode;
-      });
-    }
-    // Download file verification can touch many local files; keep it off the
-    // Home startup path and populate the Library as soon as the scan finishes.
-    unawaited(savedDownloadsFuture.then((savedDownloads) {
+      // Download verification can scan many files, so it stays off the first
+      // Home frame and fills the Library in the background.
+      unawaited(savedDownloadsFuture.then((savedDownloads) {
+        if (!mounted) return;
+        setState(() {
+          _downloads
+            ..clear()
+            ..addAll(savedDownloads);
+        });
+      }).catchError((_) {}));
+
+      final online = await onlineFuture;
       if (!mounted) return;
       setState(() {
-        _downloads
-          ..clear()
-          ..addAll(savedDownloads);
+        _online = online;
+        _connectionKnown = true;
       });
-    }).catchError((_) {}));
 
-    if (!mounted) return;
-
-    final online = await onlineFuture;
-
-    if (!mounted) return;
-
-    setState(() {
-      _online = online;
-      _connectionKnown = true;
-    });
-
-    if (online) {
-      await loadHome();
-    } else {
-      setState(() {
-        loading = false;
-        if (_allMovies().isEmpty) homeError = 'offline';
-      });
-    }
+      if (online) {
+        await loadHome();
+      } else {
+        // If the essential cache is empty, let the smaller secondary cache
+        // finish before showing the offline state.
+        if (_allMovies().isEmpty) await _loadSecondaryCachedMovies();
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          homeError = _allMovies().isEmpty ? 'offline' : null;
+        });
+      }
     } catch (error) {
       debugPrint('FLIXORA startup failed: $error');
       if (!mounted) return;
@@ -2679,6 +2681,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _loadCachedMovies() async {
+    final cachedMovieBoxSectionsFuture = MovieCache.getMovieBoxSections();
+    final cachedTrendingDataFuture = Future.wait<List<Movie>>([
+      MovieCache.getList(MovieCache.playableTrendingMoviesKey),
+      MovieCache.getList(MovieCache.tmdbTrendingMoviesKey),
+    ]);
+    // Load the first-screen essentials first. Regional catalogues and less
+    // frequently used categories are restored after Home is already visible.
     final results = await Future.wait<List<Movie>>([
       MovieCache.getList(MovieCache.trendingKey),
       MovieCache.getList(MovieCache.popularKey),
@@ -2688,44 +2697,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       MovieCache.getList(MovieCache.popularTvKey),
       MovieCache.getList(MovieCache.topRatedTvKey),
       MovieCache.getList(MovieCache.animeKey),
-      MovieCache.getList(MovieCache.koreanKey),
-      MovieCache.getList(MovieCache.bengaliMoviesKey),
-      MovieCache.getList(MovieCache.bengaliTvKey),
       MovieCache.getList(MovieCache.flixoraKey),
-      MovieCache.getList(MovieCache.bollywoodMoviesKey),
-      MovieCache.getList(MovieCache.hollywoodMoviesKey),
-      MovieCache.getList(MovieCache.southIndianMoviesKey),
-      MovieCache.getList(MovieCache.indianDramaTvKey),
     ]);
 
-    final cachedMovieBoxSectionsFuture = MovieCache.getMovieBoxSections();
-    final cachedTrendingDataFuture = Future.wait<List<Movie>>([
-      MovieCache.getList(MovieCache.playableTrendingMoviesKey),
-      MovieCache.getList(MovieCache.tmdbTrendingMoviesKey),
-      MovieCache.getList(MovieCache.trendingHindiDubbedKey),
-      MovieCache.getList(MovieCache.trendingBollywoodKey),
-      MovieCache.getList(MovieCache.trendingHollywoodKey),
-    ]);
     final cachedMovieBoxSections = (await cachedMovieBoxSectionsFuture)
         .where((section) => !section.isFlixoraOriginal)
         .toList(growable: false);
     final cachedTrendingData = await cachedTrendingDataFuture;
     if (!mounted) return;
-    final cachedPlayableTrending = cachedTrendingData[0].isNotEmpty
-        ? cachedTrendingData[0]
-        : _deduplicateMovies([
-            ...cachedTrendingData[2],
-            ...cachedTrendingData[3],
-            ...cachedTrendingData[4],
-          ]);
 
     setState(() {
       _movieBoxSections = cachedMovieBoxSections;
-      _trendingMovies = cachedPlayableTrending;
+      _trendingMovies = cachedTrendingData[0];
       _tmdbTrendingMovies = cachedTrendingData[1];
-      _trendingHindiDubbedMovies = cachedTrendingData[2];
-      _trendingBollywoodMovies = cachedTrendingData[3];
-      _trendingHollywoodMovies = cachedTrendingData[4];
       trending = results[0];
       popular = results[1];
       latest = results[2];
@@ -2734,17 +2718,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       popularTv = results[5];
       topRatedTv = results[6];
       anime = results[7];
-      koreanDrama = results[8];
-      bengaliMovies = results[9];
-      bengaliTv = results[10];
-      flixoraMovies = results[11];
-      bollywoodMovies = results[12];
-      hollywoodMovies = results[13];
-      southIndianMovies = results[14];
-      indianDramaTv = results[15];
+      flixoraMovies = results[8];
       loading = false;
       homeError = null;
     });
+
+    // The remaining cached categories no longer block the first Home render.
+    unawaited(_loadSecondaryCachedMovies());
+  }
+
+  Future<void> _loadSecondaryCachedMovies() {
+    return _secondaryCacheLoadFuture ??= _loadSecondaryCachedMoviesInternal();
+  }
+
+  Future<void> _loadSecondaryCachedMoviesInternal() async {
+    try {
+      final results = await Future.wait<List<Movie>>([
+        MovieCache.getList(MovieCache.koreanKey),
+        MovieCache.getList(MovieCache.bengaliMoviesKey),
+        MovieCache.getList(MovieCache.bengaliTvKey),
+        MovieCache.getList(MovieCache.bollywoodMoviesKey),
+        MovieCache.getList(MovieCache.hollywoodMoviesKey),
+        MovieCache.getList(MovieCache.southIndianMoviesKey),
+        MovieCache.getList(MovieCache.indianDramaTvKey),
+        MovieCache.getList(MovieCache.trendingHindiDubbedKey),
+        MovieCache.getList(MovieCache.trendingBollywoodKey),
+        MovieCache.getList(MovieCache.trendingHollywoodKey),
+      ]);
+      if (!mounted) return;
+
+      setState(() {
+        if (koreanDrama.isEmpty) koreanDrama = results[0];
+        if (bengaliMovies.isEmpty) bengaliMovies = results[1];
+        if (bengaliTv.isEmpty) bengaliTv = results[2];
+        if (bollywoodMovies.isEmpty) bollywoodMovies = results[3];
+        if (hollywoodMovies.isEmpty) hollywoodMovies = results[4];
+        if (southIndianMovies.isEmpty) southIndianMovies = results[5];
+        if (indianDramaTv.isEmpty) indianDramaTv = results[6];
+        if (_trendingHindiDubbedMovies.isEmpty) {
+          _trendingHindiDubbedMovies = results[7];
+        }
+        if (_trendingBollywoodMovies.isEmpty) {
+          _trendingBollywoodMovies = results[8];
+        }
+        if (_trendingHollywoodMovies.isEmpty) {
+          _trendingHollywoodMovies = results[9];
+        }
+        if (_trendingMovies.isEmpty) {
+          _trendingMovies = _deduplicateMovies([
+            ...results[7],
+            ...results[8],
+            ...results[9],
+          ]);
+        }
+        if (_allMovies().isNotEmpty) {
+          loading = false;
+          homeError = null;
+        }
+      });
+      _syncFeaturedCarouselAfterDataChange();
+    } catch (error) {
+      debugPrint('Secondary cached catalogue restore failed: $error');
+    }
   }
 
   void _listenToConnectivity() {
@@ -5268,6 +5303,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               movie.movieBoxSubjectType,
               movie.poster,
               movie.backdrop,
+              movie.overview,
+              movie.releaseDate,
+              movie.videoUrl,
+              movie.downloadUrl,
+              movie.runtime,
               Object.hashAll(movie.genres),
               Object.hashAll(movie.audioLanguages),
             ))),
