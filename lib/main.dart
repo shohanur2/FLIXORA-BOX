@@ -8129,7 +8129,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
       for (final movie in [..._items, ...loaded]) {
         final key = movie.movieBoxId.isNotEmpty
             ? movie.movieBoxId
-            : '\${movie.title.toLowerCase().trim()}|\${movie.year}';
+            : '${movie.title.toLowerCase().trim()}|${movie.year}';
         if (seen.add(key)) merged.add(movie);
       }
       if (merged.length > _items.length) {
