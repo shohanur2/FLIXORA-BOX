@@ -47,6 +47,8 @@ class TrendingMovieEligibility {
     required String originCountry,
     required bool inBollywoodCatalogue,
     required bool inHollywoodCatalogue,
+    bool inSouthIndianCatalogue = false,
+    bool inBengaliCatalogue = false,
   }) {
     final language = originalLanguage.trim().toLowerCase();
     final country = originCountry.trim().toLowerCase();
@@ -54,6 +56,9 @@ class TrendingMovieEligibility {
     final isIndia = country == 'in' ||
         country == 'india' ||
         country.contains('india');
+    final isBangladesh = country == 'bd' ||
+        country == 'bangladesh' ||
+        country.contains('bangladesh');
     final isHollywoodCountry = country == 'us' ||
         country == 'usa' ||
         country == 'united states' ||
@@ -63,6 +68,13 @@ class TrendingMovieEligibility {
         country == 'canada' ||
         country == 'australia';
 
+    if (inSouthIndianCatalogue ||
+        (isIndia && const {'ta', 'te', 'ml', 'kn'}.contains(language))) {
+      return 'South Indian';
+    }
+    if (inBengaliCatalogue || language == 'bn' || isBangladesh) {
+      return 'Bengali';
+    }
     if (inBollywoodCatalogue ||
         (language == 'hi' && (country.isEmpty || isIndia))) {
       return 'Bollywood';
@@ -71,6 +83,9 @@ class TrendingMovieEligibility {
         (language == 'en' && isHollywoodCountry)) {
       return 'Hollywood';
     }
-    return '';
+    if (const {'ko', 'zh', 'ja', 'th', 'vi', 'id', 'tl'}.contains(language)) {
+      return 'Asian';
+    }
+    return 'International';
   }
 }
