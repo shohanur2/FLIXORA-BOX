@@ -1,4 +1,5 @@
 import '../native/sparkbox_core.dart';
+import 'moviebox_stream_policy.dart';
 
 /// Single entry point for FLIXORA's MovieBox/WeFeed content system.
 ///
@@ -38,18 +39,33 @@ class MovieBoxService {
       _searchCache,
       key,
       const Duration(minutes: 2),
-      () => SparkBoxCore.search(
-        normalizedQuery,
-        page: page,
-        perPage: perPage,
+      () => _retry(
+        () => SparkBoxCore.search(
+          normalizedQuery,
+          page: page,
+          perPage: perPage,
+        ),
       ),
     );
   }
 
+  static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
+      _detailCache = {};
+
   static Future<Map<String, dynamic>> detail(
     Map<String, dynamic> item,
-  ) =>
-      SparkBoxCore.detailRich(item);
+  ) {
+    final id = _subjectId(item);
+    if (id.isEmpty) {
+      return _retry(() => SparkBoxCore.detailRich(item));
+    }
+    return _remember(
+      _detailCache,
+      id,
+      const Duration(minutes: 5),
+      () => _retry(() => SparkBoxCore.detailRich(item)),
+    );
+  }
 
   static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
       _playDetailCache = {};
@@ -62,6 +78,26 @@ class MovieBoxService {
       (item['id'] ?? item['subjectId'] ?? item['subject_id'] ?? '')
           .toString()
           .trim();
+
+  static Future<T> _retry<T>(
+    Future<T> Function() load, {
+    bool Function(T value)? isUsable,
+  }) async {
+    Object? lastError;
+    for (var attempt = 0; attempt < MovieBoxStreamPolicy.maxAttempts; attempt++) {
+      try {
+        final value = await load();
+        if (isUsable == null || isUsable(value)) return value;
+        lastError = StateError('MovieBox returned no usable playback data.');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt + 1 < MovieBoxStreamPolicy.maxAttempts) {
+        await Future.delayed(MovieBoxStreamPolicy.retryDelay);
+      }
+    }
+    throw lastError ?? StateError('MovieBox request failed.');
+  }
 
   static Future<T> _remember<T>(
     Map<String, _MovieBoxCacheEntry<T>> cache,
@@ -99,7 +135,7 @@ class MovieBoxService {
       _playDetailCache,
       id,
       const Duration(minutes: 2),
-      () => SparkBoxCore.playDetail(item),
+      () => _retry(() => SparkBoxCore.playDetail(item)),
     );
   }
 
@@ -108,7 +144,10 @@ class MovieBoxService {
         _seasonsCache,
         subjectId,
         const Duration(minutes: 5),
-        () => SparkBoxCore.seasons(subjectId),
+        () => _retry(
+          () => SparkBoxCore.seasons(subjectId),
+          isUsable: (items) => items.isNotEmpty,
+        ),
       );
 
   static Future<Map<String, dynamic>> streams(
@@ -128,11 +167,14 @@ class MovieBoxService {
       _streamsCache,
       key,
       const Duration(seconds: 30),
-      () => SparkBoxCore.streams(
-        detail,
-        season: season,
-        episode: episode,
-        isSeries: isSeries,
+      () => _retry(
+        () => SparkBoxCore.streams(
+          detail,
+          season: season,
+          episode: episode,
+          isSeries: isSeries,
+        ),
+        isUsable: MovieBoxStreamPolicy.hasPlayableLinks,
       ),
     );
   }
