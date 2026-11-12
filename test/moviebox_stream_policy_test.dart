@@ -21,7 +21,7 @@ void main() {
           'links': [
             {'url': ''},
             {'url': 'file:///storage/video.mp4'},
-            {'url': 'https:///missing-host.m3u8'},
+            {'url': 'https://'},
           ],
         }),
         isFalse,
