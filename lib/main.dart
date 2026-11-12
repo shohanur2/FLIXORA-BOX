@@ -1860,6 +1860,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  List<Movie> get _regularMovieBoxItems => _movieBoxSections
+      .where((section) => !section.isHotShorts)
+      .expand((section) => section.items)
+      .toList(growable: false);
+
   /// Build a mixed hero from Trending Movies plus the strongest TV categories.
   /// Movies and Web Series lead; Drama, Anime and general TV appear regularly.
   List<Movie> _homeTrendingMovies() {
@@ -1975,8 +1980,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final movieBoxBanners = _movieBoxSections
         .where((section) =>
-            section.isBanner ||
-            section.title.toLowerCase().contains('trending'))
+            !section.isHotShorts &&
+            (section.isBanner ||
+                section.title.toLowerCase().contains('trending')))
         .expand((section) => section.items)
         .where((movie) => movie.mediaType == 'movie')
         .toList(growable: false);
@@ -2168,7 +2174,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...koreanDrama,
       ...bengaliTv,
       ...indianDramaTv,
-      ..._movieBoxSections.expand((section) => section.items),
+      ..._regularMovieBoxItems,
     ].where((title) => title.mediaType == 'tv').toList());
 
     final tagged = catalogue.where((title) => title.genres.any((genre) {
@@ -2977,7 +2983,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final combined = <Movie>[
       ...flixoraMovies,
       ..._trendingMovies,
-      ..._movieBoxSections.expand((section) => section.items),
+      ..._regularMovieBoxItems,
       ...trending,
       ...popular,
       ...latest,
@@ -4324,7 +4330,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ..._movieBoxSections.expand((section) => section.items)
+            ..._regularMovieBoxItems
                 .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
             ...flixoraMovies.where((title) =>
                 title.mediaType == 'tv' && _isAnimeTitle(title)),
@@ -5104,27 +5110,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case 'Trending':
         return _deduplicateMovies([
           ...flixoraMovies,
-          ..._movieBoxSections.expand((section) => section.items),
+          ..._regularMovieBoxItems,
           ...trending,
           ...trendingTv,
         ]);
       case 'Movies':
         return _deduplicateMovies([
           ...flixoraMovies,
-          ..._movieBoxSections.expand((section) => section.items),
+          ..._regularMovieBoxItems,
           ...trending, ...popular, ...latest, ...topRated,
         ].where((movie) => movie.mediaType == 'movie').toList());
       case 'TV Series':
         return _deduplicateMovies([
           ...flixoraMovies.where((title) => title.mediaType == 'tv'),
-          ..._movieBoxSections.expand((section) => section.items)
+          ..._regularMovieBoxItems
               .where((title) => title.mediaType == 'tv'),
           ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
         ]);
       case 'Anime':
         return _deduplicateMovies([
           ...flixoraMovies.where(_isAnimeTitle),
-          ..._movieBoxSections.expand((section) => section.items)
+          ..._regularMovieBoxItems
               .where(_isAnimeTitle),
           ...anime,
         ]);
@@ -5133,7 +5139,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ...flixoraMovies.where((title) =>
               title.mediaType == 'tv' &&
               title.originalLanguage.toLowerCase() == 'ko'),
-          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+          ..._regularMovieBoxItems.where((title) =>
               title.mediaType == 'tv' &&
               (title.originCountry.toLowerCase().contains('korea') ||
                title.originCountry.toUpperCase().contains('KR'))),
@@ -5144,7 +5150,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ...flixoraMovies.where((title) =>
               title.originalLanguage.toLowerCase() == 'bn' ||
               title.originCountry.toUpperCase().contains('BD')),
-          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+          ..._regularMovieBoxItems.where((title) =>
               title.originCountry.toUpperCase().contains('BD') ||
               title.originCountry.toLowerCase().contains('bangladesh')),
           ...bengaliMovies, ...bengaliTv,
@@ -5155,7 +5161,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               title.mediaType == 'movie' &&
               (title.originalLanguage.toLowerCase() == 'bn' ||
                title.originCountry.toUpperCase().contains('BD'))),
-          ..._movieBoxSections.expand((section) => section.items).where((title) =>
+          ..._regularMovieBoxItems.where((title) =>
               title.mediaType == 'movie' &&
               (title.originCountry.toUpperCase().contains('BD') ||
                title.originCountry.toLowerCase().contains('bangladesh'))),
@@ -5885,7 +5891,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...popularTv,
       ...anime,
       ...koreanDrama,
-      ..._movieBoxSections.expand((section) => section.items),
+      ..._regularMovieBoxItems,
     ]);
     titles.sort((a, b) => b.rating.compareTo(a.rating));
     return titles.take(14).toList(growable: false);
@@ -5942,7 +5948,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             _hotShortsBlock(_hotShortsSection!.items),
           _sectionBlock('Trending Movies', _trendingMovies),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
-            ..._movieBoxSections.expand((section) => section.items)
+            ..._regularMovieBoxItems
                 .where((title) => title.mediaType == 'tv'),
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
@@ -5961,14 +5967,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _sectionBlock('Drama', _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
-            ..._movieBoxSections.expand((section) => section.items),
+            ..._regularMovieBoxItems,
           ]).where((title) => title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList()),
           _sectionBlock('Web Series', _webSeriesTitles()),
           _sectionBlock('Anime', _deduplicateMovies([
             ...anime,
-            ..._movieBoxSections.expand((section) => section.items)
+            ..._regularMovieBoxItems
                 .where(_isAnimeTitle),
             ...flixoraMovies.where(_isAnimeTitle),
           ])),
@@ -6781,7 +6787,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Anime':
           return _deduplicateMovies([
             ...anime,
-            ..._movieBoxSections.expand((section) => section.items)
+            ..._regularMovieBoxItems
                 .where((title) => title.mediaType == 'tv' && _isAnimeTitle(title)),
             ...flixoraMovies.where((title) =>
                 title.mediaType == 'tv' && _isAnimeTitle(title)),
@@ -6790,7 +6796,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return _deduplicateMovies([
             ...topRatedTv, ...popularTv, ...trendingTv,
             ...bengaliTv, ...koreanDrama, ...indianDramaTv, ...flixoraMovies,
-            ..._movieBoxSections.expand((section) => section.items),
+            ..._regularMovieBoxItems,
           ]).where((title) => title.mediaType == 'tv' && title.genres.any(
             (genre) => genre.toLowerCase().contains('drama'),
           )).toList();
