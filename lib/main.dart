@@ -1997,7 +1997,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final seenTitleBasesWithYear = <String>{};
     final seenTitleBasesWithoutYear = <String>{};
     final seenFallbackIds = <String>{};
-
     final orderedMovies =
         CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<Movie>(
       movies,
@@ -13190,37 +13189,33 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        compact ? 9 : 18,
+        compact ? 10 : 18,
         0,
-        compact ? 46 : 66,
-        compact ? 8 : 18,
+        compact ? 10 : 66,
+        compact ? 6 : 18,
       ),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              const Color(0xD9101117),
-              Colors.black.withValues(alpha: 0.76),
-            ],
-          ),
-          borderRadius: BorderRadius.circular(18),
+          color: compact ? Colors.black.withValues(alpha: 0.42) : null,
+          gradient: compact
+              ? null
+              : LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    const Color(0xD9101117),
+                    Colors.black.withValues(alpha: 0.76),
+                  ],
+                ),
+          borderRadius: BorderRadius.circular(compact ? 12 : 18),
           border: Border.all(color: const Color(0x2EFFFFFF)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.22),
-              blurRadius: 18,
-              offset: const Offset(0, 5),
-            ),
-          ],
         ),
         child: Padding(
           padding: EdgeInsets.fromLTRB(
-            compact ? 7 : 12,
-            compact ? 3 : 7,
-            compact ? 7 : 12,
-            compact ? 2 : 5,
+            compact ? 8 : 12,
+            compact ? 1 : 7,
+            compact ? 8 : 12,
+            compact ? 1 : 5,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -13246,16 +13241,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       Expanded(
                         child: SliderTheme(
                           data: SliderTheme.of(context).copyWith(
-                            trackHeight: 3,
+                            trackHeight: compact ? 1.8 : 3,
                             activeTrackColor: playerGold,
                             inactiveTrackColor: const Color(0x55FFFFFF),
                             thumbColor: playerWhite,
-                            overlayColor: playerGold.withValues(alpha: 0.16),
-                            thumbShape: const RoundSliderThumbShape(
-                              enabledThumbRadius: 5.5,
+                            overlayColor: playerGold.withValues(alpha: 0.14),
+                            thumbShape: RoundSliderThumbShape(
+                              enabledThumbRadius: compact ? 4 : 5.5,
                             ),
-                            overlayShape: const RoundSliderOverlayShape(
-                              overlayRadius: 10,
+                            overlayShape: RoundSliderOverlayShape(
+                              overlayRadius: compact ? 8 : 10,
                             ),
                           ),
                           child: Slider(
@@ -13283,28 +13278,44 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   );
                 },
               ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      foregroundColor: playerGoldLight,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(42, 36),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    onPressed: _showSettings,
-                    child: Text(
-                      '${_speed}x',
-                      style: const TextStyle(
-                        color: playerGoldLight,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 12,
+              if (compact)
+                Row(
+                  children: [
+                    IconButton(
+                      tooltip: _isPlaying ? 'Pause' : 'Play',
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
+                      padding: EdgeInsets.zero,
+                      onPressed: _togglePlay,
+                      icon: Icon(
+                        _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                        color: playerWhite,
+                        size: 24,
                       ),
                     ),
-                  ),
-                ],
-              ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Fullscreen',
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
+                      padding: EdgeInsets.zero,
+                      onPressed: _toggleFullscreen,
+                      icon: const Icon(Icons.fullscreen_rounded, color: playerWhite, size: 23),
+                    ),
+                    IconButton(
+                      tooltip: 'Picture-in-picture',
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
+                      padding: EdgeInsets.zero,
+                      onPressed: _toggleMiniPlayer,
+                      icon: const Icon(
+                        Icons.picture_in_picture_alt_rounded,
+                        color: playerGoldLight,
+                        size: 20,
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -13329,6 +13340,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Back',
+              visualDensity: VisualDensity.compact,
               onPressed: () {
                 if (_isFullscreen) {
                   _toggleFullscreen();
@@ -13336,13 +13348,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   Navigator.pop(context);
                 }
               },
-              icon: const Icon(
-                Icons.arrow_back_rounded,
-                color: playerWhite,
-              ),
+              icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -13371,8 +13380,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               ],
             ),
           ),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: playerGoldLight,
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              minimumSize: const Size(38, 34),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: _showSettings,
+            child: Text(
+              '\${_speed}x',
+              style: const TextStyle(
+                color: playerGoldLight,
+                fontWeight: FontWeight.w800,
+                fontSize: 11,
+              ),
+            ),
+          ),
           if (widget.localFilePath == null) ...[
-            const SizedBox(width: 5),
+            const SizedBox(width: 2),
             _playerTopAction(
               icon: Icons.high_quality_rounded,
               label: _loadingQualities
@@ -13386,12 +13413,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
           ],
           if (_tracks.audio.isNotEmpty) ...[
-            const SizedBox(width: 3),
+            const SizedBox(width: 2),
             Material(
               color: Colors.black.withValues(alpha: 0.48),
               shape: const CircleBorder(),
               child: IconButton(
                 tooltip: 'Audio language: $audioLabel',
+                visualDensity: VisualDensity.compact,
                 onPressed: _showAudioTracks,
                 icon: const Icon(
                   Icons.audiotrack_rounded,
@@ -13401,34 +13429,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               ),
             ),
           ],
-          const SizedBox(width: 3),
-          Material(
-            color: Colors.black.withValues(alpha: 0.48),
-            shape: const CircleBorder(),
-            child: IconButton(
-              tooltip: _isMiniPlayer ? 'Expand player' : 'Mini player',
-              onPressed: _toggleMiniPlayer,
-              icon: Icon(
-                _isMiniPlayer
-                    ? Icons.open_in_full_rounded
-                    : Icons.picture_in_picture_alt_rounded,
-                color: playerGoldLight,
-                size: 20,
+          if (_isFullscreen) ...[
+            const SizedBox(width: 2),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: _isMiniPlayer ? 'Expand player' : 'Mini player',
+                visualDensity: VisualDensity.compact,
+                onPressed: _toggleMiniPlayer,
+                icon: Icon(
+                  _isMiniPlayer
+                      ? Icons.open_in_full_rounded
+                      : Icons.picture_in_picture_alt_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 3),
+          ],
+          const SizedBox(width: 2),
           Material(
             color: Colors.black.withValues(alpha: 0.48),
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Playback settings',
+              visualDensity: VisualDensity.compact,
               onPressed: _showSettings,
-              icon: const Icon(
-                Icons.tune_rounded,
-                color: playerWhite,
-                size: 21,
-              ),
+              icon: const Icon(Icons.tune_rounded, color: playerWhite, size: 21),
             ),
           ),
           Material(
@@ -13436,6 +13464,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Lock controls',
+              visualDensity: VisualDensity.compact,
               onPressed: () {
                 setState(() {
                   _isLocked = true;
@@ -13443,11 +13472,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 });
                 _cancelHideTimer();
               },
-              icon: const Icon(
-                Icons.lock_outline_rounded,
-                color: playerWhite,
-                size: 20,
-              ),
+              icon: const Icon(Icons.lock_outline_rounded, color: playerWhite, size: 20),
             ),
           ),
         ],
@@ -13719,19 +13744,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     stops: [0, 0.28, 0.62, 1],
                   ),
                 ),
-                child: Column(
+                child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    _topControls(),
-                    const Spacer(),
-                    _centerControls(),
-                    const Spacer(),
-                    _bottomControls(),
+                    Positioned(top: 0, left: 0, right: 0, child: _topControls()),
+                    Center(child: _centerControls()),
+                    Positioned(left: 0, right: 0, bottom: 0, child: _bottomControls()),
                   ],
                 ),
               ),
             ),
           ),
-        if (_showControls && !_isLocked && _errorMessage == null)
+        if (_isFullscreen && _showControls && !_isLocked && _errorMessage == null)
           Positioned(
             right: 10,
             bottom: 8,
@@ -14787,50 +14811,3 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                               tooltip: 'Expand player',
                               onPressed: _toggleMiniPlayer,
                               icon: const Icon(
-                                Icons.open_in_full_rounded,
-                                color: Colors.white,
-                                size: 16,
-                              ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: _playerBody(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PopScope(
-      canPop: !_isFullscreen,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && _isFullscreen) {
-          _toggleFullscreen();
-        }
-      },
-      child: Scaffold(
-        backgroundColor: playerBg,
-        body: _isFullscreen
-            ? SafeArea(
-                top: false,
-                bottom: false,
-                child: _playerBody(),
-              )
-            : SafeArea(
-                top: true,
-                bottom: true,
-                child: _playerPageContent(),
-              ),
-      ),
-    );
-  }
-}
