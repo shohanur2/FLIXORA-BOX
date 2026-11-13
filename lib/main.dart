@@ -11998,6 +11998,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (bitrate != null && bitrate > 0) {
       details.add('${(bitrate / 1000).round()} kbps');
     }
+
     return details.join(' • ');
   }
 
@@ -14787,6 +14788,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                           IconButton(
                               visualDensity: VisualDensity.compact,
                               constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: _isPlaying ? 'Pause' : 'Play',
+                              onPressed: _togglePlay,
+                              icon: Icon(
+                                _isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: 'Expand player',
+                              onPressed: _toggleMiniPlayer,
+                              icon: const Icon(
                                 Icons.open_in_full_rounded,
                                 color: Colors.white,
                                 size: 16,
