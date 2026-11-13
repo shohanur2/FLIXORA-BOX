@@ -1997,6 +1997,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final seenTitleBasesWithYear = <String>{};
     final seenTitleBasesWithoutYear = <String>{};
     final seenFallbackIds = <String>{};
+
     final orderedMovies =
         CatalogSourcePolicy.preferMovieBoxDuplicatesByKey<Movie>(
       movies,
@@ -11997,7 +11998,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (bitrate != null && bitrate > 0) {
       details.add('${(bitrate / 1000).round()} kbps');
     }
-
     return details.join(' • ');
   }
 
@@ -13390,7 +13390,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
             onPressed: _showSettings,
             child: Text(
-              '\${_speed}x',
+              '${_speed}x',
               style: const TextStyle(
                 color: playerGoldLight,
                 fontWeight: FontWeight.w800,
@@ -14787,27 +14787,50 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                           IconButton(
                               visualDensity: VisualDensity.compact,
                               constraints: const BoxConstraints.tightFor(
-                                width: 30,
-                                height: 30,
-                              ),
-                              padding: EdgeInsets.zero,
-                              tooltip: _isPlaying ? 'Pause' : 'Play',
-                              onPressed: _togglePlay,
-                              icon: Icon(
-                                _isPlaying
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
+                                Icons.open_in_full_rounded,
                                 color: Colors.white,
-                                size: 18,
+                                size: 16,
                               ),
-                            ),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 30,
-                                height: 30,
-                              ),
-                              padding: EdgeInsets.zero,
-                              tooltip: 'Expand player',
-                              onPressed: _toggleMiniPlayer,
-                              icon: const Icon(
+                          ),
+                        ],
+                      ),
+                    ),
+                    AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: _playerBody(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: !_isFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isFullscreen) {
+          _toggleFullscreen();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: playerBg,
+        body: _isFullscreen
+            ? SafeArea(
+                top: false,
+                bottom: false,
+                child: _playerBody(),
+              )
+            : SafeArea(
+                top: true,
+                bottom: true,
+                child: _playerPageContent(),
+              ),
+      ),
+    );
+  }
+}
