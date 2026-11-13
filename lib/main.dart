@@ -13097,31 +13097,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Widget _centerControls() {
-    final controlScale = _isFullscreen ? 1.0 : 0.72;
+    // Keep the large center controls only in landscape/fullscreen.
+    // Portrait uses double-tap for 10-second seeking and has no center buttons.
+    if (!_isFullscreen) return const SizedBox.shrink();
+
+    const controlScale = 0.68;
     Widget skipControl({
       required IconData icon,
       required String tooltip,
       required VoidCallback onPressed,
     }) {
       return Container(
-        width: 48 * controlScale,
-        height: 48 * controlScale,
+        width: 46,
+        height: 46,
         decoration: BoxDecoration(
           color: Colors.black.withValues(alpha: 0.48),
           shape: BoxShape.circle,
           border: Border.all(color: const Color(0x55FFFFFF)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.24),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
         child: IconButton(
           tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
           onPressed: onPressed,
-          icon: Icon(icon, color: playerWhite, size: 26 * controlScale),
+          icon: Icon(icon, color: playerWhite, size: 25),
         ),
       );
     }
@@ -13134,10 +13133,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           tooltip: 'Back 10 seconds',
           onPressed: () => _seekBy(-10),
         ),
-        SizedBox(width: 24 * controlScale),
+        const SizedBox(width: 22),
         Container(
-          width: 76 * controlScale,
-          height: 76 * controlScale,
+          width: 58,
+          height: 58,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             gradient: const LinearGradient(
@@ -13145,36 +13144,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               end: Alignment.bottomRight,
               colors: [playerGoldLight, playerGold],
             ),
-            border: Border.all(
-              color: const Color(0xCCFFFFFF),
-              width: 1.2,
-            ),
+            border: Border.all(color: const Color(0xCCFFFFFF), width: 1.1),
             boxShadow: [
               BoxShadow(
-                color: playerGold.withValues(alpha: 0.34),
-                blurRadius: 28,
+                color: playerGold.withValues(alpha: 0.28),
+                blurRadius: 18,
                 spreadRadius: 1,
-              ),
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.28),
-                blurRadius: 12,
-                offset: const Offset(0, 5),
               ),
             ],
           ),
           child: IconButton(
             tooltip: _isPlaying ? 'Pause' : 'Play',
             onPressed: _togglePlay,
-            iconSize: 43 * controlScale,
+            iconSize: 34,
             color: playerWhite,
             icon: Icon(
-              _isPlaying
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
+              _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
             ),
           ),
         ),
-        SizedBox(width: 24 * controlScale),
+        const SizedBox(width: 22),
         skipControl(
           icon: Icons.forward_10_rounded,
           tooltip: 'Forward 10 seconds',
@@ -13187,6 +13176,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Widget _bottomControls() {
     final max = _duration.inMilliseconds.toDouble();
     final compact = !_isFullscreen;
+
+    Widget compactAction({
+      required String tooltip,
+      required IconData icon,
+      required VoidCallback onPressed,
+      Color color = playerWhite,
+    }) {
+      return IconButton(
+        tooltip: tooltip,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 42, height: 38),
+        padding: EdgeInsets.zero,
+        onPressed: onPressed,
+        icon: Icon(icon, color: color, size: 24),
+      );
+    }
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -13279,44 +13284,32 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   );
                 },
               ),
-              if (compact)
-                Row(
-                  children: [
-                    IconButton(
-                      tooltip: _isPlaying ? 'Pause' : 'Play',
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
-                      padding: EdgeInsets.zero,
-                      onPressed: _togglePlay,
-                      icon: Icon(
-                        _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                        color: playerWhite,
-                        size: 24,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Fullscreen',
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
-                      padding: EdgeInsets.zero,
-                      onPressed: _toggleFullscreen,
-                      icon: const Icon(Icons.fullscreen_rounded, color: playerWhite, size: 23),
-                    ),
-                    IconButton(
+              Row(
+                children: [
+                  compactAction(
+                    tooltip: _isPlaying ? 'Pause' : 'Play',
+                    icon: _isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    onPressed: _togglePlay,
+                  ),
+                  const Spacer(),
+                  compactAction(
+                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                    icon: _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: _toggleFullscreen,
+                  ),
+                  if (compact)
+                    compactAction(
                       tooltip: 'Picture-in-picture',
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 38, height: 34),
-                      padding: EdgeInsets.zero,
+                      icon: Icons.picture_in_picture_alt_rounded,
+                      color: playerGoldLight,
                       onPressed: _toggleMiniPlayer,
-                      icon: const Icon(
-                        Icons.picture_in_picture_alt_rounded,
-                        color: playerGoldLight,
-                        size: 20,
-                      ),
                     ),
-                  ],
-                ),
+                ],
+              ),
             ],
           ),
         ),
@@ -13752,26 +13745,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     Center(child: _centerControls()),
                     Positioned(left: 0, right: 0, bottom: 0, child: _bottomControls()),
                   ],
-                ),
-              ),
-            ),
-          ),
-        if (_isFullscreen && _showControls && !_isLocked && _errorMessage == null)
-          Positioned(
-            right: 10,
-            bottom: 8,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
-                border: Border.all(color: Color(0x3DFFFFFF)),
-              ),
-              child: IconButton(
-                tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                onPressed: _toggleFullscreen,
-                icon: Icon(
-                  _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                  color: playerWhite,
                 ),
               ),
             ),
