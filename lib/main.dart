@@ -9770,6 +9770,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
+    unawaited(_configureVolumeBoost());
     _loadSubtitlePreferences();
     _loadAudioDelayPreference();
     _loadGesturePreferences();
@@ -11538,8 +11539,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _configureVolumeBoost() async {
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) return;
+
+    try {
+      // mpv's software volume ceiling: 200% permits up to 2x amplification.
+      await platformPlayer.setProperty('volume-max', '200');
+    } catch (error) {
+      debugPrint('FLIXORA volume boost is unavailable: $error');
+    }
+  }
+
   Future<void> _changeVolume(double value) async {
-    final volume = value.clamp(0.0, 100.0);
+    final volume = value.clamp(0.0, 200.0).toDouble();
 
     await _player.setVolume(volume);
 
@@ -13288,9 +13301,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ),
                       ),
                       child: Slider(
-                        value: _volume.clamp(0.0, 100.0),
+                        value: _volume.clamp(0.0, 200.0).toDouble(),
                         min: 0,
-                        max: 100,
+                        max: 200,
                         onChanged: _changeVolume,
                       ),
                     ),
