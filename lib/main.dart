@@ -1740,6 +1740,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
   String? _profileSection;
+  final TextEditingController _communityPostController = TextEditingController();
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
@@ -2871,6 +2872,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
+    _communityPostController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -7408,6 +7410,231 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<bool> _ensureCommunityProfile() async {
+    final client=supabaseClient; final user=client?.auth.currentUser;
+    if(client==null||user==null)return false;
+    final existing=await client.from('community_profiles').select('user_id').eq('user_id',user.id).maybeSingle();
+    if(existing!=null)return true;
+    final controller=TextEditingController(text:(user.email??'').split('@').first.isEmpty?'FLIXORA User':(user.email??'').split('@').first);
+    final name=await showDialog<String>(context:context,barrierDismissible:false,builder:(dialogContext)=>AlertDialog(
+      backgroundColor:panel,title:const Text('Choose your Community name',style:TextStyle(color:white)),
+      content:TextField(controller:controller,maxLength:40,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Display name')),
+      actions:[FilledButton(onPressed:(){final value=controller.text.trim();if(value.isNotEmpty&&value.length<=40)Navigator.pop(dialogContext,value);},child:const Text('Continue'))],
+    ));
+    controller.dispose(); if(name==null||name.trim().isEmpty)return false;
+    await client.from('community_profiles').insert({'user_id':user.id,'display_name':name.trim()});
+    return true;
+  }
+
+  Future<Map<String,dynamic>> _loadCommunityFeed() async {
+    final client=supabaseClient!;
+    final posts=List<Map<String,dynamic>>.from(await client.from('community_posts').select('*').isFilter('removed_at',null).order('created_at',ascending:false).limit(60));
+    final authorIds=posts.map((p)=>p['author_id'].toString()).toSet().toList();
+    final postIds=posts.map((p)=>p['id'].toString()).toList();
+    final profiles=authorIds.isEmpty?<Map<String,dynamic>>[]:List<Map<String,dynamic>>.from(await client.from('community_profiles').select('user_id,display_name,avatar_url').inFilter('user_id',authorIds));
+    final likes=postIds.isEmpty?<Map<String,dynamic>>[]:List<Map<String,dynamic>>.from(await client.from('community_likes').select('post_id,user_id').inFilter('post_id',postIds));
+    return {'posts':posts,'profiles':profiles,'likes':likes};
+  }
+
+  Widget _communityContent() {
+    final user=supabaseClient?.auth.currentUser;
+    if(user==null)return Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
+      const Icon(Icons.groups_outlined,color:gold,size:48),const SizedBox(height:12),
+      const Text('Sign in to join FLIXORA Community',style:TextStyle(color:white)),
+      const SizedBox(height:12),FilledButton(onPressed:_showVisitorLogin,child:const Text('Login / Sign Up')),
+    ]));
+    return FutureBuilder<bool>(future:_ensureCommunityProfile(),builder:(context,profile){
+      if(profile.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
+      if(profile.hasError)return _profileMessagePage(Icons.error_outline,'Community unavailable',profile.error.toString());
+      if(profile.data!=true)return _profileMessagePage(Icons.person_outline,'Profile setup required','Sign in to continue.');
+      return Column(children:[
+        Padding(padding:const EdgeInsets.fromLTRB(14,12,14,10),child:Container(
+          padding:const EdgeInsets.all(12),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14)),
+          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+            TextField(controller:_communityPostController,minLines:2,maxLines:5,maxLength:3000,style:const TextStyle(color:white),
+              decoration:const InputDecoration(hintText:'Share a movie review or start a discussion...',hintStyle:TextStyle(color:ink54),border:InputBorder.none),
+              ),
+            Align(alignment:Alignment.centerRight,child:FilledButton.icon(onPressed:()async{
+              final draft=_communityPostController.text.trim();
+              if(draft.isEmpty)return;
+              try{await supabaseClient!.from('community_posts').insert({'author_id':user.id,'body':draft});_communityPostController.clear();if(mounted)setState((){});}
+              catch(error){_showMessage('Could not publish post: $error');}
+            },icon:const Icon(Icons.send_rounded,size:16),label:const Text('Post'))),
+          ]),
+        )),
+        Expanded(child:FutureBuilder<Map<String,dynamic>>(future:_loadCommunityFeed(),builder:(context,snapshot){
+          if(snapshot.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
+          if(snapshot.hasError)return _profileMessagePage(Icons.wifi_off,'Could not load Community',snapshot.error.toString());
+          final data=snapshot.data!;final posts=data['posts'] as List<Map<String,dynamic>>;
+          final profiles=data['profiles'] as List<Map<String,dynamic>>;final likes=data['likes'] as List<Map<String,dynamic>>;
+          if(posts.isEmpty)return _profileMessagePage(Icons.forum_outlined,'No Community posts yet','Be the first to start a movie discussion.');
+          return ListView.separated(padding:const EdgeInsets.fromLTRB(14,4,14,20),itemCount:posts.length,separatorBuilder:(_,__)=>const SizedBox(height:10),itemBuilder:(context,index){
+            final post=posts[index];final authorMatches=profiles.where((p)=>p['user_id']==post['author_id']);final author=authorMatches.isEmpty?null:authorMatches.first;
+            final postLikes=likes.where((l)=>l['post_id']==post['id']).toList();final liked=postLikes.any((l)=>l['user_id']==user.id);
+            return Container(padding:const EdgeInsets.all(14),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14),border:Border.all(color:ink12)),
+              child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                Row(children:[
+                  const CircleAvatar(radius:17,backgroundColor:ink12,child:Icon(Icons.person,color:gold,size:19)),const SizedBox(width:9),
+                  Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+                    Text((author?['display_name']??'FLIXORA User').toString(),style:const TextStyle(color:white,fontWeight:FontWeight.w700)),
+                    Text(DateTime.tryParse(post['created_at'].toString())?.toLocal().toString().split('.').first??'',style:const TextStyle(color:ink54,fontSize:10)),
+                  ])),
+                  PopupMenuButton<String>(color:panel,onSelected:(value){if(value=='report')_reportCommunityPost(post);},
+                    itemBuilder:(_)=>const [PopupMenuItem(value:'report',child:Text('Report post'))],icon:const Icon(Icons.more_horiz,color:ink70)),
+                ]),
+                const SizedBox(height:12),Text(post['body'].toString(),style:const TextStyle(color:white,height:1.4)),
+                Row(children:[
+                  TextButton.icon(onPressed:()async{try{
+                    if(liked){await supabaseClient!.from('community_likes').delete().eq('post_id',post['id']).eq('user_id',user.id);}
+                    else{await supabaseClient!.from('community_likes').insert({'post_id':post['id'],'user_id':user.id});}
+                    if(mounted)setState((){});
+                  }catch(error){_showMessage('Like failed: $error');}},
+                    icon:Icon(liked?Icons.favorite:Icons.favorite_border,color:liked?Colors.redAccent:ink70,size:18),
+                    label:Text('${postLikes.length}',style:const TextStyle(color:ink70))),
+                  TextButton.icon(onPressed:()=>_openCommunityComments(post),icon:const Icon(Icons.mode_comment_outlined,color:ink70,size:18),label:const Text('Comments',style:TextStyle(color:ink70))),
+                ]),
+              ]),
+            );
+          });
+        })),
+      ]);
+    });
+  }
+
+  Future<void> _reportCommunityPost(Map<String,dynamic> post) async {
+    const reasons=['Spam','Harassment','Hate or abuse','Spoilers','Other'];
+    final reason=await showDialog<String>(context:context,builder:(dialogContext)=>SimpleDialog(
+      backgroundColor:panel,title:const Text('Report post',style:TextStyle(color:white)),
+      children:reasons.map((value)=>SimpleDialogOption(onPressed:()=>Navigator.pop(dialogContext,value),child:Text(value,style:const TextStyle(color:white)))).toList(),
+    ));
+    if(reason==null)return;
+    try{await supabaseClient!.from('community_reports').insert({
+      'reporter_id':supabaseClient!.auth.currentUser!.id,'target_type':'post','target_id':post['id'],
+      'reported_user_id':post['author_id'],'reason':reason,
+    });_showMessage('Report submitted for review.');}
+    catch(error){_showMessage('Could not submit report: $error');}
+  }
+
+  Future<void> _openCommunityComments(Map<String,dynamic> post) async {
+    final client=supabaseClient!;final controller=TextEditingController();
+    await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
+      backgroundColor:panel,title:const Text('Comments',style:TextStyle(color:white)),
+      content:SizedBox(width:420,height:420,child:Column(children:[
+        Expanded(child:StreamBuilder<List<Map<String,dynamic>>>(
+          stream:client.from('community_comments').stream(primaryKey:['id']).eq('post_id',post['id']).order('created_at'),
+          builder:(context,snapshot){final comments=snapshot.data??[];if(snapshot.hasError)return Center(child:Text(snapshot.error.toString()));
+            if(comments.isEmpty)return const Center(child:Text('No comments yet.',style:TextStyle(color:ink54)));
+            return ListView.builder(itemCount:comments.length,itemBuilder:(context,index)=>Align(alignment:Alignment.centerLeft,
+              child:Container(margin:const EdgeInsets.symmetric(vertical:5),padding:const EdgeInsets.all(10),
+                decoration:BoxDecoration(color:ink10,borderRadius:BorderRadius.circular(10)),
+                child:Text(comments[index]['body'].toString(),style:const TextStyle(color:white)))));
+          },
+        )),
+        Row(children:[
+          Expanded(child:TextField(controller:controller,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Write a comment...'))),
+          IconButton(icon:const Icon(Icons.send,color:gold),onPressed:()async{final body=controller.text.trim();if(body.isEmpty)return;
+            try{await client.from('community_comments').insert({'post_id':post['id'],'author_id':client.auth.currentUser!.id,'body':body});controller.clear();}
+            catch(error){_showMessage('Could not comment: $error');}
+          }),
+        ]),
+      ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Close'))],
+    ));
+    controller.dispose();
+  }
+
+  Future<Map<String,dynamic>> _loadCommunityInbox() async {
+    final client=supabaseClient!;final userId=client.auth.currentUser!.id;
+    final memberships=List<Map<String,dynamic>>.from(await client.from('conversation_members').select('conversation_id,last_read_at').eq('user_id',userId));
+    final inbox=<Map<String,dynamic>>[];
+    for(final membership in memberships){
+      final id=membership['conversation_id'];
+      final members=List<Map<String,dynamic>>.from(await client.from('conversation_members').select('user_id').eq('conversation_id',id));
+      final otherMatches=members.where((m)=>m['user_id']!=userId);final other=otherMatches.isEmpty?null:otherMatches.first;if(other==null)continue;
+      final profile=await client.from('community_profiles').select('display_name').eq('user_id',other['user_id']).maybeSingle();
+      final last=await client.from('direct_messages').select('body').eq('conversation_id',id).order('created_at',ascending:false).limit(1);
+      inbox.add({'conversation_id':id,'display_name':profile?['display_name']??'FLIXORA User','last_message':last.isEmpty?'':last.first['body']});
+    }
+    final profiles=List<Map<String,dynamic>>.from(await client.from('community_profiles').select('user_id,display_name').neq('user_id',userId).order('display_name'));
+    return {'inbox':inbox,'profiles':profiles};
+  }
+
+  Future<void> _startCommunityChat(String targetUserId) async {
+    try{final id=await supabaseClient!.rpc('start_direct_conversation',params:{'p_target_user':targetUserId});
+      await _openCommunityChat(id.toString());if(mounted)setState((){});
+    }catch(error){_showMessage('Could not start chat: $error');}
+  }
+
+  Future<void> _openCommunityChat(String conversationId) async {
+    final client=supabaseClient!;final controller=TextEditingController();
+    await client.from('conversation_members').update({'last_read_at':DateTime.now().toUtc().toIso8601String()})
+      .eq('conversation_id',conversationId).eq('user_id',client.auth.currentUser!.id);
+    final stream=client.from('direct_messages').stream(primaryKey:['id']).eq('conversation_id',conversationId).order('created_at');
+    await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
+      backgroundColor:panel,title:const Text('Messages',style:TextStyle(color:white)),
+      content:SizedBox(width:440,height:460,child:Column(children:[
+        Expanded(child:StreamBuilder<List<Map<String,dynamic>>>(stream:stream,builder:(context,snapshot){
+          final messages=snapshot.data??[];if(snapshot.hasError)return Center(child:Text(snapshot.error.toString()));
+          if(messages.isEmpty)return const Center(child:Text('Say hello to start the conversation.',style:TextStyle(color:ink54)));
+          return ListView.builder(itemCount:messages.length,itemBuilder:(context,index){final item=messages[index];final mine=item['sender_id']==client.auth.currentUser!.id;
+            return Align(alignment:mine?Alignment.centerRight:Alignment.centerLeft,child:Container(
+              margin:const EdgeInsets.symmetric(vertical:4),padding:const EdgeInsets.all(10),constraints:const BoxConstraints(maxWidth:300),
+              decoration:BoxDecoration(color:mine?gold.withValues(alpha:0.2):ink10,borderRadius:BorderRadius.circular(12)),
+              child:Text(item['body'].toString(),style:const TextStyle(color:white))));
+          });
+        })),
+        Row(children:[
+          Expanded(child:TextField(controller:controller,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Message...'))),
+          IconButton(icon:const Icon(Icons.send,color:gold),onPressed:()async{final body=controller.text.trim();if(body.isEmpty)return;
+            try{await client.from('direct_messages').insert({'conversation_id':conversationId,'sender_id':client.auth.currentUser!.id,'body':body});controller.clear();}
+            catch(error){_showMessage('Message not sent: $error');}
+          }),
+        ]),
+      ])),
+      actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Close'))],
+    ));
+    controller.dispose();if(mounted)setState((){});
+  }
+
+  Widget _messagesContent() {
+    final user=supabaseClient?.auth.currentUser;
+    if(user==null)return Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
+      const Icon(Icons.message_outlined,color:gold,size:48),const SizedBox(height:12),
+      const Text('Sign in to use FLIXORA Messages',style:TextStyle(color:white)),
+      const SizedBox(height:12),FilledButton(onPressed:_showVisitorLogin,child:const Text('Login / Sign Up')),
+    ]));
+    return FutureBuilder<bool>(future:_ensureCommunityProfile(),builder:(context,profile){
+      if(profile.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
+      if(profile.hasError)return _profileMessagePage(Icons.error_outline,'Messages unavailable',profile.error.toString());
+      return FutureBuilder<Map<String,dynamic>>(future:_loadCommunityInbox(),builder:(context,snapshot){
+        if(snapshot.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
+        if(snapshot.hasError)return _profileMessagePage(Icons.error_outline,'Could not load Messages',snapshot.error.toString());
+        final inbox=snapshot.data!['inbox'] as List<Map<String,dynamic>>;
+        final profiles=snapshot.data!['profiles'] as List<Map<String,dynamic>>;
+        return ListView(padding:const EdgeInsets.fromLTRB(14,14,14,24),children:[
+          if(inbox.isNotEmpty)...[
+            const Padding(padding:EdgeInsets.only(bottom:8),child:Text('Your conversations',style:TextStyle(color:white,fontSize:16,fontWeight:FontWeight.bold))),
+            ...inbox.map((chat)=>Card(color:panel,child:ListTile(
+              leading:const CircleAvatar(backgroundColor:ink12,child:Icon(Icons.person,color:gold)),
+              title:Text(chat['display_name'].toString(),style:const TextStyle(color:white)),
+              subtitle:Text(chat['last_message'].toString(),maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:ink54)),
+              trailing:const Icon(Icons.chevron_right,color:ink54),
+              onTap:()=>_openCommunityChat(chat['conversation_id'].toString()),
+            ))),
+          ],
+          const Padding(padding:EdgeInsets.only(top:16,bottom:8),child:Text('Start a new conversation',style:TextStyle(color:white,fontSize:16,fontWeight:FontWeight.bold))),
+          if(profiles.isEmpty)const Text('No other FLIXORA members yet.',style:TextStyle(color:ink54))
+          else...profiles.map((profile)=>Card(color:panel,child:ListTile(
+            leading:const CircleAvatar(backgroundColor:ink12,child:Icon(Icons.person_outline,color:gold)),
+            title:Text(profile['display_name'].toString(),style:const TextStyle(color:white)),
+            trailing:const Icon(Icons.chat_bubble_outline,color:gold),
+            onTap:()=>_startCommunityChat(profile['user_id'].toString()),
+          ))),
+        ]);
+      });
+    });
+  }
+
   Widget _profileSectionContent() {
     switch (_profileSection) {
       case 'Watch History':
@@ -7426,20 +7653,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'FLIXORA rewards are not enabled yet.',
         );
       case 'Messages':
-        return _profileMessagePage(
-          Icons.notifications_none, 'No new messages',
-          'You are all caught up. FLIXORA messages will appear here.',
-        );
+        return _messagesContent();
       case 'TV Download & Web Link':
         return _profileMessagePage(
           Icons.live_tv_outlined, 'TV links are not connected yet',
           'This section is reserved for verified TV download and web links.',
         );
       case 'Community':
-        return _profileMessagePage(
-          Icons.groups_outlined, 'Community is coming soon',
-          'Community features are not connected in this version.',
-        );
+        return _communityContent();
       default:
         return _profileContent();
     }
