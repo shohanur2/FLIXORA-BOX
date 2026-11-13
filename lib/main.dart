@@ -13849,6 +13849,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final audioLabel = audioIndex >= 0
         ? _audioTrackLabel(_tracks.audio[audioIndex], audioIndex)
         : 'Audio';
+    final showEpisodeIndicator = _isFullscreen &&
+        (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -13876,15 +13878,46 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  widget.movie.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: playerWhite,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    if (showEpisodeIndicator) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: playerGold.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: playerGold.withValues(alpha: 0.58),
+                          ),
+                        ),
+                        child: Text(
+                          'S${_selectedSeasonNumber.toString().padLeft(2, '0')} · E${_selectedEpisodeNumber.toString().padLeft(2, '0')}',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: playerGoldLight,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 2),
                 const Text(
