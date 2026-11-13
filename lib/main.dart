@@ -11943,7 +11943,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             .clamp(8.0, bottomLimit)
             .toDouble();
         final miniTitle = widget.movie.movieBoxIsSeries
-            ? '\${widget.movie.title} · S\$_selectedSeasonNumber E\$_selectedEpisodeNumber'
+            ? '${widget.movie.title} · S$_selectedSeasonNumber E$_selectedEpisodeNumber'
             : widget.movie.title;
 
         return Positioned(
