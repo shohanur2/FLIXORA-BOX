@@ -1740,6 +1740,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
   String? _profileSection;
+  final TextEditingController _communityPostController = TextEditingController();
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
@@ -2871,6 +2872,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
+    _communityPostController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -7441,7 +7443,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       const Text('Sign in to join FLIXORA Community',style:TextStyle(color:white)),
       const SizedBox(height:12),FilledButton(onPressed:_showVisitorLogin,child:const Text('Login / Sign Up')),
     ]));
-    String draft='';
     return FutureBuilder<bool>(future:_ensureCommunityProfile(),builder:(context,profile){
       if(profile.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
       if(profile.hasError)return _profileMessagePage(Icons.error_outline,'Community unavailable',profile.error.toString());
@@ -7450,12 +7451,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         Padding(padding:const EdgeInsets.fromLTRB(14,12,14,10),child:Container(
           padding:const EdgeInsets.all(12),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14)),
           child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-            TextField(minLines:2,maxLines:5,maxLength:3000,style:const TextStyle(color:white),
+            TextField(controller:_communityPostController,minLines:2,maxLines:5,maxLength:3000,style:const TextStyle(color:white),
               decoration:const InputDecoration(hintText:'Share a movie review or start a discussion...',hintStyle:TextStyle(color:ink54),border:InputBorder.none),
-              onChanged:(value)=>draft=value),
+              ),
             Align(alignment:Alignment.centerRight,child:FilledButton.icon(onPressed:()async{
-              if(draft.trim().isEmpty)return;
-              try{await supabaseClient!.from('community_posts').insert({'author_id':user.id,'body':draft.trim()});if(mounted)setState((){});}
+              final draft=_communityPostController.text.trim();
+              if(draft.isEmpty)return;
+              try{await supabaseClient!.from('community_posts').insert({'author_id':user.id,'body':draft});_communityPostController.clear();if(mounted)setState((){});}
               catch(error){_showMessage('Could not publish post: $error');}
             },icon:const Icon(Icons.send_rounded,size:16),label:const Text('Post'))),
           ]),
