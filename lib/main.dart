@@ -11291,7 +11291,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _startHideTimer();
       } else {
         _cancelHideTimer();
-        setState(() => _showControls = true);
+        if (!_isMiniPlayer) setState(() => _showControls = true);
       }
     });
 
