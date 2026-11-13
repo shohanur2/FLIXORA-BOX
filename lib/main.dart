@@ -8328,32 +8328,233 @@ Entertainment Beyond Boundaries.
   }
 
   void _showPolicyDialog({required String title, required String message}) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: panel,
-        scrollable: true,
-        title: Text(
-          title,
-          style: const TextStyle(color: white, fontFamily: 'Arial'),
-        ),
-        content: Text(
-          message,
-          style: const TextStyle(
-            color: ink70,
-            height: 1.45,
-            fontFamily: 'Arial',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            style: TextButton.styleFrom(
-              textStyle: const TextStyle(fontFamily: 'Arial'),
+    final isPrivacy = title.toLowerCase().contains('privacy');
+    final paragraphs = message
+        .split(RegExp(r'\\n\\s*\\n'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (pageContext) => Scaffold(
+          backgroundColor: bg,
+          appBar: AppBar(
+            backgroundColor: bg,
+            elevation: 0,
+            leading: IconButton(
+              tooltip: 'Back',
+              onPressed: () => Navigator.of(pageContext).pop(),
+              icon: const Icon(Icons.arrow_back_rounded, color: white),
             ),
-            child: const Text('Close'),
+            title: Text(
+              title,
+              style: const TextStyle(
+                color: white,
+                fontFamily: 'Arial',
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            centerTitle: false,
           ),
-        ],
+          body: SafeArea(
+            top: false,
+            child: SelectionArea(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 30),
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: panel,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: gold.withOpacity(0.28)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: gold.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Icon(
+                            isPrivacy
+                                ? Icons.privacy_tip_outlined
+                                : Icons.movie_creation_outlined,
+                            color: goldLight,
+                            size: 25,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          isPrivacy
+                              ? 'Your Privacy Matters'
+                              : 'Your World of Entertainment',
+                          style: const TextStyle(
+                            color: white,
+                            fontFamily: 'Arial',
+                            fontSize: 21,
+                            height: 1.25,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          isPrivacy
+                              ? 'Learn how FLIXORA handles information and protects your privacy.'
+                              : 'Discover what FLIXORA is, what it offers and the vision behind it.',
+                          style: const TextStyle(
+                            color: ink70,
+                            fontFamily: 'Arial',
+                            fontSize: 13,
+                            height: 1.5,
+                          ),
+                        ),
+                        if (isPrivacy) ...[
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Last Updated: November 14, 2026',
+                            style: TextStyle(
+                              color: goldLight,
+                              fontFamily: 'Arial',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  for (final paragraph in paragraphs)
+                    _policyDocumentBlock(paragraph),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: Text(
+                      'FLIXORA  •  Entertainment Beyond Boundaries.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: ink54,
+                        fontFamily: 'Arial',
+                        fontSize: 11,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _policyDocumentBlock(String paragraph) {
+    final lines = paragraph
+        .split('\\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList(growable: false);
+    if (lines.isEmpty) return const SizedBox.shrink();
+
+    final firstLine = lines.first;
+    final isSectionHeading = lines.length == 1 &&
+        (firstLine == firstLine.toUpperCase() ||
+            RegExp(r'^\\d+\\.\\s').hasMatch(firstLine) ||
+            RegExp(r'^[A-Z]\\.\\s').hasMatch(firstLine));
+
+    if (isSectionHeading) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 18, bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 3,
+              height: 20,
+              decoration: BoxDecoration(
+                color: gold,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                firstLine,
+                style: const TextStyle(
+                  color: goldLight,
+                  fontFamily: 'Arial',
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final isBulletList = lines.every(
+      (line) => line.startsWith('•') || RegExp(r'^\\d+\\.\\s').hasMatch(line),
+    );
+    if (isBulletList) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(13),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final line in lines)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Icon(Icons.circle, color: gold, size: 6),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        line.replaceFirst(RegExp(r'^(?:•|\\d+\\.)\\s*'), ''),
+                        style: const TextStyle(
+                          color: ink70,
+                          fontFamily: 'Arial',
+                          fontSize: 13,
+                          height: 1.55,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Text(
+        paragraph,
+        style: const TextStyle(
+          color: ink70,
+          fontFamily: 'Arial',
+          fontSize: 13,
+          height: 1.65,
+        ),
       ),
     );
   }
