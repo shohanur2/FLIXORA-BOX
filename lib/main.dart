@@ -13819,13 +13819,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ),
                   ],
                   const Spacer(),
-                  compactAction(
-                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                    icon: _isFullscreen
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                    onPressed: _toggleFullscreen,
-                  ),
                   if (compact)
                     compactAction(
                       tooltip: 'Picture-in-picture',
@@ -13833,6 +13826,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGoldLight,
                       onPressed: _toggleMiniPlayer,
                     ),
+                  compactAction(
+                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                    icon: _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: _toggleFullscreen,
+                  ),
                 ],
               ),
             ],
