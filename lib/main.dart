@@ -7488,7 +7488,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     if(mounted)setState((){});
                   }catch(error){_showMessage('Like failed: $error');}},
                     icon:Icon(liked?Icons.favorite:Icons.favorite_border,color:liked?Colors.redAccent:ink70,size:18),
-                    label:Text('\${postLikes.length}',style:const TextStyle(color:ink70))),
+                    label:Text('${postLikes.length}',style:const TextStyle(color:ink70))),
                   TextButton.icon(onPressed:()=>_openCommunityComments(post),icon:const Icon(Icons.mode_comment_outlined,color:ink70,size:18),label:const Text('Comments',style:TextStyle(color:ink70))),
                 ]),
               ]),
