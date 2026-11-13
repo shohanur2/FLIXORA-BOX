@@ -1581,6 +1581,27 @@ final ValueNotifier<_MoviePlayerScreenState?> _activeMiniPlayerState =
 Route<void>? _activePlayerRoute;
 NavigatorState? _activePlayerNavigator;
 
+// A minimized Player must stay mounted without keeping a modal barrier over
+// the app. The empty barrier lets Home, Search and other routes receive taps
+// and scroll gestures while the floating mini-player remains visible.
+class _NonBlockingPlayerRoute extends PageRouteBuilder<void> {
+  _NonBlockingPlayerRoute({required WidgetBuilder pageBuilder})
+      : super(
+          opaque: false,
+          barrierDismissible: false,
+          pageBuilder: (routeContext, animation, secondaryAnimation) =>
+              pageBuilder(routeContext),
+          transitionsBuilder:
+              (routeContext, animation, secondaryAnimation, child) =>
+                  FadeTransition(opacity: animation, child: child),
+          transitionDuration: const Duration(milliseconds: 180),
+          reverseTransitionDuration: const Duration(milliseconds: 140),
+        );
+
+  @override
+  Widget buildModalBarrier() => const SizedBox.shrink();
+}
+
 class FlixoraApp extends StatelessWidget {
   const FlixoraApp({super.key});
 
@@ -4615,17 +4636,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     _activeMiniPlayerState.value = null;
-    late final PageRouteBuilder<void> route;
-    route = PageRouteBuilder<void>(
-      opaque: false,
-      barrierDismissible: false,
-      pageBuilder: (routeContext, animation, secondaryAnimation) =>
-          builder(routeContext),
-      transitionsBuilder: (routeContext, animation, secondaryAnimation, child) =>
-          FadeTransition(opacity: animation, child: child),
-      transitionDuration: const Duration(milliseconds: 180),
-      reverseTransitionDuration: const Duration(milliseconds: 140),
-    );
+    final route = _NonBlockingPlayerRoute(pageBuilder: builder);
     _activePlayerNavigator = navigator;
     _activePlayerRoute = route;
     navigator.push<void>(route);
@@ -14218,7 +14229,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               onScaleStart: _handlePlayerGestureStart,
               onScaleUpdate: _handlePlayerGestureUpdate,
               onScaleEnd: _handlePlayerGestureEnd,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               onDoubleTapDown: (details) {
                 if (!_doubleTapSkipEnabled) return;
                 final width = MediaQuery.of(context).size.width;
