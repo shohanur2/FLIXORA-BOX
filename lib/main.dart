@@ -7158,14 +7158,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           releaseDate: '',
           videoUrl: task.filePath!,
         );
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(
-            movie: movie,
-            localFilePath: task.filePath,
-            recommendedMovies: _allMovies(),
-            onMovieSelected: _openMovie,
-            isOnline: _online,
-            enablePip: _autoMiniPlayer,
-          )));
+        _pushPlayerRoute((_) => MoviePlayerScreen(
+          movie: movie,
+          localFilePath: task.filePath,
+          recommendedMovies: _allMovies(),
+          onMovieSelected: _playMovieFromPlayer,
+          isOnline: _online,
+          enablePip: _autoMiniPlayer,
+        ));
       },
     );
   }
