@@ -1741,6 +1741,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<DownloadTask> _downloads = [];
   String? _profileSection;
   final TextEditingController _communityPostController = TextEditingController();
+  Future<bool>? _communityProfileFuture;
+  String? _communityProfileUserId;
+  Future<Map<String, dynamic>>? _communityFeedFuture;
+  Future<Map<String, dynamic>>? _communityInboxFuture;
+  bool _publishingCommunityPost = false;
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
@@ -7426,213 +7431,637 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return true;
   }
 
-  Future<Map<String,dynamic>> _loadCommunityFeed() async {
-    final client=supabaseClient!;
-    final posts=List<Map<String,dynamic>>.from(await client.from('community_posts').select('*').isFilter('removed_at',null).order('created_at',ascending:false).limit(60));
-    final authorIds=posts.map((p)=>p['author_id'].toString()).toSet().toList();
-    final postIds=posts.map((p)=>p['id'].toString()).toList();
-    final profiles=authorIds.isEmpty?<Map<String,dynamic>>[]:List<Map<String,dynamic>>.from(await client.from('community_profiles').select('user_id,display_name,avatar_url').inFilter('user_id',authorIds));
-    final likes=postIds.isEmpty?<Map<String,dynamic>>[]:List<Map<String,dynamic>>.from(await client.from('community_likes').select('post_id,user_id').inFilter('post_id',postIds));
-    return {'posts':posts,'profiles':profiles,'likes':likes};
+  Future<bool> _communityProfileTask() {
+    final userId = supabaseClient?.auth.currentUser?.id;
+    if (userId == null) return Future<bool>.value(false);
+    if (_communityProfileUserId != userId) {
+      _communityProfileUserId = userId;
+      _communityProfileFuture = null;
+      _communityFeedFuture = null;
+      _communityInboxFuture = null;
+    }
+    return _communityProfileFuture ??= _ensureCommunityProfile();
+  }
+
+  Future<Map<String, dynamic>> _loadCommunityFeed() async {
+    final client = supabaseClient!;
+    final posts = List<Map<String, dynamic>>.from(
+      await client.from('community_posts').select('*').isFilter('removed_at', null)
+          .order('created_at', ascending: false).limit(60),
+    );
+    final authorIds = posts.map((post) => post['author_id'].toString()).toSet().toList();
+    final postIds = posts.map((post) => post['id'].toString()).toList();
+    final profiles = authorIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await client.from('community_profiles').select('user_id,display_name,avatar_url')
+                .inFilter('user_id', authorIds),
+          );
+    final likes = postIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await client.from('community_likes').select('post_id,user_id').inFilter('post_id', postIds),
+          );
+    return {'posts': posts, 'profiles': profiles, 'likes': likes};
+  }
+
+  Future<void> _refreshCommunityFeed() async {
+    final next = _loadCommunityFeed();
+    _communityFeedFuture = next;
+    if (mounted) setState(() {});
+    try { await next; } catch (_) {}
   }
 
   Widget _communityContent() {
-    final user=supabaseClient?.auth.currentUser;
-    if(user==null)return Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
-      const Icon(Icons.groups_outlined,color:gold,size:48),const SizedBox(height:12),
-      const Text('Sign in to join FLIXORA Community',style:TextStyle(color:white)),
-      const SizedBox(height:12),FilledButton(onPressed:_showVisitorLogin,child:const Text('Login / Sign Up')),
-    ]));
-    return FutureBuilder<bool>(future:_ensureCommunityProfile(),builder:(context,profile){
-      if(profile.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
-      if(profile.hasError)return _profileMessagePage(Icons.error_outline,'Community unavailable',profile.error.toString());
-      if(profile.data!=true)return _profileMessagePage(Icons.person_outline,'Profile setup required','Sign in to continue.');
-      return Column(children:[
-        Padding(padding:const EdgeInsets.fromLTRB(14,12,14,10),child:Container(
-          padding:const EdgeInsets.all(12),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14)),
-          child:Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-            TextField(controller:_communityPostController,minLines:2,maxLines:5,maxLength:3000,style:const TextStyle(color:white),
-              decoration:const InputDecoration(hintText:'Share a movie review or start a discussion...',hintStyle:TextStyle(color:ink54),border:InputBorder.none),
-              ),
-            Align(alignment:Alignment.centerRight,child:FilledButton.icon(onPressed:()async{
-              final draft=_communityPostController.text.trim();
-              if(draft.isEmpty)return;
-              try{await supabaseClient!.from('community_posts').insert({'author_id':user.id,'body':draft});_communityPostController.clear();if(mounted)setState((){});}
-              catch(error){_showMessage('Could not publish post: $error');}
-            },icon:const Icon(Icons.send_rounded,size:16),label:const Text('Post'))),
-          ]),
-        )),
-        Expanded(child:FutureBuilder<Map<String,dynamic>>(future:_loadCommunityFeed(),builder:(context,snapshot){
-          if(snapshot.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
-          if(snapshot.hasError)return _profileMessagePage(Icons.wifi_off,'Could not load Community',snapshot.error.toString());
-          final data=snapshot.data!;final posts=data['posts'] as List<Map<String,dynamic>>;
-          final profiles=data['profiles'] as List<Map<String,dynamic>>;final likes=data['likes'] as List<Map<String,dynamic>>;
-          if(posts.isEmpty)return _profileMessagePage(Icons.forum_outlined,'No Community posts yet','Be the first to start a movie discussion.');
-          return ListView.separated(padding:const EdgeInsets.fromLTRB(14,4,14,20),itemCount:posts.length,separatorBuilder:(_,__)=>const SizedBox(height:10),itemBuilder:(context,index){
-            final post=posts[index];final authorMatches=profiles.where((p)=>p['user_id']==post['author_id']);final author=authorMatches.isEmpty?null:authorMatches.first;
-            final postLikes=likes.where((l)=>l['post_id']==post['id']).toList();final liked=postLikes.any((l)=>l['user_id']==user.id);
-            return Container(padding:const EdgeInsets.all(14),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14),border:Border.all(color:ink12)),
-              child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                Row(children:[
-                  const CircleAvatar(radius:17,backgroundColor:ink12,child:Icon(Icons.person,color:gold,size:19)),const SizedBox(width:9),
-                  Expanded(child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
-                    Text((author?['display_name']??'FLIXORA User').toString(),style:const TextStyle(color:white,fontWeight:FontWeight.w700)),
-                    Text(DateTime.tryParse(post['created_at'].toString())?.toLocal().toString().split('.').first??'',style:const TextStyle(color:ink54,fontSize:10)),
-                  ])),
-                  PopupMenuButton<String>(color:panel,onSelected:(value){if(value=='report')_reportCommunityPost(post);},
-                    itemBuilder:(_)=>const [PopupMenuItem(value:'report',child:Text('Report post'))],icon:const Icon(Icons.more_horiz,color:ink70)),
-                ]),
-                const SizedBox(height:12),Text(post['body'].toString(),style:const TextStyle(color:white,height:1.4)),
-                Row(children:[
-                  TextButton.icon(onPressed:()async{try{
-                    if(liked){await supabaseClient!.from('community_likes').delete().eq('post_id',post['id']).eq('user_id',user.id);}
-                    else{await supabaseClient!.from('community_likes').insert({'post_id':post['id'],'user_id':user.id});}
-                    if(mounted)setState((){});
-                  }catch(error){_showMessage('Like failed: $error');}},
-                    icon:Icon(liked?Icons.favorite:Icons.favorite_border,color:liked?Colors.redAccent:ink70,size:18),
-                    label:Text('${postLikes.length}',style:const TextStyle(color:ink70))),
-                  TextButton.icon(onPressed:()=>_openCommunityComments(post),icon:const Icon(Icons.mode_comment_outlined,color:ink70,size:18),label:const Text('Comments',style:TextStyle(color:ink70))),
-                ]),
-              ]),
-            );
-          });
-        })),
-      ]);
-    });
-  }
-
-  Future<void> _reportCommunityPost(Map<String,dynamic> post) async {
-    const reasons=['Spam','Harassment','Hate or abuse','Spoilers','Other'];
-    final reason=await showDialog<String>(context:context,builder:(dialogContext)=>SimpleDialog(
-      backgroundColor:panel,title:const Text('Report post',style:TextStyle(color:white)),
-      children:reasons.map((value)=>SimpleDialogOption(onPressed:()=>Navigator.pop(dialogContext,value),child:Text(value,style:const TextStyle(color:white)))).toList(),
-    ));
-    if(reason==null)return;
-    try{await supabaseClient!.from('community_reports').insert({
-      'reporter_id':supabaseClient!.auth.currentUser!.id,'target_type':'post','target_id':post['id'],
-      'reported_user_id':post['author_id'],'reason':reason,
-    });_showMessage('Report submitted for review.');}
-    catch(error){_showMessage('Could not submit report: $error');}
-  }
-
-  Future<void> _openCommunityComments(Map<String,dynamic> post) async {
-    final client=supabaseClient!;final controller=TextEditingController();
-    await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
-      backgroundColor:panel,title:const Text('Comments',style:TextStyle(color:white)),
-      content:SizedBox(width:420,height:420,child:Column(children:[
-        Expanded(child:StreamBuilder<List<Map<String,dynamic>>>(
-          stream:client.from('community_comments').stream(primaryKey:['id']).eq('post_id',post['id']).order('created_at'),
-          builder:(context,snapshot){final comments=snapshot.data??[];if(snapshot.hasError)return Center(child:Text(snapshot.error.toString()));
-            if(comments.isEmpty)return const Center(child:Text('No comments yet.',style:TextStyle(color:ink54)));
-            return ListView.builder(itemCount:comments.length,itemBuilder:(context,index)=>Align(alignment:Alignment.centerLeft,
-              child:Container(margin:const EdgeInsets.symmetric(vertical:5),padding:const EdgeInsets.all(10),
-                decoration:BoxDecoration(color:ink10,borderRadius:BorderRadius.circular(10)),
-                child:Text(comments[index]['body'].toString(),style:const TextStyle(color:white)))));
-          },
-        )),
-        Row(children:[
-          Expanded(child:TextField(controller:controller,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Write a comment...'))),
-          IconButton(icon:const Icon(Icons.send,color:gold),onPressed:()async{final body=controller.text.trim();if(body.isEmpty)return;
-            try{await client.from('community_comments').insert({'post_id':post['id'],'author_id':client.auth.currentUser!.id,'body':body});controller.clear();}
-            catch(error){_showMessage('Could not comment: $error');}
-          }),
-        ]),
-      ])),
-      actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Close'))],
-    ));
-    controller.dispose();
-  }
-
-  Future<Map<String,dynamic>> _loadCommunityInbox() async {
-    final client=supabaseClient!;final userId=client.auth.currentUser!.id;
-    final memberships=List<Map<String,dynamic>>.from(await client.from('conversation_members').select('conversation_id,last_read_at').eq('user_id',userId));
-    final inbox=<Map<String,dynamic>>[];
-    for(final membership in memberships){
-      final id=membership['conversation_id'];
-      final members=List<Map<String,dynamic>>.from(await client.from('conversation_members').select('user_id').eq('conversation_id',id));
-      final otherMatches=members.where((m)=>m['user_id']!=userId);final other=otherMatches.isEmpty?null:otherMatches.first;if(other==null)continue;
-      final profile=await client.from('community_profiles').select('display_name').eq('user_id',other['user_id']).maybeSingle();
-      final last=await client.from('direct_messages').select('body').eq('conversation_id',id).order('created_at',ascending:false).limit(1);
-      inbox.add({'conversation_id':id,'display_name':profile?['display_name']??'FLIXORA User','last_message':last.isEmpty?'':last.first['body']});
+    final user = supabaseClient?.auth.currentUser;
+    if (user == null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.groups_outlined, color: gold, size: 48),
+        const SizedBox(height: 12),
+        const Text('Sign in to join FLIXORA Community', style: TextStyle(color: white)),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: _showVisitorLogin, child: const Text('Login / Sign Up')),
+      ]));
     }
-    final profiles=List<Map<String,dynamic>>.from(await client.from('community_profiles').select('user_id,display_name').neq('user_id',userId).order('display_name'));
-    return {'inbox':inbox,'profiles':profiles};
+    return FutureBuilder<bool>(
+      future: _communityProfileTask(),
+      builder: (context, profile) {
+        if (profile.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator(color: gold));
+        }
+        if (profile.hasError) {
+          return _profileMessagePage(Icons.error_outline, 'Community unavailable', profile.error.toString());
+        }
+        if (profile.data != true) {
+          return _profileMessagePage(Icons.person_outline, 'Profile setup required', 'Sign in to continue.');
+        }
+        return Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(14)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                TextField(
+                  controller: _communityPostController,
+                  minLines: 2,
+                  maxLines: 5,
+                  maxLength: 3000,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  style: const TextStyle(color: white),
+                  decoration: const InputDecoration(
+                    hintText: 'Share a movie review or start a discussion...',
+                    hintStyle: TextStyle(color: ink54),
+                    border: InputBorder.none,
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: _publishingCommunityPost ? null : () async {
+                      final draft = _communityPostController.text.trim();
+                      if (draft.isEmpty) {
+                        _showMessage('Write something before publishing.');
+                        return;
+                      }
+                      setState(() => _publishingCommunityPost = true);
+                      try {
+                        await supabaseClient!.from('community_posts').insert({
+                          'author_id': user.id, 'body': draft,
+                        });
+                        _communityPostController.clear();
+                        _communityFeedFuture = _loadCommunityFeed();
+                        if (mounted) setState(() {});
+                      } catch (error) {
+                        _showMessage('Could not publish post: $error');
+                      } finally {
+                        if (mounted) setState(() => _publishingCommunityPost = false);
+                      }
+                    },
+                    icon: _publishingCommunityPost
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.send_rounded, size: 16),
+                    label: Text(_publishingCommunityPost ? 'Posting...' : 'Post'),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: _communityFeedFuture ??= _loadCommunityFeed(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator(color: gold));
+                }
+                if (snapshot.hasError) {
+                  return _profileMessagePage(Icons.wifi_off, 'Could not load Community', snapshot.error.toString());
+                }
+                final data = snapshot.data!;
+                final posts = data['posts'] as List<Map<String, dynamic>>;
+                final profiles = data['profiles'] as List<Map<String, dynamic>>;
+                final likes = data['likes'] as List<Map<String, dynamic>>;
+                if (posts.isEmpty) {
+                  return _profileMessagePage(Icons.forum_outlined, 'No Community posts yet',
+                      'Be the first to start a movie discussion.');
+                }
+                return RefreshIndicator(
+                  color: gold,
+                  backgroundColor: panel,
+                  onRefresh: _refreshCommunityFeed,
+                  child: ListView.separated(
+                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
+                    itemCount: posts.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final post = posts[index];
+                      final authorMatches = profiles.where((p) => p['user_id'] == post['author_id']);
+                      final author = authorMatches.isEmpty ? null : authorMatches.first;
+                      final postLikes = likes.where((l) => l['post_id'] == post['id']).toList();
+                      final liked = postLikes.any((l) => l['user_id'] == user.id);
+                      return Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: panel, borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: ink12),
+                        ),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            const CircleAvatar(radius: 17, backgroundColor: ink12,
+                                child: Icon(Icons.person, color: gold, size: 19)),
+                            const SizedBox(width: 9),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text((author?['display_name'] ?? 'FLIXORA User').toString(),
+                                  style: const TextStyle(color: white, fontWeight: FontWeight.w700)),
+                              Text(DateTime.tryParse(post['created_at'].toString())?.toLocal()
+                                      .toString().split('.').first ?? '',
+                                  style: const TextStyle(color: ink54, fontSize: 10)),
+                            ])),
+                            PopupMenuButton<String>(
+                              color: panel,
+                              onSelected: (value) { if (value == 'report') _reportCommunityPost(post); },
+                              itemBuilder: (_) => const [PopupMenuItem(value: 'report', child: Text('Report post'))],
+                              icon: const Icon(Icons.more_horiz, color: ink70),
+                            ),
+                          ]),
+                          const SizedBox(height: 12),
+                          Text(post['body'].toString(), style: const TextStyle(color: white, height: 1.4)),
+                          Row(children: [
+                            TextButton.icon(
+                              onPressed: () async {
+                                try {
+                                  if (liked) {
+                                    await supabaseClient!.from('community_likes').delete()
+                                        .eq('post_id', post['id']).eq('user_id', user.id);
+                                  } else {
+                                    await supabaseClient!.from('community_likes').insert({
+                                      'post_id': post['id'], 'user_id': user.id,
+                                    });
+                                  }
+                                  await _refreshCommunityFeed();
+                                } catch (error) { _showMessage('Like failed: $error'); }
+                              },
+                              icon: Icon(liked ? Icons.favorite : Icons.favorite_border,
+                                  color: liked ? Colors.redAccent : ink70, size: 18),
+                              label: Text('${postLikes.length}', style: const TextStyle(color: ink70)),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _openCommunityComments(post),
+                              icon: const Icon(Icons.mode_comment_outlined, color: ink70, size: 18),
+                              label: const Text('Comments', style: TextStyle(color: ink70)),
+                            ),
+                          ]),
+                        ]),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ]);
+      },
+    );
+  }
+
+  Future<void> _reportCommunityPost(Map<String, dynamic> post) async {
+    const reasons = ['Spam', 'Harassment', 'Hate or abuse', 'Spoilers', 'Other'];
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        backgroundColor: panel,
+        title: const Text('Report post', style: TextStyle(color: white)),
+        children: reasons.map((value) => SimpleDialogOption(
+          onPressed: () => Navigator.pop(dialogContext, value),
+          child: Text(value, style: const TextStyle(color: white)),
+        )).toList(),
+      ),
+    );
+    if (reason == null) return;
+    try {
+      await supabaseClient!.from('community_reports').insert({
+        'reporter_id': supabaseClient!.auth.currentUser!.id,
+        'target_type': 'post', 'target_id': post['id'],
+        'reported_user_id': post['author_id'], 'reason': reason,
+      });
+      _showMessage('Report submitted for review.');
+    } catch (error) { _showMessage('Could not submit report: $error'); }
+  }
+
+  Future<void> _openCommunityComments(Map<String, dynamic> post) async {
+    final client = supabaseClient!;
+    final controller = TextEditingController();
+    final commentsStream = client.from('community_comments').stream(primaryKey: ['id'])
+        .eq('post_id', post['id']).order('created_at');
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+        builder: (sheetContext) {
+          final availableHeight = MediaQuery.sizeOf(sheetContext).height -
+              MediaQuery.viewInsetsOf(sheetContext).bottom;
+          final sheetHeight = (availableHeight * 0.72).clamp(240.0, 560.0).toDouble();
+          return StatefulBuilder(
+            builder: (context, setSheetState) => AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+              child: SizedBox(height: sheetHeight, child: Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+                  child: Row(children: [
+                    const Expanded(child: Text('Discussion', style: TextStyle(
+                      color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+                    IconButton(onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(Icons.close, color: ink70)),
+                  ]),
+                ),
+                Expanded(child: StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: commentsStream,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) return Center(child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Could not load comments: ${snapshot.error}',
+                          style: const TextStyle(color: ink70)),
+                    ));
+                    final comments = snapshot.data ?? [];
+                    if (comments.isEmpty) return const Center(child: Text(
+                      'No comments yet. Start the discussion.', style: TextStyle(color: ink54)));
+                    return ListView.builder(
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      itemCount: comments.length,
+                      itemBuilder: (context, index) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 5),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: ink10, borderRadius: BorderRadius.circular(10)),
+                          child: Text(comments[index]['body'].toString(),
+                              style: const TextStyle(color: white)),
+                        ),
+                      ),
+                    );
+                  },
+                )),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Expanded(child: TextField(
+                      controller: controller, minLines: 1, maxLines: 4,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      style: const TextStyle(color: white),
+                      decoration: InputDecoration(
+                        hintText: 'Write a comment...', filled: true, fillColor: ink10,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide.none),
+                      ),
+                    )),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.send_rounded, color: gold),
+                      onPressed: () async {
+                        final body = controller.text.trim();
+                        if (body.isEmpty) return;
+                        try {
+                          await client.from('community_comments').insert({
+                            'post_id': post['id'], 'author_id': client.auth.currentUser!.id,
+                            'body': body,
+                          });
+                          controller.clear();
+                          setSheetState(() {});
+                        } catch (error) { _showMessage('Could not comment: $error'); }
+                      },
+                    ),
+                  ]),
+                ),
+              ])),
+            ),
+          );
+        },
+      );
+    } finally { controller.dispose(); }
+  }
+
+  Future<Map<String, dynamic>> _loadCommunityInbox() async {
+    final client = supabaseClient!;
+    final userId = client.auth.currentUser!.id;
+    final memberships = List<Map<String, dynamic>>.from(
+      await client.from('conversation_members').select('conversation_id').eq('user_id', userId),
+    );
+    final conversationIds = memberships.map((m) => m['conversation_id'].toString()).toList();
+    final inbox = <Map<String, dynamic>>[];
+    if (conversationIds.isNotEmpty) {
+      final allMembers = List<Map<String, dynamic>>.from(
+        await client.from('conversation_members').select('conversation_id,user_id')
+            .inFilter('conversation_id', conversationIds),
+      );
+      final otherUserIds = allMembers.where((m) => m['user_id'] != userId)
+          .map((m) => m['user_id'].toString()).toSet().toList();
+      final profiles = otherUserIds.isEmpty ? <Map<String, dynamic>>[] :
+          List<Map<String, dynamic>>.from(await client.from('community_profiles')
+              .select('user_id,display_name').inFilter('user_id', otherUserIds));
+      final lastMessages = List<Map<String, dynamic>>.from(await client.from('direct_messages')
+          .select('conversation_id,body,created_at').inFilter('conversation_id', conversationIds)
+          .order('created_at', ascending: false));
+      for (final membership in memberships) {
+        final conversationId = membership['conversation_id'].toString();
+        final other = allMembers.where((m) => m['conversation_id'].toString() == conversationId &&
+            m['user_id'] != userId);
+        if (other.isEmpty) continue;
+        final otherUserId = other.first['user_id'];
+        final profile = profiles.where((p) => p['user_id'] == otherUserId);
+        final last = lastMessages.where((m) => m['conversation_id'].toString() == conversationId);
+        inbox.add({
+          'conversation_id': conversationId,
+          'display_name': profile.isEmpty ? 'FLIXORA User' : profile.first['display_name'],
+          'last_message': last.isEmpty ? '' : last.first['body'],
+        });
+      }
+    }
+    final availableProfiles = List<Map<String, dynamic>>.from(
+      await client.from('community_profiles').select('user_id,display_name')
+          .neq('user_id', userId).order('display_name').limit(100),
+    );
+    return {'inbox': inbox, 'profiles': availableProfiles};
   }
 
   Future<void> _startCommunityChat(String targetUserId) async {
-    try{final id=await supabaseClient!.rpc('start_direct_conversation',params:{'p_target_user':targetUserId});
-      await _openCommunityChat(id.toString());if(mounted)setState((){});
-    }catch(error){_showMessage('Could not start chat: $error');}
+    try {
+      final conversationId = await supabaseClient!.rpc(
+        'start_direct_conversation', params: {'p_target_user': targetUserId},
+      );
+      if (conversationId == null) throw Exception('Conversation could not be created.');
+      await _openCommunityChat(conversationId.toString());
+      _communityInboxFuture = _loadCommunityInbox();
+      if (mounted) setState(() {});
+    } catch (error) { _showMessage('Could not start chat: $error'); }
+  }
+
+  Future<void> _showNewCommunityMessagePicker(List<Map<String, dynamic>> profiles) async {
+    if (profiles.isEmpty) {
+      _showMessage('No other FLIXORA members are available yet.');
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.sizeOf(sheetContext).height * 0.65,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+            child: Row(children: [
+              const Expanded(child: Text('New Message', style: TextStyle(
+                color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+              IconButton(onPressed: () => Navigator.pop(sheetContext),
+                  icon: const Icon(Icons.close, color: ink70)),
+            ]),
+          ),
+          Expanded(child: ListView.separated(
+            itemCount: profiles.length,
+            separatorBuilder: (_, __) => const Divider(color: ink10, height: 1),
+            itemBuilder: (context, index) {
+              final profile = profiles[index];
+              return ListTile(
+                leading: const CircleAvatar(backgroundColor: ink12,
+                    child: Icon(Icons.person_outline, color: gold)),
+                title: Text(profile['display_name'].toString(), style: const TextStyle(color: white)),
+                trailing: const Icon(Icons.chat_bubble_outline, color: gold),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _startCommunityChat(profile['user_id'].toString());
+                },
+              );
+            },
+          )),
+        ]),
+      ),
+    );
   }
 
   Future<void> _openCommunityChat(String conversationId) async {
-    final client=supabaseClient!;final controller=TextEditingController();
-    await client.from('conversation_members').update({'last_read_at':DateTime.now().toUtc().toIso8601String()})
-      .eq('conversation_id',conversationId).eq('user_id',client.auth.currentUser!.id);
-    final stream=client.from('direct_messages').stream(primaryKey:['id']).eq('conversation_id',conversationId).order('created_at');
-    await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
-      backgroundColor:panel,title:const Text('Messages',style:TextStyle(color:white)),
-      content:SizedBox(width:440,height:460,child:Column(children:[
-        Expanded(child:StreamBuilder<List<Map<String,dynamic>>>(stream:stream,builder:(context,snapshot){
-          final messages=snapshot.data??[];if(snapshot.hasError)return Center(child:Text(snapshot.error.toString()));
-          if(messages.isEmpty)return const Center(child:Text('Say hello to start the conversation.',style:TextStyle(color:ink54)));
-          return ListView.builder(itemCount:messages.length,itemBuilder:(context,index){final item=messages[index];final mine=item['sender_id']==client.auth.currentUser!.id;
-            return Align(alignment:mine?Alignment.centerRight:Alignment.centerLeft,child:Container(
-              margin:const EdgeInsets.symmetric(vertical:4),padding:const EdgeInsets.all(10),constraints:const BoxConstraints(maxWidth:300),
-              decoration:BoxDecoration(color:mine?gold.withValues(alpha:0.2):ink10,borderRadius:BorderRadius.circular(12)),
-              child:Text(item['body'].toString(),style:const TextStyle(color:white))));
-          });
-        })),
-        Row(children:[
-          Expanded(child:TextField(controller:controller,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Message...'))),
-          IconButton(icon:const Icon(Icons.send,color:gold),onPressed:()async{final body=controller.text.trim();if(body.isEmpty)return;
-            try{await client.from('direct_messages').insert({'conversation_id':conversationId,'sender_id':client.auth.currentUser!.id,'body':body});controller.clear();}
-            catch(error){_showMessage('Message not sent: $error');}
-          }),
-        ]),
-      ])),
-      actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Close'))],
-    ));
-    controller.dispose();if(mounted)setState((){});
+    final client = supabaseClient!;
+    final userId = client.auth.currentUser!.id;
+    final controller = TextEditingController();
+    // Read receipts are best-effort: a read-time update must never prevent
+    // the conversation and its message composer from opening.
+    try {
+      await client.from('conversation_members').update({
+        'last_read_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('conversation_id', conversationId).eq('user_id', userId);
+    } catch (_) {}
+
+    final messageStream = client.from('direct_messages').stream(primaryKey: ['id'])
+        .eq('conversation_id', conversationId).order('created_at');
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+        builder: (sheetContext) {
+          var sending = false;
+          final availableHeight = MediaQuery.sizeOf(sheetContext).height -
+              MediaQuery.viewInsetsOf(sheetContext).bottom;
+          final sheetHeight = (availableHeight * 0.72).clamp(260.0, 600.0).toDouble();
+          return StatefulBuilder(
+            builder: (context, setSheetState) {
+              Future<void> sendMessage() async {
+                final body = controller.text.trim();
+                if (body.isEmpty || sending) return;
+                setSheetState(() => sending = true);
+                try {
+                  await client.from('direct_messages').insert({
+                    'conversation_id': conversationId, 'sender_id': userId, 'body': body,
+                  });
+                  controller.clear();
+                } catch (error) {
+                  _showMessage('Message not sent: $error');
+                } finally {
+                  if (sheetContext.mounted) setSheetState(() => sending = false);
+                }
+              }
+              return AnimatedPadding(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+                child: SizedBox(height: sheetHeight, child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+                    child: Row(children: [
+                      const Expanded(child: Text('Messages', style: TextStyle(
+                        color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+                      IconButton(onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, color: ink70)),
+                    ]),
+                  ),
+                  Expanded(child: StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: messageStream,
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) return Center(child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text('Could not load messages: ${snapshot.error}',
+                            style: const TextStyle(color: ink70)),
+                      ));
+                      final messages = snapshot.data ?? [];
+                      if (messages.isEmpty) return const Center(child: Text(
+                        'Say hello to start the conversation.', style: TextStyle(color: ink54)));
+                      return ListView.builder(
+                        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          final item = messages[index];
+                          final mine = item['sender_id'] == userId;
+                          return Align(
+                            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.all(10),
+                              constraints: const BoxConstraints(maxWidth: 300),
+                              decoration: BoxDecoration(
+                                color: mine ? gold.withValues(alpha: 0.2) : ink10,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(item['body'].toString(), style: const TextStyle(color: white)),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  )),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                      Expanded(child: TextField(
+                        controller: controller, minLines: 1, maxLines: 4,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => sendMessage(),
+                        style: const TextStyle(color: white),
+                        decoration: InputDecoration(
+                          hintText: 'Write a message...', filled: true, fillColor: ink10,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide.none),
+                        ),
+                      )),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: sending ? null : sendMessage,
+                        style: FilledButton.styleFrom(backgroundColor: gold, foregroundColor: bg,
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                        child: sending ? const SizedBox(width: 17, height: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send_rounded, size: 18),
+                      ),
+                    ]),
+                  ),
+                ])),
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<Map<String, dynamic>> _communityInboxTask() {
+    return _communityInboxFuture ??= _loadCommunityInbox();
   }
 
   Widget _messagesContent() {
-    final user=supabaseClient?.auth.currentUser;
-    if(user==null)return Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
-      const Icon(Icons.message_outlined,color:gold,size:48),const SizedBox(height:12),
-      const Text('Sign in to use FLIXORA Messages',style:TextStyle(color:white)),
-      const SizedBox(height:12),FilledButton(onPressed:_showVisitorLogin,child:const Text('Login / Sign Up')),
-    ]));
-    return FutureBuilder<bool>(future:_ensureCommunityProfile(),builder:(context,profile){
-      if(profile.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
-      if(profile.hasError)return _profileMessagePage(Icons.error_outline,'Messages unavailable',profile.error.toString());
-      return FutureBuilder<Map<String,dynamic>>(future:_loadCommunityInbox(),builder:(context,snapshot){
-        if(snapshot.connectionState!=ConnectionState.done)return const Center(child:CircularProgressIndicator(color:gold));
-        if(snapshot.hasError)return _profileMessagePage(Icons.error_outline,'Could not load Messages',snapshot.error.toString());
-        final inbox=snapshot.data!['inbox'] as List<Map<String,dynamic>>;
-        final profiles=snapshot.data!['profiles'] as List<Map<String,dynamic>>;
-        return ListView(padding:const EdgeInsets.fromLTRB(14,14,14,24),children:[
-          if(inbox.isNotEmpty)...[
-            const Padding(padding:EdgeInsets.only(bottom:8),child:Text('Your conversations',style:TextStyle(color:white,fontSize:16,fontWeight:FontWeight.bold))),
-            ...inbox.map((chat)=>Card(color:panel,child:ListTile(
-              leading:const CircleAvatar(backgroundColor:ink12,child:Icon(Icons.person,color:gold)),
-              title:Text(chat['display_name'].toString(),style:const TextStyle(color:white)),
-              subtitle:Text(chat['last_message'].toString(),maxLines:1,overflow:TextOverflow.ellipsis,style:const TextStyle(color:ink54)),
-              trailing:const Icon(Icons.chevron_right,color:ink54),
-              onTap:()=>_openCommunityChat(chat['conversation_id'].toString()),
-            ))),
-          ],
-          const Padding(padding:EdgeInsets.only(top:16,bottom:8),child:Text('Start a new conversation',style:TextStyle(color:white,fontSize:16,fontWeight:FontWeight.bold))),
-          if(profiles.isEmpty)const Text('No other FLIXORA members yet.',style:TextStyle(color:ink54))
-          else...profiles.map((profile)=>Card(color:panel,child:ListTile(
-            leading:const CircleAvatar(backgroundColor:ink12,child:Icon(Icons.person_outline,color:gold)),
-            title:Text(profile['display_name'].toString(),style:const TextStyle(color:white)),
-            trailing:const Icon(Icons.chat_bubble_outline,color:gold),
-            onTap:()=>_startCommunityChat(profile['user_id'].toString()),
-          ))),
-        ]);
-      });
-    });
+    final user = supabaseClient?.auth.currentUser;
+    if (user == null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.message_outlined, color: gold, size: 48),
+        const SizedBox(height: 12),
+        const Text('Sign in to use FLIXORA Messages', style: TextStyle(color: white)),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: _showVisitorLogin, child: const Text('Login / Sign Up')),
+      ]));
+    }
+    return FutureBuilder<bool>(
+      future: _communityProfileTask(),
+      builder: (context, profile) {
+        if (profile.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator(color: gold));
+        }
+        if (profile.hasError || profile.data != true) {
+          return _profileMessagePage(Icons.error_outline, 'Messages unavailable',
+              profile.hasError ? profile.error.toString() : 'Community profile setup is required.');
+        }
+        return FutureBuilder<Map<String, dynamic>>(
+          future: _communityInboxTask(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator(color: gold));
+            }
+            if (snapshot.hasError) {
+              return _profileMessagePage(Icons.error_outline, 'Could not load Messages',
+                  snapshot.error.toString());
+            }
+            final inbox = snapshot.data!['inbox'] as List<Map<String, dynamic>>;
+            final profiles = snapshot.data!['profiles'] as List<Map<String, dynamic>>;
+            return ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
+              children: [
+                SizedBox(width: double.infinity, child: FilledButton.icon(
+                  onPressed: () => _showNewCommunityMessagePicker(profiles),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('New Message'),
+                )),
+                const SizedBox(height: 16),
+                if (inbox.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: Text('No conversations yet. Start a new message.',
+                        style: TextStyle(color: ink54))),
+                  )
+                else ...[
+                  const Padding(padding: EdgeInsets.only(bottom: 8),
+                    child: Text('Your conversations', style: TextStyle(
+                      color: white, fontSize: 16, fontWeight: FontWeight.bold))),
+                  ...inbox.map((chat) => Card(
+                    color: panel,
+                    child: ListTile(
+                      leading: const CircleAvatar(backgroundColor: ink12,
+                          child: Icon(Icons.person, color: gold)),
+                      title: Text(chat['display_name'].toString(), style: const TextStyle(color: white)),
+                      subtitle: Text(chat['last_message'].toString(), maxLines: 1,
+                          overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54)),
+                      trailing: const Icon(Icons.chevron_right, color: ink54),
+                      onTap: () => _openCommunityChat(chat['conversation_id'].toString()),
+                    ),
+                  )),
+                ],
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Widget _profileSectionContent() {
