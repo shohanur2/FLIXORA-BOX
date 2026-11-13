@@ -9679,6 +9679,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   double _gestureStartBrightness = 0.5;
   double _gestureStartVolume = 100;
   double _gestureStartZoom = 1.0;
+  bool _volumeGestureEnabled = true;
+  bool _brightnessGestureEnabled = true;
+  bool _doubleTapSkipEnabled = true;
+  int _doubleTapSkipSeconds = 10;
+  double _gestureSensitivity = 1.0;
   Timer? _gestureFeedbackTimer;
 
   Timer? _hideTimer;
@@ -9767,6 +9772,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _attachPlayerListeners();
     _loadSubtitlePreferences();
     _loadAudioDelayPreference();
+    _loadGesturePreferences();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
     _prepareAndInitializePlayer();
@@ -11316,6 +11322,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _loadGesturePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _volumeGestureEnabled = prefs.getBool('flixora_gesture_volume') ?? true;
+        _brightnessGestureEnabled = prefs.getBool('flixora_gesture_brightness') ?? true;
+        _doubleTapSkipEnabled = prefs.getBool('flixora_gesture_double_tap') ?? true;
+        _doubleTapSkipSeconds = prefs.getInt('flixora_gesture_skip_seconds') ?? 10;
+        _gestureSensitivity = (prefs.getDouble('flixora_gesture_sensitivity') ?? 1.0)
+            .clamp(0.5, 2.0)
+            .toDouble();
+      });
+    } catch (error) {
+      debugPrint('Could not load player gesture preferences: $error');
+    }
+  }
+
+  Future<void> _saveGesturePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('flixora_gesture_volume', _volumeGestureEnabled);
+      await prefs.setBool('flixora_gesture_brightness', _brightnessGestureEnabled);
+      await prefs.setBool('flixora_gesture_double_tap', _doubleTapSkipEnabled);
+      await prefs.setInt('flixora_gesture_skip_seconds', _doubleTapSkipSeconds);
+      await prefs.setDouble('flixora_gesture_sensitivity', _gestureSensitivity);
+    } catch (error) {
+      debugPrint('Could not save player gesture preferences: $error');
+    }
+  }
+
   void _handlePlayerGestureStart(ScaleStartDetails details) {
     _gestureFeedbackTimer?.cancel();
     _gestureStartPoint = details.localFocalPoint;
@@ -11360,11 +11397,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (_gestureMode == null) {
       if (delta.distance < 10) return;
 
-      final mode = delta.dx.abs() >= delta.dy.abs()
+      final isHorizontal = delta.dx.abs() >= delta.dy.abs();
+      final isLeftSide =
+          start.dx < MediaQuery.of(context).size.width / 2;
+      final mode = isHorizontal
           ? 'seek'
-          : (start.dx < MediaQuery.of(context).size.width / 2
-              ? 'brightness'
-              : 'volume');
+          : isLeftSide
+              ? (_brightnessGestureEnabled ? 'brightness' : 'disabled')
+              : (_volumeGestureEnabled ? 'volume' : 'disabled');
 
       _cancelHideTimer();
       setState(() {
@@ -11391,7 +11431,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       });
     } else if (_gestureMode == 'brightness') {
       final height = MediaQuery.of(context).size.height;
-      final brightness = (_gestureStartBrightness - delta.dy / height)
+      final brightness = (_gestureStartBrightness -
+              delta.dy / height * _gestureSensitivity)
           .clamp(0.0, 1.0)
           .toDouble();
       _changeApplicationBrightness(brightness);
@@ -11402,7 +11443,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       }
     } else if (_gestureMode == 'volume') {
       final height = MediaQuery.of(context).size.height;
-      final volume = (_gestureStartVolume - delta.dy / height * 100)
+      final volume = (_gestureStartVolume -
+              delta.dy / height * 100 * _gestureSensitivity)
           .clamp(0.0, 100.0)
           .toDouble();
       _changeVolume(volume);
@@ -12858,12 +12900,160 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         _showSubtitleTracks();
                       },
                     ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.gesture_rounded,
+                        color: playerGold,
+                      ),
+                      title: const Text(
+                        'Gesture controls',
+                        style: TextStyle(color: playerWhite),
+                      ),
+                      subtitle: const Text(
+                        'Swipe sensitivity and double-tap skip',
+                        style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Color(0x8AFFFFFF),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showGestureSettings();
+                      },
+                    ),
                   ],
                 ),
               ),            );
           },
         );
       },
+    ).whenComplete(_startHideTimer);
+  }
+
+  void _showGestureSettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          Future<void> persist() => _saveGesturePreferences();
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Gesture Controls',
+                    style: TextStyle(
+                      color: playerWhite,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Customize touch gestures while watching videos.',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Right-side volume swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the right side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _volumeGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _volumeGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Left-side brightness swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the left side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _brightnessGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _brightnessGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Double-tap to skip', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Double-tap left or right to seek', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _doubleTapSkipEnabled,
+                    onChanged: (value) {
+                      setState(() => _doubleTapSkipEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Swipe sensitivity', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                      ),
+                      Text('${_gestureSensitivity.toStringAsFixed(2)}x', style: const TextStyle(color: playerGoldLight, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                  Slider(
+                    value: _gestureSensitivity,
+                    min: 0.5,
+                    max: 2.0,
+                    divisions: 6,
+                    activeColor: playerGold,
+                    inactiveColor: const Color(0x3DFFFFFF),
+                    onChanged: (value) {
+                      setState(() => _gestureSensitivity = value);
+                      updateSheet(() {});
+                    },
+                    onChangeEnd: (_) => persist(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Double-tap skip duration', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [5, 10, 15, 20, 30].map((seconds) {
+                      final selected = _doubleTapSkipSeconds == seconds;
+                      return ChoiceChip(
+                        label: Text('${seconds}s'),
+                        selected: selected,
+                        selectedColor: playerGold,
+                        backgroundColor: playerBg,
+                        labelStyle: TextStyle(color: selected ? Colors.black : playerWhite),
+                        onSelected: (_) {
+                          setState(() => _doubleTapSkipSeconds = seconds);
+                          updateSheet(() {});
+                          persist();
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Your gesture preferences are saved on this device.',
+                    style: TextStyle(color: Color(0x80FFFFFF), fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     ).whenComplete(_startHideTimer);
   }
 
@@ -13508,12 +13698,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               onScaleEnd: _handlePlayerGestureEnd,
               onTap: _toggleControls,
               onDoubleTapDown: (details) {
+                if (!_doubleTapSkipEnabled) return;
                 final width = MediaQuery.of(context).size.width;
-
+                final seconds = _doubleTapSkipSeconds;
                 if (details.localPosition.dx < width / 2) {
-                  _seekBy(-10);
+                  _seekBy(-seconds);
                 } else {
-                  _seekBy(10);
+                  _seekBy(seconds);
                 }
               },
               onDoubleTap: () {},
