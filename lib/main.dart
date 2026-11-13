@@ -13101,7 +13101,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Portrait uses double-tap for 10-second seeking and has no center buttons.
     if (!_isFullscreen) return const SizedBox.shrink();
 
-    const controlScale = 0.68;
     Widget skipControl({
       required IconData icon,
       required String tooltip,
