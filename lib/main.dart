@@ -8330,7 +8330,7 @@ Entertainment Beyond Boundaries.
   void _showPolicyDialog({required String title, required String message}) {
     final isPrivacy = title.toLowerCase().contains('privacy');
     final paragraphs = message
-        .split(RegExp(r'\\n\\s*\\n'))
+        .split(RegExp(r'\n\s*\n'))
         .map((part) => part.trim())
         .where((part) => part.isNotEmpty)
         .toList(growable: false);
@@ -8457,7 +8457,7 @@ Entertainment Beyond Boundaries.
 
   Widget _policyDocumentBlock(String paragraph) {
     final lines = paragraph
-        .split('\\n')
+        .split('\n')
         .map((line) => line.trim())
         .where((line) => line.isNotEmpty)
         .toList(growable: false);
@@ -8466,8 +8466,8 @@ Entertainment Beyond Boundaries.
     final firstLine = lines.first;
     final isSectionHeading = lines.length == 1 &&
         (firstLine == firstLine.toUpperCase() ||
-            RegExp(r'^\\d+\\.\\s').hasMatch(firstLine) ||
-            RegExp(r'^[A-Z]\\.\\s').hasMatch(firstLine));
+            RegExp(r'^\d+\.\s').hasMatch(firstLine) ||
+            RegExp(r'^[A-Z]\.\s').hasMatch(firstLine));
 
     if (isSectionHeading) {
       return Padding(
@@ -8502,7 +8502,7 @@ Entertainment Beyond Boundaries.
     }
 
     final isBulletList = lines.every(
-      (line) => line.startsWith('•') || RegExp(r'^\\d+\\.\\s').hasMatch(line),
+      (line) => line.startsWith('•') || RegExp(r'^\d+\.\s').hasMatch(line),
     );
     if (isBulletList) {
       return Container(
