@@ -1574,6 +1574,34 @@ class DownloadManager {
         onError: onError,
       );
 }
+// The active Player remains mounted while its floating mini-player is shown.
+// This app-level host keeps the video above Home, Search, details and other routes.
+final ValueNotifier<_MoviePlayerScreenState?> _activeMiniPlayerState =
+    ValueNotifier<_MoviePlayerScreenState?>(null);
+Route<void>? _activePlayerRoute;
+NavigatorState? _activePlayerNavigator;
+
+// A minimized Player must stay mounted without keeping a modal barrier over
+// the app. The empty barrier lets Home, Search and other routes receive taps
+// and scroll gestures while the floating mini-player remains visible.
+class _NonBlockingPlayerRoute extends PageRouteBuilder<void> {
+  _NonBlockingPlayerRoute({required WidgetBuilder pageBuilder})
+      : super(
+          opaque: false,
+          barrierDismissible: false,
+          pageBuilder: (routeContext, animation, secondaryAnimation) =>
+              pageBuilder(routeContext),
+          transitionsBuilder:
+              (routeContext, animation, secondaryAnimation, child) =>
+                  FadeTransition(opacity: animation, child: child),
+          transitionDuration: const Duration(milliseconds: 180),
+          reverseTransitionDuration: const Duration(milliseconds: 140),
+        );
+
+  @override
+  Widget buildModalBarrier() => const SizedBox.shrink();
+}
+
 class FlixoraApp extends StatelessWidget {
   const FlixoraApp({super.key});
 
@@ -1616,6 +1644,23 @@ class FlixoraApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const HomeScreen(),
+      builder: (context, child) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            child ?? const SizedBox.shrink(),
+            ValueListenableBuilder<_MoviePlayerScreenState?>(
+              valueListenable: _activeMiniPlayerState,
+              builder: (context, player, _) {
+                if (player == null || !player.mounted || !player._isMiniPlayer) {
+                  return const SizedBox.shrink();
+                }
+                return player._buildMiniPlayerOverlay(context);
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -4575,12 +4620,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _pushPlayerRoute(WidgetBuilder builder) {
+    final navigator = Navigator.of(context);
+    final previousRoute = _activePlayerRoute;
+    final previousNavigator = _activePlayerNavigator;
+    if (previousRoute != null &&
+        previousNavigator != null &&
+        previousNavigator.mounted &&
+        previousRoute.isActive) {
+      try {
+        previousNavigator.removeRoute(previousRoute);
+      } catch (error) {
+        debugPrint('Could not replace the previous FLIXORA Player route: $error');
+      }
+    }
+
+    _activeMiniPlayerState.value = null;
+    final route = _NonBlockingPlayerRoute(pageBuilder: builder);
+    _activePlayerNavigator = navigator;
+    _activePlayerRoute = route;
+    navigator.push<void>(route);
+  }
+
   Future<void> _playResolvedMovie(
     Movie selectedMovie,
     Movie requestedMovie,
   ) async {
     if (!_beginTitleOpening(selectedMovie)) return;
     try {
+      // The details page is only the launch point. Keep the Player above the
+      // real Home route so the app-wide mini-player can reveal Home/Search.
+      final navigator = Navigator.of(context);
+      if (navigator.canPop()) navigator.pop();
       await _openResolvedPlayer(selectedMovie, requestedMovie);
     } finally {
       _endTitleOpening();
@@ -4657,25 +4728,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (downloaded != null) {
       _recordWatch(selectedMovie);
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => MoviePlayerScreen(
-          movie: selectedMovie,
-          localFilePath: downloaded!.filePath,
-          localSeasonNumber: downloaded.seasonNumber,
-          localEpisodeNumber: downloaded.episodeNumber,
-          recommendedMovies: _allMovies(),
-          onMovieSelected: _playMovieFromPlayer,
-          onSave: () => _toggleSaved(selectedMovie),
-          onDownload: () => addDownload(selectedMovie),
-          onDownloadEpisode: (season, episode) => addDownload(
-            selectedMovie,
-            seasonNumber: season,
-            episodeNumber: episode,
-          ),
-          onViewDownloads: _openDownloadsTab,
-          isOnline: _online,
-          enablePip: _autoMiniPlayer,
+      _pushPlayerRoute((_) => MoviePlayerScreen(
+        movie: selectedMovie,
+        localFilePath: downloaded!.filePath,
+        localSeasonNumber: downloaded.seasonNumber,
+        localEpisodeNumber: downloaded.episodeNumber,
+        recommendedMovies: _allMovies(),
+        onMovieSelected: _playMovieFromPlayer,
+        onSave: () => _toggleSaved(selectedMovie),
+        onDownload: () => addDownload(selectedMovie),
+        onDownloadEpisode: (season, episode) => addDownload(
+          selectedMovie,
+          seasonNumber: season,
+          episodeNumber: episode,
         ),
+        onViewDownloads: _openDownloadsTab,
+        isOnline: _online,
+        enablePip: _autoMiniPlayer,
       ));
       return;
     }
@@ -4701,22 +4770,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Open the player immediately. MoviePlayerScreen resolves MovieBox
     // streams itself and shows its loading/error state without blocking Home.
     _recordWatch(selectedMovie);
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => MoviePlayerScreen(
-        movie: selectedMovie,
-        recommendedMovies: _allMovies(),
-        onMovieSelected: _playMovieFromPlayer,
-        onSave: () => _toggleSaved(selectedMovie),
-        onDownload: () => addDownload(selectedMovie),
-        onDownloadEpisode: (season, episode) => addDownload(
-          selectedMovie,
-          seasonNumber: season,
-          episodeNumber: episode,
-        ),
-        onViewDownloads: _openDownloadsTab,
-        isOnline: _online,
-          enablePip: _autoMiniPlayer,
+    _pushPlayerRoute((_) => MoviePlayerScreen(
+      movie: selectedMovie,
+      recommendedMovies: _allMovies(),
+      onMovieSelected: _playMovieFromPlayer,
+      onSave: () => _toggleSaved(selectedMovie),
+      onDownload: () => addDownload(selectedMovie),
+      onDownloadEpisode: (season, episode) => addDownload(
+        selectedMovie,
+        seasonNumber: season,
+        episodeNumber: episode,
       ),
+      onViewDownloads: _openDownloadsTab,
+      isOnline: _online,
+      enablePip: _autoMiniPlayer,
     ));
   }
 
@@ -7102,14 +7169,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           releaseDate: '',
           videoUrl: task.filePath!,
         );
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(
-            movie: movie,
-            localFilePath: task.filePath,
-            recommendedMovies: _allMovies(),
-            onMovieSelected: _openMovie,
-            isOnline: _online,
-            enablePip: _autoMiniPlayer,
-          )));
+        _pushPlayerRoute((_) => MoviePlayerScreen(
+          movie: movie,
+          localFilePath: task.filePath,
+          recommendedMovies: _allMovies(),
+          onMovieSelected: _openMovie,
+          isOnline: _online,
+          enablePip: _autoMiniPlayer,
+        ));
       },
     );
   }
@@ -9620,6 +9687,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Duration _duration = Duration.zero;
   final ValueNotifier<Duration> _positionNotifier =
       ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<int> _miniPlayerOverlayRevision = ValueNotifier<int>(0);
   bool _isSeeking = false;
   Duration? _seekPreviewPosition;
   Duration? _pendingSeekPosition;
@@ -9890,6 +9958,97 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       ));
       return;
     }
+  }
+
+  List<List<int>> _episodeNavigationEntries() {
+    if (!widget.movie.isMovieBox ||
+        !widget.movie.movieBoxIsSeries ||
+        widget.localFilePath != null) {
+      return const <List<int>>[];
+    }
+
+    final seasons = _movieBoxSeasons.toList()
+      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+    final entries = <List<int>>[];
+    for (final season in seasons) {
+      final seasonNumber = _toInt(season['se']);
+      if (seasonNumber <= 0) continue;
+      final episodeNumbers = (season['episodes'] as List? ?? const [])
+          .map(_toInt)
+          .where((number) => number > 0)
+          .toSet()
+          .toList()
+        ..sort();
+      for (final episodeNumber in episodeNumbers) {
+        entries.add([seasonNumber, episodeNumber]);
+      }
+    }
+    return entries;
+  }
+
+  int _episodeNavigationIndex(List<List<int>> entries) => entries.indexWhere(
+        (entry) =>
+            entry[0] == _selectedSeasonNumber &&
+            entry[1] == _selectedEpisodeNumber,
+      );
+
+  bool get _hasEpisodeNavigation {
+    final entries = _episodeNavigationEntries();
+    return entries.length > 1 && _episodeNavigationIndex(entries) >= 0;
+  }
+
+  bool _canChangeEpisode(int direction) {
+    if (direction == 0 || _loadingQualities || _isOpening || _isDisposed) {
+      return false;
+    }
+    final entries = _episodeNavigationEntries();
+    final currentIndex = _episodeNavigationIndex(entries);
+    final targetIndex = currentIndex + direction;
+    return currentIndex >= 0 &&
+        targetIndex >= 0 &&
+        targetIndex < entries.length;
+  }
+
+  Future<void> _changeEpisodeBy(int direction) async {
+    if (!_canChangeEpisode(direction)) return;
+    final entries = _episodeNavigationEntries();
+    final currentIndex = _episodeNavigationIndex(entries);
+    final target = entries[currentIndex + direction];
+    final seasonNumber = target[0];
+    final episodeNumber = target[1];
+    final season = _movieBoxSeasons.firstWhere(
+      (item) => _toInt(item['se']) == seasonNumber,
+      orElse: () => <String, dynamic>{},
+    );
+    final episodeNumbers = (season['episodes'] as List? ?? const [])
+        .map(_toInt)
+        .where((number) => number > 0)
+        .toList(growable: false);
+    final episodeItems = episodeNumbers
+        .map((number) => <String, dynamic>{
+              'episode_number': number,
+              'name': 'Episode $number',
+            })
+        .toList(growable: false);
+
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _selectedSeasonNumber = seasonNumber;
+        _selectedEpisodeNumber = episodeNumber;
+        _tvEpisodes = episodeItems;
+        _loadingTvEpisodes = false;
+        _loadingQualities = true;
+        _tvEpisodeError = null;
+        _errorMessage = null;
+      });
+      _miniPlayerOverlayRevision.value++;
+    }
+
+    await _loadMovieBoxStreams(
+      season: seasonNumber,
+      episode: episodeNumber,
+      openPlayer: true,
+    );
   }
 
   Widget _tvEpisodeSelector() {
@@ -10456,6 +10615,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _loadingQualities = true;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
 
     try {
@@ -10568,11 +10728,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _tvEpisodeError = error.toString();
           _errorMessage = 'Unable to resolve this MovieBox stream.';
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     } finally {
       if (mounted && !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() => _loadingQualities = false);
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     }
   }
@@ -10598,6 +10760,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _errorMessage = null;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
     try {
       for (final candidate in candidates) {
@@ -10647,6 +10810,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               _errorMessage = null;
               _tvEpisodeError = null;
             });
+            if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
           await _restoreResumePosition();
           _startHideTimer();
@@ -10669,6 +10833,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _errorMessage = 'Could not start this MovieBox stream. Please try again.';
           _tvEpisodeError = error.toString();
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
       return false;
     } finally {
@@ -11118,6 +11283,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _durationSubscription = _player.stream.duration.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _duration = value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _playingSubscription = _player.stream.playing.listen((value) {
@@ -11127,6 +11293,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _isPlaying = value;
         if (value && _errorMessage != null) _errorMessage = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       unawaited(PictureInPictureService.setEnabled(
         value && widget.enablePip,
       ));
@@ -11135,18 +11302,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _startHideTimer();
       } else {
         _cancelHideTimer();
-        setState(() => _showControls = true);
+        if (!_isMiniPlayer) setState(() => _showControls = true);
       }
     });
 
     _bufferingSubscription = _player.stream.buffering.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _isBuffering = value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
       _handlePlayerError(value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
@@ -11316,6 +11485,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             _initialized = true;
             _errorMessage = null;
           });
+          if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           await _restoreResumePosition();
           _startHideTimer();
           return;
@@ -11334,6 +11504,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     } finally {
       _isOpening = false;
     }
@@ -11685,18 +11856,69 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     setState(() => _volume = volume);
   }
 
-  void _toggleMiniPlayer() {
-    if (_isFullscreen || _isDisposed) return;
-    final enteringMiniPlayer = !_isMiniPlayer;
+  Future<void> _toggleMiniPlayer() async {
+    if (_isDisposed) return;
+    if (_isMiniPlayer) {
+      _expandMiniPlayer();
+      return;
+    }
+
+    if (_isFullscreen) {
+      await _toggleFullscreen();
+      if (!mounted || _isDisposed) return;
+    }
+
     setState(() {
-      _isMiniPlayer = enteringMiniPlayer;
-      _showControls = !enteringMiniPlayer;
-      if (!enteringMiniPlayer) _miniPlayerOffset = null;
+      _isMiniPlayer = true;
+      _showControls = false;
+      _miniPlayerOffset = null;
     });
-    if (enteringMiniPlayer) {
-      _cancelHideTimer();
-    } else {
-      _startHideTimer();
+    _activeMiniPlayerState.value = this;
+    _miniPlayerOverlayRevision.value++;
+    _cancelHideTimer();
+  }
+
+  void _expandMiniPlayer() {
+    final route = _activePlayerRoute;
+    final navigator = _activePlayerNavigator;
+    if (route != null &&
+        navigator != null &&
+        navigator.mounted &&
+        route.isActive) {
+      try {
+        navigator.popUntil((candidate) => identical(candidate, route));
+      } catch (error) {
+        debugPrint('Could not restore the full FLIXORA Player: $error');
+      }
+    }
+    if (!mounted || _isDisposed) return;
+    _activeMiniPlayerState.value = null;
+    setState(() {
+      _isMiniPlayer = false;
+      _showControls = true;
+      _miniPlayerOffset = null;
+    });
+    _miniPlayerOverlayRevision.value++;
+    _startHideTimer();
+  }
+
+  void _closeMiniPlayer() {
+    final route = _activePlayerRoute;
+    final navigator = _activePlayerNavigator;
+    _activeMiniPlayerState.value = null;
+    if (route != null &&
+        navigator != null &&
+        navigator.mounted &&
+        route.isActive) {
+      try {
+        navigator.removeRoute(route);
+        return;
+      } catch (error) {
+        debugPrint('Could not close the FLIXORA mini-player route: $error');
+      }
+    }
+    if (mounted && !_isDisposed) {
+      Navigator.of(context).maybePop();
     }
   }
 
@@ -11706,7 +11928,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required double maxBottom,
   }) {
     if (!mounted || !_isMiniPlayer) return;
-    final current = _miniPlayerOffset ?? const Offset(14, 18);
+    final current = _miniPlayerOffset ?? const Offset(14, 92);
     final rightLimit = maxRight < 8 ? 8.0 : maxRight;
     final bottomLimit = maxBottom < 8 ? 8.0 : maxBottom;
     setState(() {
@@ -11715,6 +11937,165 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         (current.dy - details.delta.dy).clamp(8.0, bottomLimit).toDouble(),
       );
     });
+    _miniPlayerOverlayRevision.value++;
+  }
+
+  Widget _buildMiniPlayerOverlay(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: _miniPlayerOverlayRevision,
+      builder: (context, revision, _) {
+        final media = MediaQuery.of(context);
+        final screenSize = media.size;
+        final viewPadding = media.viewPadding;
+        final viewInsets = media.viewInsets;
+        final requestedWidth = (screenSize.width * 0.58)
+            .clamp(180.0, 280.0)
+            .toDouble();
+        final availableWidth = screenSize.width -
+            viewPadding.left - viewPadding.right - 16;
+        final miniWidth = requestedWidth > availableWidth
+            ? (availableWidth < 150 ? 150.0 : availableWidth)
+            : requestedWidth;
+        final miniHeight = miniWidth * 9 / 16 + 32;
+        final maxRight = screenSize.width -
+            viewPadding.horizontal - miniWidth - 8;
+        final maxBottom = screenSize.height -
+            viewPadding.vertical - viewInsets.bottom - miniHeight - 8;
+        final rightLimit = maxRight < 8 ? 8.0 : maxRight;
+        final bottomLimit = maxBottom < 8 ? 8.0 : maxBottom;
+        final miniRight = (_miniPlayerOffset?.dx ?? 14.0)
+            .clamp(8.0, rightLimit)
+            .toDouble();
+        final miniBottom = (_miniPlayerOffset?.dy ?? 92.0)
+            .clamp(8.0, bottomLimit)
+            .toDouble();
+        final miniTitle = widget.movie.movieBoxIsSeries
+            ? '${widget.movie.title} · S$_selectedSeasonNumber E$_selectedEpisodeNumber'
+            : widget.movie.title;
+
+        return Positioned(
+          right: viewPadding.right + miniRight,
+          bottom: viewPadding.bottom + viewInsets.bottom + miniBottom,
+          child: Material(
+            color: Colors.black,
+            elevation: 20,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(13),
+              side: const BorderSide(color: Color(0x55D9B45B)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: miniWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    height: 32,
+                    color: const Color(0xFF171717),
+                    padding: const EdgeInsets.only(left: 6, right: 2),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _expandMiniPlayer,
+                            onPanUpdate: (details) => _moveMiniPlayer(
+                              details,
+                              maxRight: rightLimit,
+                              maxBottom: bottomLimit,
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.drag_indicator_rounded,
+                                  color: playerGold,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 3),
+                                Expanded(
+                                  child: Text(
+                                    miniTitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        StreamBuilder<bool>(
+                          stream: _player.stream.playing,
+                          initialData: _isPlaying,
+                          builder: (context, snapshot) {
+                            final playing = snapshot.data ?? _isPlaying;
+                            return IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 28,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: playing ? 'Pause' : 'Play',
+                              onPressed: _togglePlay,
+                              icon: Icon(
+                                playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            );
+                          },
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 30,
+                          ),
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Expand player',
+                          onPressed: _expandMiniPlayer,
+                          icon: const Icon(
+                            Icons.open_in_full_rounded,
+                            color: Colors.white,
+                            size: 15,
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 30,
+                          ),
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Close mini player',
+                          onPressed: _closeMiniPlayer,
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                            size: 17,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: _playerBody(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _toggleFullscreen() async {
@@ -13290,6 +13671,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       required String tooltip,
       required IconData icon,
       required VoidCallback onPressed,
+      bool enabled = true,
       Color color = playerWhite,
     }) {
       return IconButton(
@@ -13297,8 +13679,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         visualDensity: VisualDensity.compact,
         constraints: const BoxConstraints.tightFor(width: 42, height: 38),
         padding: EdgeInsets.zero,
-        onPressed: onPressed,
-        icon: Icon(icon, color: color, size: 24),
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(
+          icon,
+          color: enabled ? color : color.withValues(alpha: 0.32),
+          size: 24,
+        ),
       );
     }
 
@@ -13418,14 +13804,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                         : Icons.play_arrow_rounded,
                     onPressed: _togglePlay,
                   ),
+                  if (_hasEpisodeNavigation) ...[
+                    compactAction(
+                      tooltip: 'Previous episode',
+                      icon: Icons.skip_previous_rounded,
+                      enabled: _canChangeEpisode(-1),
+                      onPressed: () => _changeEpisodeBy(-1),
+                    ),
+                    compactAction(
+                      tooltip: 'Next episode',
+                      icon: Icons.skip_next_rounded,
+                      enabled: _canChangeEpisode(1),
+                      onPressed: () => _changeEpisodeBy(1),
+                    ),
+                  ],
                   const Spacer(),
-                  compactAction(
-                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                    icon: _isFullscreen
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                    onPressed: _toggleFullscreen,
-                  ),
                   if (compact)
                     compactAction(
                       tooltip: 'Picture-in-picture',
@@ -13433,6 +13826,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGoldLight,
                       onPressed: _toggleMiniPlayer,
                     ),
+                  compactAction(
+                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                    icon: _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: _toggleFullscreen,
+                  ),
                 ],
               ),
             ],
@@ -13449,6 +13849,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final audioLabel = audioIndex >= 0
         ? _audioTrackLabel(_tracks.audio[audioIndex], audioIndex)
         : 'Audio';
+    final showEpisodeIndicator = _isFullscreen &&
+        (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -13476,15 +13878,46 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  widget.movie.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: playerWhite,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    if (showEpisodeIndicator) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: playerGold.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: playerGold.withValues(alpha: 0.58),
+                          ),
+                        ),
+                        child: Text(
+                          'S${_selectedSeasonNumber.toString().padLeft(2, '0')} · E${_selectedEpisodeNumber.toString().padLeft(2, '0')}',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: playerGoldLight,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 2),
                 const Text(
@@ -13829,7 +14262,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               onScaleStart: _handlePlayerGestureStart,
               onScaleUpdate: _handlePlayerGestureUpdate,
               onScaleEnd: _handlePlayerGestureEnd,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               onDoubleTapDown: (details) {
                 if (!_doubleTapSkipEnabled) return;
                 final width = MediaQuery.of(context).size.width;
@@ -13848,7 +14281,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               child: Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -14012,6 +14445,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // not emitted its final update yet when the user leaves the player.
     unawaited(_saveResumePosition(_position));
     _isDisposed = true;
+    if (identical(_activeMiniPlayerState.value, this)) {
+      _activeMiniPlayerState.value = null;
+    }
+    _miniPlayerOverlayRevision.dispose();
     unawaited(PictureInPictureService.setEnabled(false));
     _gestureFeedbackTimer?.cancel();
     _seekSyncTimer?.cancel();
@@ -14966,20 +15403,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _toggleFullscreen();
         }
       },
-      child: Scaffold(
-        backgroundColor: playerBg,
-        body: _isFullscreen
-            ? SafeArea(
-                top: false,
-                bottom: false,
-                child: _playerBody(),
-              )
-            : SafeArea(
-                top: true,
-                bottom: true,
-                child: _playerPageContent(),
-              ),
-      ),
+      child: _isMiniPlayer
+          ? const IgnorePointer(child: SizedBox.expand())
+          : Scaffold(
+              backgroundColor: playerBg,
+              body: _isFullscreen
+                  ? SafeArea(
+                      top: false,
+                      bottom: false,
+                      child: _playerBody(),
+                    )
+                  : SafeArea(
+                      top: true,
+                      bottom: true,
+                      child: _playerPageContent(),
+                    ),
+            ),
     );
   }
 }
