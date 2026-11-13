@@ -7162,7 +7162,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           movie: movie,
           localFilePath: task.filePath,
           recommendedMovies: _allMovies(),
-          onMovieSelected: _playMovieFromPlayer,
+          onMovieSelected: _openMovie,
           isOnline: _online,
           enablePip: _autoMiniPlayer,
         ));
