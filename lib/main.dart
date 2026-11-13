@@ -7681,7 +7681,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         builder: (sheetContext) {
           final availableHeight = MediaQuery.sizeOf(sheetContext).height -
               MediaQuery.viewInsetsOf(sheetContext).bottom;
-          final sheetHeight = (availableHeight * 0.72).clamp(240.0, 560.0);
+          final sheetHeight = (availableHeight * 0.72).clamp(240.0, 560.0).toDouble();
           return StatefulBuilder(
             builder: (context, setSheetState) => AnimatedPadding(
               duration: const Duration(milliseconds: 180),
@@ -7882,7 +7882,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           var sending = false;
           final availableHeight = MediaQuery.sizeOf(sheetContext).height -
               MediaQuery.viewInsetsOf(sheetContext).bottom;
-          final sheetHeight = (availableHeight * 0.72).clamp(260.0, 600.0);
+          final sheetHeight = (availableHeight * 0.72).clamp(260.0, 600.0).toDouble();
           return StatefulBuilder(
             builder: (context, setSheetState) {
               Future<void> sendMessage() async {
