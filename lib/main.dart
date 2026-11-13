@@ -7677,6 +7677,258 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _showAboutUs() {
+    _showPolicyDialog(
+      title: 'About FLIXORA',
+      message: '''ABOUT FLIXORA
+
+Your World of Entertainment
+
+Welcome to FLIXORA — a modern entertainment platform designed to bring movies, discovery and community together in one place.
+
+FLIXORA aims to provide users with a smooth, convenient and enjoyable entertainment experience through a clean interface, organized movie collections and easy-to-use features.
+
+Whether you want to discover something new, explore movie details, save your favorites or connect with other movie lovers, FLIXORA is designed to make your experience simple and enjoyable.
+
+WHAT FLIXORA OFFERS
+
+1. Explore Movies
+Discover movies from different genres and categories. Explore a growing collection of entertainment content in one place.
+
+2. Detailed Movie Information
+Explore movie posters, backdrops, ratings, release dates, descriptions and other available details to help you choose what to watch.
+
+3. Personalized Experience
+Enjoy a modern, user-friendly interface designed to make browsing and exploring content easier.
+
+4. Community
+Connect with other FLIXORA members, share your thoughts, create posts and take part in entertainment discussions.
+
+5. Private Messaging
+Communicate privately with other community members through the messaging feature.
+
+6. Saved Movies
+Keep your favorite movies saved so you can easily find them again.
+
+7. Continuous Improvements
+We continuously aim to improve the platform with better performance, useful features and an enhanced user experience.
+
+OUR MISSION
+
+Our mission is to make entertainment discovery easier and more enjoyable by bringing movie exploration, personal collections and community interaction together in one platform.
+
+OUR VISION
+
+Our vision is to grow FLIXORA into a modern, user-focused entertainment platform that values simplicity, innovation, reliability and user experience.
+
+We believe entertainment is better when discovery and connection come together.
+
+APP INFORMATION
+
+Application Name: FLIXORA
+Version: 1.0.12
+Platform: Android
+Application Type: Entertainment
+
+DEVELOPER INFORMATION
+
+Developed & Maintained By
+
+MD : SHOHANUR ISLAM SHRABON
+
+Founder & Developer of FLIXORA
+
+Thank you for being a part of FLIXORA. Your support motivates us to keep improving and building a better entertainment experience.
+
+FLIXORA
+Entertainment Beyond Boundaries.
+
+© FLIXORA. All Rights Reserved.''',
+    );
+  }
+
+  void _showPrivacyPolicy() {
+    _showPolicyDialog(
+      title: 'Privacy Policy',
+      message: '''PRIVACY POLICY
+
+FLIXORA — Your Privacy Matters
+
+Last Updated: November 14, 2026
+
+Welcome to FLIXORA. Your privacy and the protection of your personal information are important to us.
+
+This Privacy Policy explains what information may be collected when you use FLIXORA, how it may be used, how it is protected and what choices you have regarding your information.
+
+By using FLIXORA, you acknowledge that you have read and understood this Privacy Policy.
+
+1. INFORMATION WE COLLECT
+
+To provide and maintain FLIXORA's features, certain information may be collected or stored.
+
+A. Account Information
+When you create or use an account, information may include:
+• User ID and account identification details.
+• Email address, if provided during registration.
+• Community display name.
+• Profile information you choose to provide.
+
+B. Community Information
+When you use the Community feature, information may include:
+• Posts and text you publish.
+• Comments and replies.
+• Likes and interactions.
+• Reports submitted by you.
+• Community profile information.
+
+Your posts and comments may be visible to other FLIXORA users.
+
+C. Private Messages
+FLIXORA provides private messaging between users.
+
+Messages and related conversation information may be stored to provide messaging functionality and maintain conversation history.
+
+Messages are intended for the relevant conversation participants. Please avoid sharing sensitive personal information unnecessarily.
+
+D. Saved Movies and Preferences
+When you use features such as Saved Movies, information about your saved content and preferences may be stored to provide a personalized experience.
+
+E. Technical Information
+Certain technical information may be processed to maintain app functionality, security and performance. This may include app-related information, device or operating-system details, connection information and technical error data, depending on the app's implementation.
+
+2. HOW WE USE YOUR INFORMATION
+
+Information processed through FLIXORA may be used to:
+• Create and manage user accounts.
+• Provide app features and services.
+• Display Community posts and comments.
+• Enable private messaging.
+• Save your selected movies and preferences.
+• Process reports and moderate Community content.
+• Help prevent misuse and protect users.
+• Maintain app security and performance.
+• Resolve technical problems and improve the user experience.
+
+We aim to use information only for legitimate app-related purposes.
+
+3. INFORMATION SHARING
+
+Your information is handled with respect for your privacy.
+• Community posts and comments may be visible to other users.
+• Private messages are intended for the participants of the conversation.
+• Certain information may be reviewed when necessary to investigate reports or address violations of Community rules.
+• Information may be disclosed when required by applicable law or necessary to protect the security of FLIXORA and its users.
+
+FLIXORA does not intend to sell users' personal information.
+
+4. DATA SECURITY
+
+We take reasonable steps to protect information processed through FLIXORA.
+
+Security measures may include:
+• Account access restrictions.
+• Authentication and authorization controls.
+• Database security policies.
+• Restricted access to protected information.
+• Security maintenance and monitoring.
+
+However, no digital platform can guarantee absolute security. Users should protect their account credentials and avoid sharing account access with others.
+
+5. DATA RETENTION
+
+Information may be retained for as long as reasonably necessary to provide FLIXORA's features, maintain functionality, protect platform security and meet applicable legal requirements.
+
+Retention periods may vary depending on the type of information and its purpose.
+
+6. YOUR PRIVACY CHOICES
+
+You should have reasonable control over the information you provide through FLIXORA.
+
+Depending on available app features, you may be able to:
+• Manage your profile information.
+• Choose what you publish in the Community.
+• Manage your saved movies.
+• Stop using Community or Messaging features.
+• Request correction or deletion of eligible personal information.
+
+Some information may need to be retained for security, legal or legitimate operational purposes.
+
+7. ACCOUNT AND DATA DELETION
+
+If you no longer wish to use FLIXORA, you may request deletion of your account and associated personal information.
+
+A deletion request may include:
+• Account-related information.
+• Community profile information.
+• Posts and comments, where eligible.
+• Other personal information associated with your account.
+
+Certain information may be retained where necessary for legal compliance, security or dispute resolution.
+
+Deletion requests may require account verification.
+
+8. CHILDREN'S PRIVACY
+
+FLIXORA is not specifically designed to collect personal information from children.
+
+We encourage parents and guardians to supervise children's use of online services and help them understand the importance of protecting personal information.
+
+If we become aware that personal information has been collected from a child in circumstances where it should not have been, appropriate steps will be taken as required by applicable law.
+
+9. CHANGES TO THIS PRIVACY POLICY
+
+We may update this Privacy Policy when FLIXORA introduces new features, improves existing services or changes its privacy practices.
+
+Updated versions will be published within the application with a revised Last Updated date.
+
+We encourage users to review this page periodically.
+
+10. PRIVACY QUESTIONS AND REQUESTS
+
+If you have questions, concerns or requests regarding your privacy or personal information, please use the official support or privacy request method provided by FLIXORA when available.
+
+11. YOUR AGREEMENT
+
+By using FLIXORA, you acknowledge that you have read and understood this Privacy Policy and how your information may be handled in connection with the application's features.
+
+FLIXORA
+Entertainment Beyond Boundaries.
+
+© FLIXORA. All Rights Reserved.''',
+    );
+  }
+
+  void _showPolicyDialog({required String title, required String message}) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: panel,
+        scrollable: true,
+        title: Text(
+          title,
+          style: const TextStyle(color: white, fontFamily: 'Arial'),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: ink70,
+            height: 1.45,
+            fontFamily: 'Arial',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            style: TextButton.styleFrom(
+              textStyle: const TextStyle(fontFamily: 'Arial'),
+            ),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _settingsContent() {
     return Column(children: [
       Expanded(child: ListView(padding: const EdgeInsets.fromLTRB(12, 14, 12, 16), children: [
@@ -7695,8 +7947,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.system_update, 'Check update', () => _showSettingsInfo('Check update', 'Automatic update checking is not connected to a release service yet. Install new FLIXORA versions from the official release when available.')),
-          _profileTile(Icons.info_outline, 'About us', () => _showSettingsInfo('About FLIXORA', 'FLIXORA is a free movie and series discovery and streaming app.')),
-          _profileTile(Icons.policy_outlined, 'Privacy Policy', () => _showSettingsInfo('Privacy Policy', 'The public privacy policy page will be added before release.')),
+          _profileTile(Icons.info_outline, 'About us', _showAboutUs),
+          _profileTile(Icons.policy_outlined, 'Privacy Policy', _showPrivacyPolicy),
           _profileTile(Icons.description_outlined, 'User Agreement', () => _showSettingsInfo('User Agreement', 'The user agreement page will be added before release.')),
         ]),
       ])),
