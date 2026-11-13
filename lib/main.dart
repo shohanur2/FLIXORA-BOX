@@ -9612,12 +9612,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   StreamSubscription<bool>? _bufferingSubscription;
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription<Tracks>? _tracksSubscription;
+  StreamSubscription<Track>? _activeTrackSubscription;
+  StreamSubscription<List<AudioDevice>>? _audioDevicesSubscription;
   StreamSubscription<bool>? _completedSubscription;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   final ValueNotifier<Duration> _positionNotifier =
       ValueNotifier<Duration>(Duration.zero);
+  bool _isSeeking = false;
+  Duration? _seekPreviewPosition;
+  Duration? _pendingSeekPosition;
+  Timer? _seekSyncTimer;
+  int _seekRequestToken = 0;
+  int _playerPointerCount = 0;
 
   bool _isPlaying = false;
   bool _isBuffering = false;
@@ -11074,14 +11082,36 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
-      if (!mounted || _isDisposed) return;
-      _updatePosition(value);
-      if (_errorMessage != null && value > Duration.zero) {
+      if (!mounted || _isDisposed || _isSeeking) return;
+
+      final safePosition = _duration > Duration.zero && value > _duration
+          ? _duration
+          : value;
+      final pendingSeek = _pendingSeekPosition;
+      if (pendingSeek != null) {
+        final difference = (safePosition - pendingSeek).inMilliseconds.abs();
+        // Ignore stale time-pos events until mpv has reached the requested
+        // seek target. This prevents the timeline snapping back or jumping
+        // to the end while a network seek is still resolving.
+        if (difference > 2500) return;
+        _pendingSeekPosition = null;
+        _seekSyncTimer?.cancel();
+      }
+
+      // Some streams emit a stale/end position while the demuxer is
+      // buffering. Keep the last stable position until playback resumes.
+      if (_isBuffering &&
+          (safePosition - _position).inMilliseconds.abs() > 2500) {
+        return;
+      }
+
+      _updatePosition(safePosition);
+      if (_errorMessage != null && safePosition > Duration.zero) {
         setState(() => _errorMessage = null);
       }
 
       if (_duration.inSeconds > 0) {
-        _saveResumePosition(value);
+        _saveResumePosition(safePosition);
       }
     });
 
@@ -11138,6 +11168,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
     });
 
+    // Recover gracefully if an active audio track is unexpectedly disabled
+    // by a stream/decoder reconfiguration while playable audio tracks remain.
+    _activeTrackSubscription = _player.stream.track.listen((track) {
+      if (!mounted || _isDisposed) return;
+      if (track.audio.id == 'no' && _tracks.audio.isNotEmpty) {
+        unawaited(_restoreAudioTrackAfterDropout());
+      }
+    });
+
+    // If the selected Bluetooth/output route disappears during playback,
+    // fall back to Android's automatic audio device instead of remaining silent.
+    _audioDevicesSubscription =
+        _player.stream.audioDevices.listen((devices) {
+      if (!mounted || _isDisposed) return;
+      final selectedDevice = _player.state.audioDevice;
+      if (selectedDevice.name != 'auto' &&
+          !devices.any((device) => device.name == selectedDevice.name)) {
+        unawaited(_restoreAudioDeviceAfterDisconnect());
+      }
+    });
+
     _completedSubscription = _player.stream.completed.listen((completed) {
       if (!completed || !mounted || _isDisposed) return;
 
@@ -11148,6 +11199,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       _clearResumePosition();
     });
+  }
+
+  Future<void> _restoreAudioTrackAfterDropout() async {
+    if (_isDisposed || _tracks.audio.isEmpty) return;
+    try {
+      await _player.setAudioTrack(AudioTrack.auto());
+      if (!_isDisposed && _audioDelay.abs() >= 0.01) {
+        await _applyAudioDelay(
+          _audioDelay,
+          persist: false,
+          showFeedback: false,
+        );
+      }
+    } catch (error) {
+      debugPrint('FLIXORA audio-track recovery failed: $error');
+    }
+  }
+
+  Future<void> _restoreAudioDeviceAfterDisconnect() async {
+    if (_isDisposed) return;
+    try {
+      await _player.setAudioDevice(AudioDevice.auto());
+    } catch (error) {
+      debugPrint('FLIXORA audio-device recovery failed: $error');
+    }
   }
 
   Future<void> _initializePlayer() async {
@@ -11165,6 +11241,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     _isOpening = true;
+    _seekSyncTimer?.cancel();
+    _seekRequestToken++;
+    _isSeeking = false;
+    _seekPreviewPosition = null;
+    _pendingSeekPosition = null;
     try {
       if (mounted) {
         setState(() {
@@ -11476,12 +11557,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final previewPosition = _gesturePreviewPosition;
 
     if (mode == 'seek' && previewPosition != null) {
-      await _player.seek(previewPosition);
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _updatePosition(previewPosition);
-        });
-      }
+      await _performSeek(previewPosition);
     }
 
     _gestureStartPoint = null;
@@ -11499,34 +11575,58 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _startHideTimer();
   }
 
+  Future<void> _performSeek(Duration requested) async {
+    if (_duration.inMilliseconds <= 0 || _isDisposed) return;
+
+    final target = Duration(
+      milliseconds: requested.inMilliseconds
+          .clamp(0, _duration.inMilliseconds)
+          .toInt(),
+    );
+    final requestToken = ++_seekRequestToken;
+
+    _seekSyncTimer?.cancel();
+    _isSeeking = false;
+    _seekPreviewPosition = null;
+    _pendingSeekPosition = target;
+    _positionNotifier.value = target;
+
+    // If the stream cannot seek (for example, a server without byte ranges),
+    // release the preview after a bounded wait and show mpv's actual position.
+    _seekSyncTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
+      _pendingSeekPosition = null;
+      final actual = _player.state.position;
+      final safeActual = _duration > Duration.zero && actual > _duration
+          ? _duration
+          : actual;
+      _updatePosition(safeActual);
+    });
+
+    try {
+      await _player.seek(target);
+    } catch (error) {
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
+      _seekSyncTimer?.cancel();
+      _pendingSeekPosition = null;
+      final actual = _player.state.position;
+      _updatePosition(
+        _duration > Duration.zero && actual > _duration ? _duration : actual,
+      );
+      debugPrint('FLIXORA seek failed: $error');
+    }
+  }
+
   Future<void> _seekBy(int seconds) async {
     if (_duration.inMilliseconds <= 0) return;
-
-    final next = _position + Duration(seconds: seconds);
-
-    final clamped = next < Duration.zero
-        ? Duration.zero
-        : next > _duration
-            ? _duration
-            : next;
-
-    await _player.seek(clamped);
-
-    if (mounted && !_isDisposed) {
-      setState(() => _updatePosition(clamped));
-    }
-
+    final base = _pendingSeekPosition ?? _position;
+    final next = base + Duration(seconds: seconds);
+    await _performSeek(next);
     _startHideTimer();
   }
 
   Future<void> _seekTo(double value) async {
-    final target = Duration(milliseconds: value.round());
-
-    await _player.seek(target);
-
-    if (mounted && !_isDisposed) {
-      setState(() => _updatePosition(target));
-    }
+    await _performSeek(Duration(milliseconds: value.round()));
   }
 
   String _formatDuration(Duration duration) {
@@ -11560,8 +11660,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       // mpv's software volume ceiling: 200% permits up to 2x amplification.
       await platformPlayer.setProperty('volume-max', '200');
+
+      if (widget.localFilePath == null) {
+        // Explicitly enable the network demuxer cache for MovieBox/WeFeed and
+        // direct network streams. Keep immediate initial playback, but let
+        // playback rebuffer briefly before resuming after an underrun.
+        await platformPlayer.setProperty('cache', 'yes');
+        await platformPlayer.setProperty('cache-pause', 'yes');
+        await platformPlayer.setProperty('cache-secs', '12');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+      }
     } catch (error) {
-      debugPrint('FLIXORA volume boost is unavailable: $error');
+      debugPrint('FLIXORA native playback configuration failed: $error');
     }
   }
 
@@ -13228,7 +13338,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               ValueListenableBuilder<Duration>(
                 valueListenable: _positionNotifier,
                 builder: (context, position, _) {
-                  final current = position.inMilliseconds
+                  final displayPosition =
+                      _isSeeking && _seekPreviewPosition != null
+                          ? _seekPreviewPosition!
+                          : position;
+                  final current = displayPosition.inMilliseconds
                       .toDouble()
                       .clamp(0.0, max > 0 ? max : 1.0)
                       .toDouble();
@@ -13236,7 +13350,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   return Row(
                     children: [
                       Text(
-                        _formatDuration(position),
+                        _formatDuration(displayPosition),
                         style: const TextStyle(
                           color: playerWhite,
                           fontSize: 10,
@@ -13262,10 +13376,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                             value: current,
                             min: 0,
                             max: max > 0 ? max : 1,
+                            onChangeStart: max > 0
+                                ? (value) {
+                                    _isSeeking = true;
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
+                                : null,
                             onChanged: max > 0
-                                ? (value) => _updatePosition(
-                                      Duration(milliseconds: value.round()),
-                                    )
+                                ? (value) {
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
                                 : null,
                             onChangeEnd: max > 0 ? _seekTo : null,
                           ),
@@ -13888,6 +14014,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _isDisposed = true;
     unawaited(PictureInPictureService.setEnabled(false));
     _gestureFeedbackTimer?.cancel();
+    _seekSyncTimer?.cancel();
+    _playerPointerCount = 0;
     _playerConnectionTimer?.cancel();
     _playbackErrorTimer?.cancel();
     unawaited(_resetApplicationBrightness());
@@ -13899,6 +14027,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _bufferingSubscription?.cancel();
     _errorSubscription?.cancel();
     _tracksSubscription?.cancel();
+    _activeTrackSubscription?.cancel();
+    _audioDevicesSubscription?.cancel();
     _completedSubscription?.cancel();
     _positionNotifier.dispose();
 
@@ -14572,6 +14702,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _startHideTimer();
   }
 
+  void _handlePlayerPointerDown(PointerDownEvent event) {
+    if (_isDisposed) return;
+    _playerPointerCount++;
+    if (mounted) setState(() {});
+  }
+
+  void _handlePlayerPointerEnd(PointerEvent event) {
+    if (_playerPointerCount > 0) _playerPointerCount--;
+    if (mounted) setState(() {});
+  }
+
   Widget _playerPageContent() {
     final related = _relatedMovies;
     final recommended = _recommendedMovies;
@@ -14608,13 +14749,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return Stack(
       children: [
         CustomScrollView(
-      slivers: [
+          // A touch that starts inside the Player belongs to the Player's
+          // swipe/seek/pinch controls, not the surrounding portrait page.
+          physics: _playerPointerCount > 0
+              ? const NeverScrollableScrollPhysics()
+              : null,
+          slivers: [
             SliverToBoxAdapter(
               child: _isMiniPlayer
                   ? const SizedBox(height: 8)
-                  : AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: _playerBody(),
+                  : Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: _handlePlayerPointerDown,
+                      onPointerUp: _handlePlayerPointerEnd,
+                      onPointerCancel: _handlePlayerPointerEnd,
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: _playerBody(),
+                      ),
                     ),
             ),
         SliverToBoxAdapter(
