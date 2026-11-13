@@ -1785,6 +1785,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
   String? _profileSection;
+  final TextEditingController _communityPostController = TextEditingController();
+  Future<bool>? _communityProfileFuture;
+  String? _communityProfileUserId;
+  Future<Map<String, dynamic>>? _communityFeedFuture;
+  Future<Map<String, dynamic>>? _communityInboxFuture;
+  bool _publishingCommunityPost = false;
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
@@ -2930,6 +2936,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _sliderController.dispose();
     _featuredCardsController.dispose();
     _searchController.dispose();
+    _communityPostController.dispose();
     _searchFocusNode.dispose();
     super.dispose();
   }
@@ -7489,6 +7496,655 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<bool> _ensureCommunityProfile() async {
+    final client=supabaseClient; final user=client?.auth.currentUser;
+    if(client==null||user==null)return false;
+    final existing=await client.from('community_profiles').select('user_id').eq('user_id',user.id).maybeSingle();
+    if(existing!=null)return true;
+    final controller=TextEditingController(text:(user.email??'').split('@').first.isEmpty?'FLIXORA User':(user.email??'').split('@').first);
+    final name=await showDialog<String>(context:context,barrierDismissible:false,builder:(dialogContext)=>AlertDialog(
+      backgroundColor:panel,title:const Text('Choose your Community name',style:TextStyle(color:white)),
+      content:TextField(controller:controller,maxLength:40,style:const TextStyle(color:white),decoration:const InputDecoration(hintText:'Display name')),
+      actions:[FilledButton(onPressed:(){final value=controller.text.trim();if(value.isNotEmpty&&value.length<=40)Navigator.pop(dialogContext,value);},child:const Text('Continue'))],
+    ));
+    controller.dispose(); if(name==null||name.trim().isEmpty)return false;
+    await client.from('community_profiles').insert({'user_id':user.id,'display_name':name.trim()});
+    return true;
+  }
+
+  Future<bool> _communityProfileTask() {
+    final userId = supabaseClient?.auth.currentUser?.id;
+    if (userId == null) return Future<bool>.value(false);
+    if (_communityProfileUserId != userId) {
+      _communityProfileUserId = userId;
+      _communityProfileFuture = null;
+      _communityFeedFuture = null;
+      _communityInboxFuture = null;
+    }
+    return _communityProfileFuture ??= _ensureCommunityProfile();
+  }
+
+  Future<Map<String, dynamic>> _loadCommunityFeed() async {
+    final client = supabaseClient!;
+    final posts = List<Map<String, dynamic>>.from(
+      await client.from('community_posts').select('*').isFilter('removed_at', null)
+          .order('created_at', ascending: false).limit(60),
+    );
+    final authorIds = posts.map((post) => post['author_id'].toString()).toSet().toList();
+    final postIds = posts.map((post) => post['id'].toString()).toList();
+    final profiles = authorIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await client.from('community_profiles').select('user_id,display_name,avatar_url')
+                .inFilter('user_id', authorIds),
+          );
+    final likes = postIds.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            await client.from('community_likes').select('post_id,user_id').inFilter('post_id', postIds),
+          );
+    return {'posts': posts, 'profiles': profiles, 'likes': likes};
+  }
+
+  Future<void> _refreshCommunityFeed() async {
+    final next = _loadCommunityFeed();
+    _communityFeedFuture = next;
+    if (mounted) setState(() {});
+    try { await next; } catch (_) {}
+  }
+
+  Widget _communityContent() {
+    final user = supabaseClient?.auth.currentUser;
+    if (user == null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.groups_outlined, color: gold, size: 48),
+        const SizedBox(height: 12),
+        const Text('Sign in to join FLIXORA Community', style: TextStyle(color: white)),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: _showVisitorLogin, child: const Text('Login / Sign Up')),
+      ]));
+    }
+    return FutureBuilder<bool>(
+      future: _communityProfileTask(),
+      builder: (context, profile) {
+        if (profile.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator(color: gold));
+        }
+        if (profile.hasError) {
+          return _profileMessagePage(Icons.error_outline, 'Community unavailable', profile.error.toString());
+        }
+        if (profile.data != true) {
+          return _profileMessagePage(Icons.person_outline, 'Profile setup required', 'Sign in to continue.');
+        }
+        return Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(14)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                TextField(
+                  controller: _communityPostController,
+                  minLines: 2,
+                  maxLines: 5,
+                  maxLength: 3000,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.newline,
+                  style: const TextStyle(color: white),
+                  decoration: const InputDecoration(
+                    hintText: 'Share a movie review or start a discussion...',
+                    hintStyle: TextStyle(color: ink54),
+                    border: InputBorder.none,
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: _publishingCommunityPost ? null : () async {
+                      final draft = _communityPostController.text.trim();
+                      if (draft.isEmpty) {
+                        _showMessage('Write something before publishing.');
+                        return;
+                      }
+                      setState(() => _publishingCommunityPost = true);
+                      try {
+                        await supabaseClient!.from('community_posts').insert({
+                          'author_id': user.id, 'body': draft,
+                        });
+                        _communityPostController.clear();
+                        _communityFeedFuture = _loadCommunityFeed();
+                        if (mounted) setState(() {});
+                      } catch (error) {
+                        _showMessage('Could not publish post: $error');
+                      } finally {
+                        if (mounted) setState(() => _publishingCommunityPost = false);
+                      }
+                    },
+                    icon: _publishingCommunityPost
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.send_rounded, size: 16),
+                    label: Text(_publishingCommunityPost ? 'Posting...' : 'Post'),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: _communityFeedFuture ??= _loadCommunityFeed(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator(color: gold));
+                }
+                if (snapshot.hasError) {
+                  return _profileMessagePage(Icons.wifi_off, 'Could not load Community', snapshot.error.toString());
+                }
+                final data = snapshot.data!;
+                final posts = data['posts'] as List<Map<String, dynamic>>;
+                final profiles = data['profiles'] as List<Map<String, dynamic>>;
+                final likes = data['likes'] as List<Map<String, dynamic>>;
+                if (posts.isEmpty) {
+                  return _profileMessagePage(Icons.forum_outlined, 'No Community posts yet',
+                      'Be the first to start a movie discussion.');
+                }
+                return RefreshIndicator(
+                  color: gold,
+                  backgroundColor: panel,
+                  onRefresh: _refreshCommunityFeed,
+                  child: ListView.separated(
+                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
+                    itemCount: posts.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final post = posts[index];
+                      final authorMatches = profiles.where((p) => p['user_id'] == post['author_id']);
+                      final author = authorMatches.isEmpty ? null : authorMatches.first;
+                      final postLikes = likes.where((l) => l['post_id'] == post['id']).toList();
+                      final liked = postLikes.any((l) => l['user_id'] == user.id);
+                      return Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: panel, borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: ink12),
+                        ),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [
+                            const CircleAvatar(radius: 17, backgroundColor: ink12,
+                                child: Icon(Icons.person, color: gold, size: 19)),
+                            const SizedBox(width: 9),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text((author?['display_name'] ?? 'FLIXORA User').toString(),
+                                  style: const TextStyle(color: white, fontWeight: FontWeight.w700)),
+                              Text(DateTime.tryParse(post['created_at'].toString())?.toLocal()
+                                      .toString().split('.').first ?? '',
+                                  style: const TextStyle(color: ink54, fontSize: 10)),
+                            ])),
+                            PopupMenuButton<String>(
+                              color: panel,
+                              onSelected: (value) { if (value == 'report') _reportCommunityPost(post); },
+                              itemBuilder: (_) => const [PopupMenuItem(value: 'report', child: Text('Report post'))],
+                              icon: const Icon(Icons.more_horiz, color: ink70),
+                            ),
+                          ]),
+                          const SizedBox(height: 12),
+                          Text(post['body'].toString(), style: const TextStyle(color: white, height: 1.4)),
+                          Row(children: [
+                            TextButton.icon(
+                              onPressed: () async {
+                                try {
+                                  if (liked) {
+                                    await supabaseClient!.from('community_likes').delete()
+                                        .eq('post_id', post['id']).eq('user_id', user.id);
+                                  } else {
+                                    await supabaseClient!.from('community_likes').insert({
+                                      'post_id': post['id'], 'user_id': user.id,
+                                    });
+                                  }
+                                  await _refreshCommunityFeed();
+                                } catch (error) { _showMessage('Like failed: $error'); }
+                              },
+                              icon: Icon(liked ? Icons.favorite : Icons.favorite_border,
+                                  color: liked ? Colors.redAccent : ink70, size: 18),
+                              label: Text('${postLikes.length}', style: const TextStyle(color: ink70)),
+                            ),
+                            TextButton.icon(
+                              onPressed: () => _openCommunityComments(post),
+                              icon: const Icon(Icons.mode_comment_outlined, color: ink70, size: 18),
+                              label: const Text('Comments', style: TextStyle(color: ink70)),
+                            ),
+                          ]),
+                        ]),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ]);
+      },
+    );
+  }
+
+  Future<void> _reportCommunityPost(Map<String, dynamic> post) async {
+    const reasons = ['Spam', 'Harassment', 'Hate or abuse', 'Spoilers', 'Other'];
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        backgroundColor: panel,
+        title: const Text('Report post', style: TextStyle(color: white)),
+        children: reasons.map((value) => SimpleDialogOption(
+          onPressed: () => Navigator.pop(dialogContext, value),
+          child: Text(value, style: const TextStyle(color: white)),
+        )).toList(),
+      ),
+    );
+    if (reason == null) return;
+    try {
+      await supabaseClient!.from('community_reports').insert({
+        'reporter_id': supabaseClient!.auth.currentUser!.id,
+        'target_type': 'post', 'target_id': post['id'],
+        'reported_user_id': post['author_id'], 'reason': reason,
+      });
+      _showMessage('Report submitted for review.');
+    } catch (error) { _showMessage('Could not submit report: $error'); }
+  }
+
+  Future<void> _openCommunityComments(Map<String, dynamic> post) async {
+    final client = supabaseClient!;
+    final controller = TextEditingController();
+    final commentsStream = client.from('community_comments').stream(primaryKey: ['id'])
+        .eq('post_id', post['id']).order('created_at');
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+        builder: (sheetContext) {
+          final availableHeight = MediaQuery.sizeOf(sheetContext).height -
+              MediaQuery.viewInsetsOf(sheetContext).bottom;
+          final sheetHeight = (availableHeight * 0.72).clamp(240.0, 560.0).toDouble();
+          return StatefulBuilder(
+            builder: (context, setSheetState) => AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+              child: SizedBox(height: sheetHeight, child: Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+                  child: Row(children: [
+                    const Expanded(child: Text('Discussion', style: TextStyle(
+                      color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+                    IconButton(onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(Icons.close, color: ink70)),
+                  ]),
+                ),
+                Expanded(child: StreamBuilder<List<Map<String, dynamic>>>(
+                  stream: commentsStream,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) return Center(child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Could not load comments: ${snapshot.error}',
+                          style: const TextStyle(color: ink70)),
+                    ));
+                    final comments = snapshot.data ?? [];
+                    if (comments.isEmpty) return const Center(child: Text(
+                      'No comments yet. Start the discussion.', style: TextStyle(color: ink54)));
+                    return ListView.builder(
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      itemCount: comments.length,
+                      itemBuilder: (context, index) => Align(
+                        alignment: Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 5),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(color: ink10, borderRadius: BorderRadius.circular(10)),
+                          child: Text(comments[index]['body'].toString(),
+                              style: const TextStyle(color: white)),
+                        ),
+                      ),
+                    );
+                  },
+                )),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                    Expanded(child: TextField(
+                      controller: controller, minLines: 1, maxLines: 4,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.newline,
+                      style: const TextStyle(color: white),
+                      decoration: InputDecoration(
+                        hintText: 'Write a comment...', filled: true, fillColor: ink10,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide.none),
+                      ),
+                    )),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.send_rounded, color: gold),
+                      onPressed: () async {
+                        final body = controller.text.trim();
+                        if (body.isEmpty) return;
+                        try {
+                          await client.from('community_comments').insert({
+                            'post_id': post['id'], 'author_id': client.auth.currentUser!.id,
+                            'body': body,
+                          });
+                          controller.clear();
+                          setSheetState(() {});
+                        } catch (error) { _showMessage('Could not comment: $error'); }
+                      },
+                    ),
+                  ]),
+                ),
+              ])),
+            ),
+          );
+        },
+      );
+    } finally { controller.dispose(); }
+  }
+
+  Future<Map<String, dynamic>> _loadCommunityInbox() async {
+    final client = supabaseClient!;
+    final userId = client.auth.currentUser!.id;
+    final memberships = List<Map<String, dynamic>>.from(
+      await client.from('conversation_members').select('conversation_id').eq('user_id', userId),
+    );
+    final conversationIds = memberships.map((m) => m['conversation_id'].toString()).toList();
+    final inbox = <Map<String, dynamic>>[];
+    if (conversationIds.isNotEmpty) {
+      final allMembers = List<Map<String, dynamic>>.from(
+        await client.from('conversation_members').select('conversation_id,user_id')
+            .inFilter('conversation_id', conversationIds),
+      );
+      final otherUserIds = allMembers.where((m) => m['user_id'] != userId)
+          .map((m) => m['user_id'].toString()).toSet().toList();
+      final profiles = otherUserIds.isEmpty ? <Map<String, dynamic>>[] :
+          List<Map<String, dynamic>>.from(await client.from('community_profiles')
+              .select('user_id,display_name').inFilter('user_id', otherUserIds));
+      final lastMessages = List<Map<String, dynamic>>.from(await client.from('direct_messages')
+          .select('conversation_id,body,created_at').inFilter('conversation_id', conversationIds)
+          .order('created_at', ascending: false));
+      for (final membership in memberships) {
+        final conversationId = membership['conversation_id'].toString();
+        final other = allMembers.where((m) => m['conversation_id'].toString() == conversationId &&
+            m['user_id'] != userId);
+        if (other.isEmpty) continue;
+        final otherUserId = other.first['user_id'];
+        final profile = profiles.where((p) => p['user_id'] == otherUserId);
+        final last = lastMessages.where((m) => m['conversation_id'].toString() == conversationId);
+        inbox.add({
+          'conversation_id': conversationId,
+          'display_name': profile.isEmpty ? 'FLIXORA User' : profile.first['display_name'],
+          'last_message': last.isEmpty ? '' : last.first['body'],
+        });
+      }
+    }
+    final availableProfiles = List<Map<String, dynamic>>.from(
+      await client.from('community_profiles').select('user_id,display_name')
+          .neq('user_id', userId).order('display_name').limit(100),
+    );
+    return {'inbox': inbox, 'profiles': availableProfiles};
+  }
+
+  Future<void> _startCommunityChat(String targetUserId) async {
+    try {
+      final conversationId = await supabaseClient!.rpc(
+        'start_direct_conversation', params: {'p_target_user': targetUserId},
+      );
+      if (conversationId == null) throw Exception('Conversation could not be created.');
+      await _openCommunityChat(conversationId.toString());
+      _communityInboxFuture = _loadCommunityInbox();
+      if (mounted) setState(() {});
+    } catch (error) { _showMessage('Could not start chat: $error'); }
+  }
+
+  Future<void> _showNewCommunityMessagePicker(List<Map<String, dynamic>> profiles) async {
+    if (profiles.isEmpty) {
+      _showMessage('No other FLIXORA members are available yet.');
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.sizeOf(sheetContext).height * 0.65,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+            child: Row(children: [
+              const Expanded(child: Text('New Message', style: TextStyle(
+                color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+              IconButton(onPressed: () => Navigator.pop(sheetContext),
+                  icon: const Icon(Icons.close, color: ink70)),
+            ]),
+          ),
+          Expanded(child: ListView.separated(
+            itemCount: profiles.length,
+            separatorBuilder: (_, __) => const Divider(color: ink10, height: 1),
+            itemBuilder: (context, index) {
+              final profile = profiles[index];
+              return ListTile(
+                leading: const CircleAvatar(backgroundColor: ink12,
+                    child: Icon(Icons.person_outline, color: gold)),
+                title: Text(profile['display_name'].toString(), style: const TextStyle(color: white)),
+                trailing: const Icon(Icons.chat_bubble_outline, color: gold),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _startCommunityChat(profile['user_id'].toString());
+                },
+              );
+            },
+          )),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _openCommunityChat(String conversationId) async {
+    final client = supabaseClient!;
+    final userId = client.auth.currentUser!.id;
+    final controller = TextEditingController();
+    // Read receipts are best-effort: a read-time update must never prevent
+    // the conversation and its message composer from opening.
+    try {
+      await client.from('conversation_members').update({
+        'last_read_at': DateTime.now().toUtc().toIso8601String(),
+      }).eq('conversation_id', conversationId).eq('user_id', userId);
+    } catch (_) {}
+
+    final messageStream = client.from('direct_messages').stream(primaryKey: ['id'])
+        .eq('conversation_id', conversationId).order('created_at');
+    try {
+      await showModalBottomSheet<void>(
+        context: context, isScrollControlled: true, useSafeArea: true, backgroundColor: panel,
+        builder: (sheetContext) {
+          var sending = false;
+          final availableHeight = MediaQuery.sizeOf(sheetContext).height -
+              MediaQuery.viewInsetsOf(sheetContext).bottom;
+          final sheetHeight = (availableHeight * 0.72).clamp(260.0, 600.0).toDouble();
+          return StatefulBuilder(
+            builder: (context, setSheetState) {
+              Future<void> sendMessage() async {
+                final body = controller.text.trim();
+                if (body.isEmpty || sending) return;
+                setSheetState(() => sending = true);
+                try {
+                  await client.from('direct_messages').insert({
+                    'conversation_id': conversationId, 'sender_id': userId, 'body': body,
+                  });
+                  controller.clear();
+                } catch (error) {
+                  _showMessage('Message not sent: $error');
+                } finally {
+                  if (sheetContext.mounted) setSheetState(() => sending = false);
+                }
+              }
+              return AnimatedPadding(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+                child: SizedBox(height: sheetHeight, child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
+                    child: Row(children: [
+                      const Expanded(child: Text('Messages', style: TextStyle(
+                        color: white, fontSize: 17, fontWeight: FontWeight.bold))),
+                      IconButton(onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, color: ink70)),
+                    ]),
+                  ),
+                  Expanded(child: StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: messageStream,
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) return Center(child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text('Could not load messages: ${snapshot.error}',
+                            style: const TextStyle(color: ink70)),
+                      ));
+                      final messages = snapshot.data ?? [];
+                      if (messages.isEmpty) return const Center(child: Text(
+                        'Say hello to start the conversation.', style: TextStyle(color: ink54)));
+                      return ListView.builder(
+                        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          final item = messages[index];
+                          final mine = item['sender_id'] == userId;
+                          return Align(
+                            alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              padding: const EdgeInsets.all(10),
+                              constraints: const BoxConstraints(maxWidth: 300),
+                              decoration: BoxDecoration(
+                                color: mine ? gold.withValues(alpha: 0.2) : ink10,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(item['body'].toString(), style: const TextStyle(color: white)),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  )),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                      Expanded(child: TextField(
+                        controller: controller, minLines: 1, maxLines: 4,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => sendMessage(),
+                        style: const TextStyle(color: white),
+                        decoration: InputDecoration(
+                          hintText: 'Write a message...', filled: true, fillColor: ink10,
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide.none),
+                        ),
+                      )),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: sending ? null : sendMessage,
+                        style: FilledButton.styleFrom(backgroundColor: gold, foregroundColor: bg,
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+                        child: sending ? const SizedBox(width: 17, height: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send_rounded, size: 18),
+                      ),
+                    ]),
+                  ),
+                ])),
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<Map<String, dynamic>> _communityInboxTask() {
+    return _communityInboxFuture ??= _loadCommunityInbox();
+  }
+
+  Widget _messagesContent() {
+    final user = supabaseClient?.auth.currentUser;
+    if (user == null) {
+      return Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Icon(Icons.message_outlined, color: gold, size: 48),
+        const SizedBox(height: 12),
+        const Text('Sign in to use FLIXORA Messages', style: TextStyle(color: white)),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: _showVisitorLogin, child: const Text('Login / Sign Up')),
+      ]));
+    }
+    return FutureBuilder<bool>(
+      future: _communityProfileTask(),
+      builder: (context, profile) {
+        if (profile.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator(color: gold));
+        }
+        if (profile.hasError || profile.data != true) {
+          return _profileMessagePage(Icons.error_outline, 'Messages unavailable',
+              profile.hasError ? profile.error.toString() : 'Community profile setup is required.');
+        }
+        return FutureBuilder<Map<String, dynamic>>(
+          future: _communityInboxTask(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator(color: gold));
+            }
+            if (snapshot.hasError) {
+              return _profileMessagePage(Icons.error_outline, 'Could not load Messages',
+                  snapshot.error.toString());
+            }
+            final inbox = snapshot.data!['inbox'] as List<Map<String, dynamic>>;
+            final profiles = snapshot.data!['profiles'] as List<Map<String, dynamic>>;
+            return ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
+              children: [
+                SizedBox(width: double.infinity, child: FilledButton.icon(
+                  onPressed: () => _showNewCommunityMessagePicker(profiles),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: const Text('New Message'),
+                )),
+                const SizedBox(height: 16),
+                if (inbox.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: Text('No conversations yet. Start a new message.',
+                        style: TextStyle(color: ink54))),
+                  )
+                else ...[
+                  const Padding(padding: EdgeInsets.only(bottom: 8),
+                    child: Text('Your conversations', style: TextStyle(
+                      color: white, fontSize: 16, fontWeight: FontWeight.bold))),
+                  ...inbox.map((chat) => Card(
+                    color: panel,
+                    child: ListTile(
+                      leading: const CircleAvatar(backgroundColor: ink12,
+                          child: Icon(Icons.person, color: gold)),
+                      title: Text(chat['display_name'].toString(), style: const TextStyle(color: white)),
+                      subtitle: Text(chat['last_message'].toString(), maxLines: 1,
+                          overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54)),
+                      trailing: const Icon(Icons.chevron_right, color: ink54),
+                      onTap: () => _openCommunityChat(chat['conversation_id'].toString()),
+                    ),
+                  )),
+                ],
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _profileSectionContent() {
     switch (_profileSection) {
       case 'Watch History':
@@ -7507,20 +8163,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'FLIXORA rewards are not enabled yet.',
         );
       case 'Messages':
-        return _profileMessagePage(
-          Icons.notifications_none, 'No new messages',
-          'You are all caught up. FLIXORA messages will appear here.',
-        );
+        return _messagesContent();
       case 'TV Download & Web Link':
         return _profileMessagePage(
           Icons.live_tv_outlined, 'TV links are not connected yet',
           'This section is reserved for verified TV download and web links.',
         );
       case 'Community':
-        return _profileMessagePage(
-          Icons.groups_outlined, 'Community is coming soon',
-          'Community features are not connected in this version.',
-        );
+        return _communityContent();
       default:
         return _profileContent();
     }
@@ -7534,6 +8184,459 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       title: Text(title, style: const TextStyle(color: white, fontSize: 15, fontStyle: FontStyle.italic)),
       subtitle: Padding(padding: const EdgeInsets.only(top: 7), child: Text(subtitle, style: const TextStyle(color: ink60, fontSize: 12, height: 1.3))),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+    );
+  }
+
+  void _showAboutUs() {
+    _showPolicyDialog(
+      title: 'About FLIXORA',
+      message: '''ABOUT FLIXORA
+
+Your World of Entertainment
+
+Welcome to FLIXORA — a modern entertainment platform designed to bring movies, discovery and community together in one place.
+
+FLIXORA aims to provide users with a smooth, convenient and enjoyable entertainment experience through a clean interface, organized movie collections and easy-to-use features.
+
+Whether you want to discover something new, explore movie details, save your favorites or connect with other movie lovers, FLIXORA is designed to make your experience simple and enjoyable.
+
+WHAT FLIXORA OFFERS
+
+1. Explore Movies
+Discover movies from different genres and categories. Explore a growing collection of entertainment content in one place.
+
+2. Detailed Movie Information
+Explore movie posters, backdrops, ratings, release dates, descriptions and other available details to help you choose what to watch.
+
+3. Personalized Experience
+Enjoy a modern, user-friendly interface designed to make browsing and exploring content easier.
+
+4. Community
+Connect with other FLIXORA members, share your thoughts, create posts and take part in entertainment discussions.
+
+5. Private Messaging
+Communicate privately with other community members through the messaging feature.
+
+6. Saved Movies
+Keep your favorite movies saved so you can easily find them again.
+
+7. Continuous Improvements
+We continuously aim to improve the platform with better performance, useful features and an enhanced user experience.
+
+OUR MISSION
+
+Our mission is to make entertainment discovery easier and more enjoyable by bringing movie exploration, personal collections and community interaction together in one platform.
+
+OUR VISION
+
+Our vision is to grow FLIXORA into a modern, user-focused entertainment platform that values simplicity, innovation, reliability and user experience.
+
+We believe entertainment is better when discovery and connection come together.
+
+APP INFORMATION
+
+Application Name: FLIXORA
+Version: 1.0.12
+Platform: Android
+Application Type: Entertainment
+
+DEVELOPER INFORMATION
+
+Developed & Maintained By
+
+MD : SHOHANUR ISLAM SHRABON
+
+Founder & Developer of FLIXORA
+
+Thank you for being a part of FLIXORA. Your support motivates us to keep improving and building a better entertainment experience.
+
+FLIXORA
+Entertainment Beyond Boundaries.
+
+© FLIXORA. All Rights Reserved.''',
+    );
+  }
+
+  void _showPrivacyPolicy() {
+    _showPolicyDialog(
+      title: 'Privacy Policy',
+      message: '''PRIVACY POLICY
+
+FLIXORA — Your Privacy Matters
+
+Last Updated: November 14, 2026
+
+Welcome to FLIXORA. Your privacy and the protection of your personal information are important to us.
+
+This Privacy Policy explains what information may be collected when you use FLIXORA, how it may be used, how it is protected and what choices you have regarding your information.
+
+By using FLIXORA, you acknowledge that you have read and understood this Privacy Policy.
+
+1. INFORMATION WE COLLECT
+
+To provide and maintain FLIXORA's features, certain information may be collected or stored.
+
+A. Account Information
+When you create or use an account, information may include:
+• User ID and account identification details.
+• Email address, if provided during registration.
+• Community display name.
+• Profile information you choose to provide.
+
+B. Community Information
+When you use the Community feature, information may include:
+• Posts and text you publish.
+• Comments and replies.
+• Likes and interactions.
+• Reports submitted by you.
+• Community profile information.
+
+Your posts and comments may be visible to other FLIXORA users.
+
+C. Private Messages
+FLIXORA provides private messaging between users.
+
+Messages and related conversation information may be stored to provide messaging functionality and maintain conversation history.
+
+Messages are intended for the relevant conversation participants. Please avoid sharing sensitive personal information unnecessarily.
+
+D. Saved Movies and Preferences
+When you use features such as Saved Movies, information about your saved content and preferences may be stored to provide a personalized experience.
+
+E. Technical Information
+Certain technical information may be processed to maintain app functionality, security and performance. This may include app-related information, device or operating-system details, connection information and technical error data, depending on the app's implementation.
+
+2. HOW WE USE YOUR INFORMATION
+
+Information processed through FLIXORA may be used to:
+• Create and manage user accounts.
+• Provide app features and services.
+• Display Community posts and comments.
+• Enable private messaging.
+• Save your selected movies and preferences.
+• Process reports and moderate Community content.
+• Help prevent misuse and protect users.
+• Maintain app security and performance.
+• Resolve technical problems and improve the user experience.
+
+We aim to use information only for legitimate app-related purposes.
+
+3. INFORMATION SHARING
+
+Your information is handled with respect for your privacy.
+• Community posts and comments may be visible to other users.
+• Private messages are intended for the participants of the conversation.
+• Certain information may be reviewed when necessary to investigate reports or address violations of Community rules.
+• Information may be disclosed when required by applicable law or necessary to protect the security of FLIXORA and its users.
+
+FLIXORA does not intend to sell users' personal information.
+
+4. DATA SECURITY
+
+We take reasonable steps to protect information processed through FLIXORA.
+
+Security measures may include:
+• Account access restrictions.
+• Authentication and authorization controls.
+• Database security policies.
+• Restricted access to protected information.
+• Security maintenance and monitoring.
+
+However, no digital platform can guarantee absolute security. Users should protect their account credentials and avoid sharing account access with others.
+
+5. DATA RETENTION
+
+Information may be retained for as long as reasonably necessary to provide FLIXORA's features, maintain functionality, protect platform security and meet applicable legal requirements.
+
+Retention periods may vary depending on the type of information and its purpose.
+
+6. YOUR PRIVACY CHOICES
+
+You should have reasonable control over the information you provide through FLIXORA.
+
+Depending on available app features, you may be able to:
+• Manage your profile information.
+• Choose what you publish in the Community.
+• Manage your saved movies.
+• Stop using Community or Messaging features.
+• Request correction or deletion of eligible personal information.
+
+Some information may need to be retained for security, legal or legitimate operational purposes.
+
+7. ACCOUNT AND DATA DELETION
+
+If you no longer wish to use FLIXORA, you may request deletion of your account and associated personal information.
+
+A deletion request may include:
+• Account-related information.
+• Community profile information.
+• Posts and comments, where eligible.
+• Other personal information associated with your account.
+
+Certain information may be retained where necessary for legal compliance, security or dispute resolution.
+
+Deletion requests may require account verification.
+
+8. CHILDREN'S PRIVACY
+
+FLIXORA is not specifically designed to collect personal information from children.
+
+We encourage parents and guardians to supervise children's use of online services and help them understand the importance of protecting personal information.
+
+If we become aware that personal information has been collected from a child in circumstances where it should not have been, appropriate steps will be taken as required by applicable law.
+
+9. CHANGES TO THIS PRIVACY POLICY
+
+We may update this Privacy Policy when FLIXORA introduces new features, improves existing services or changes its privacy practices.
+
+Updated versions will be published within the application with a revised Last Updated date.
+
+We encourage users to review this page periodically.
+
+10. PRIVACY QUESTIONS AND REQUESTS
+
+If you have questions, concerns or requests regarding your privacy or personal information, please use the official support or privacy request method provided by FLIXORA when available.
+
+11. YOUR AGREEMENT
+
+By using FLIXORA, you acknowledge that you have read and understood this Privacy Policy and how your information may be handled in connection with the application's features.
+
+FLIXORA
+Entertainment Beyond Boundaries.
+
+© FLIXORA. All Rights Reserved.''',
+    );
+  }
+
+  void _showPolicyDialog({required String title, required String message}) {
+    final isPrivacy = title.toLowerCase().contains('privacy');
+    final paragraphs = message
+        .split(RegExp(r'\n\s*\n'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (pageContext) => Scaffold(
+          backgroundColor: bg,
+          appBar: AppBar(
+            backgroundColor: bg,
+            elevation: 0,
+            leading: IconButton(
+              tooltip: 'Back',
+              onPressed: () => Navigator.of(pageContext).pop(),
+              icon: const Icon(Icons.arrow_back_rounded, color: white),
+            ),
+            title: Text(
+              title,
+              style: const TextStyle(
+                color: white,
+                fontFamily: 'Arial',
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            centerTitle: false,
+          ),
+          body: SafeArea(
+            top: false,
+            child: SelectionArea(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 30),
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: panel,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: gold.withOpacity(0.28)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 46,
+                          height: 46,
+                          decoration: BoxDecoration(
+                            color: gold.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Icon(
+                            isPrivacy
+                                ? Icons.privacy_tip_outlined
+                                : Icons.movie_creation_outlined,
+                            color: goldLight,
+                            size: 25,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          isPrivacy
+                              ? 'Your Privacy Matters'
+                              : 'Your World of Entertainment',
+                          style: const TextStyle(
+                            color: white,
+                            fontFamily: 'Arial',
+                            fontSize: 21,
+                            height: 1.25,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          isPrivacy
+                              ? 'Learn how FLIXORA handles information and protects your privacy.'
+                              : 'Discover what FLIXORA is, what it offers and the vision behind it.',
+                          style: const TextStyle(
+                            color: ink70,
+                            fontFamily: 'Arial',
+                            fontSize: 13,
+                            height: 1.5,
+                          ),
+                        ),
+                        if (isPrivacy) ...[
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Last Updated: November 14, 2026',
+                            style: TextStyle(
+                              color: goldLight,
+                              fontFamily: 'Arial',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  for (final paragraph in paragraphs)
+                    _policyDocumentBlock(paragraph),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: Text(
+                      'FLIXORA  •  Entertainment Beyond Boundaries.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: ink54,
+                        fontFamily: 'Arial',
+                        fontSize: 11,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _policyDocumentBlock(String paragraph) {
+    final lines = paragraph
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList(growable: false);
+    if (lines.isEmpty) return const SizedBox.shrink();
+
+    final firstLine = lines.first;
+    final isSectionHeading = lines.length == 1 &&
+        (firstLine == firstLine.toUpperCase() ||
+            RegExp(r'^\d+\.\s').hasMatch(firstLine) ||
+            RegExp(r'^[A-Z]\.\s').hasMatch(firstLine));
+
+    if (isSectionHeading) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 18, bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 3,
+              height: 20,
+              decoration: BoxDecoration(
+                color: gold,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                firstLine,
+                style: const TextStyle(
+                  color: goldLight,
+                  fontFamily: 'Arial',
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final isBulletList = lines.every(
+      (line) => line.startsWith('•') || RegExp(r'^\d+\.\s').hasMatch(line),
+    );
+    if (isBulletList) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: panel,
+          borderRadius: BorderRadius.circular(13),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final line in lines)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2),
+                      child: Icon(Icons.circle, color: gold, size: 6),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        line.replaceFirst(RegExp(r'^(?:•|\\d+\\.)\\s*'), ''),
+                        style: const TextStyle(
+                          color: ink70,
+                          fontFamily: 'Arial',
+                          fontSize: 13,
+                          height: 1.55,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Text(
+        paragraph,
+        style: const TextStyle(
+          color: ink70,
+          fontFamily: 'Arial',
+          fontSize: 13,
+          height: 1.65,
+        ),
+      ),
     );
   }
 
@@ -7555,8 +8658,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         const Padding(padding: EdgeInsets.fromLTRB(4, 0, 4, 9), child: Text('More info and support', style: TextStyle(color: ink70, fontSize: 13))),
         _profileGroup([
           _profileTile(Icons.system_update, 'Check update', () => _showSettingsInfo('Check update', 'Automatic update checking is not connected to a release service yet. Install new FLIXORA versions from the official release when available.')),
-          _profileTile(Icons.info_outline, 'About us', () => _showSettingsInfo('About FLIXORA', 'FLIXORA is a free movie and series discovery and streaming app.')),
-          _profileTile(Icons.policy_outlined, 'Privacy Policy', () => _showSettingsInfo('Privacy Policy', 'The public privacy policy page will be added before release.')),
+          _profileTile(Icons.info_outline, 'About us', _showAboutUs),
+          _profileTile(Icons.policy_outlined, 'Privacy Policy', _showPrivacyPolicy),
           _profileTile(Icons.description_outlined, 'User Agreement', () => _showSettingsInfo('User Agreement', 'The user agreement page will be added before release.')),
         ]),
       ])),
