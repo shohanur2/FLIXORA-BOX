@@ -11713,6 +11713,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
       backgroundColor: playerPanel,
       builder: (sheetContext) {
         var fontSize = _subtitleFontSize;
@@ -12713,6 +12716,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       context: context,
       backgroundColor: playerPanel,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
       builder: (context) {
         const speeds = [
           0.25,
@@ -12734,8 +12740,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             return SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 25),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
@@ -12924,8 +12931,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                       },
                     ),
                   ],
+                  ),
                 ),
-              ),            );
+              ),
+            );
           },
         );
       },
@@ -12938,6 +12947,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       context: context,
       backgroundColor: playerPanel,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
       builder: (sheetContext) => StatefulBuilder(
         builder: (sheetContext, updateSheet) {
           Future<void> persist() => _saveGesturePreferences();
