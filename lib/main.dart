@@ -9601,7 +9601,7 @@ class MoviePlayerScreen extends StatefulWidget {
   State<MoviePlayerScreen> createState() => _MoviePlayerScreenState();
 }
 
-class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
+class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindingObserver {
   late final Player _player;
   late final VideoController _videoController;
   late Future<Map<String, dynamic>> _movieDetailsFuture;
@@ -9626,6 +9626,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isFullscreen = false;
   bool _isMiniPlayer = false;
   bool _isDisposed = false;
+  bool _wasPlayingBeforeBackground = false;
+  bool _isBackgrounded = false;
+  bool _recoveringFromBackground = false;
+  Duration _backgroundResumePosition = Duration.zero;
+  DateTime? _lastBackgroundResumeAt;
   bool _initialized = false;
   bool _isOpening = false;
   bool _playerIsOnline = true;
@@ -9753,6 +9758,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _playerIsOnline = widget.isOnline;
     _selectedSeasonNumber = widget.localSeasonNumber ?? 1;
@@ -9763,13 +9769,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _player = Player(
       configuration: PlayerConfiguration(
         title: 'FLIXORA',
-        bufferSize: 48 * 1024 * 1024,
+        // A modestly larger network buffer helps absorb short bandwidth dips.
+        bufferSize: 64 * 1024 * 1024,
         libass: true,
       ),
     );
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
+    unawaited(_configureVolumeBoost());
     _loadSubtitlePreferences();
     _loadAudioDelayPreference();
     _loadGesturePreferences();
@@ -11035,6 +11043,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _handlePlayerError(value);
         return;
       }
+      final recentResume = _lastBackgroundResumeAt != null &&
+          DateTime.now().difference(_lastBackgroundResumeAt!) <
+              const Duration(seconds: 7);
+      if (_recoveringFromBackground || recentResume) {
+        debugPrint('Deferring transient playback error during background recovery.');
+        return;
+      }
       final shouldShow = PlaybackErrorPolicy.shouldShowError(
         isOpening: _isOpening,
         isPlaying: _isPlaying,
@@ -11444,8 +11459,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     } else if (_gestureMode == 'volume') {
       final height = MediaQuery.of(context).size.height;
       final volume = (_gestureStartVolume -
-              delta.dy / height * 100 * _gestureSensitivity)
-          .clamp(0.0, 100.0)
+              delta.dy / height * 200 * _gestureSensitivity)
+          .clamp(0.0, 200.0)
           .toDouble();
       _changeVolume(volume);
       if (mounted && !_isDisposed) {
@@ -11538,8 +11553,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _configureVolumeBoost() async {
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) return;
+
+    try {
+      // mpv's software volume ceiling: 200% permits up to 2x amplification.
+      await platformPlayer.setProperty('volume-max', '200');
+    } catch (error) {
+      debugPrint('FLIXORA volume boost is unavailable: $error');
+    }
+  }
+
   Future<void> _changeVolume(double value) async {
-    final volume = value.clamp(0.0, 100.0);
+    final volume = value.clamp(0.0, 200.0).toDouble();
 
     await _player.setVolume(volume);
 
@@ -13257,58 +13284,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 },
               ),
               Row(
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  IconButton(
-                    constraints: BoxConstraints(
-                      minWidth: compact ? 27 : 34,
-                      minHeight: compact ? 30 : 38,
-                    ),
-                    padding: EdgeInsets.zero,
-                    onPressed: () => _changeVolume(_volume - 10),
-                    icon: const Icon(
-                      Icons.volume_down_rounded,
-                      color: playerWhite,
-                      size: 19,
-                    ),
-                  ),
-                  SizedBox(
-                    width: compact ? 48 : 58,
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 3,
-                        activeTrackColor: playerGold,
-                        inactiveTrackColor: const Color(0x4DFFFFFF),
-                        thumbColor: playerWhite,
-                        overlayColor: playerGold.withValues(alpha: 0.16),
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 5,
-                        ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 10,
-                        ),
-                      ),
-                      child: Slider(
-                        value: _volume.clamp(0.0, 100.0),
-                        min: 0,
-                        max: 100,
-                        onChanged: _changeVolume,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    constraints: BoxConstraints(
-                      minWidth: compact ? 27 : 34,
-                      minHeight: compact ? 30 : 38,
-                    ),
-                    padding: EdgeInsets.zero,
-                    onPressed: () => _changeVolume(_volume + 10),
-                    icon: const Icon(
-                      Icons.volume_up_rounded,
-                      color: playerWhite,
-                      size: 19,
-                    ),
-                  ),
-                  const Spacer(),
                   TextButton(
                     style: TextButton.styleFrom(
                       foregroundColor: playerGoldLight,
@@ -13831,7 +13808,83 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (!_isBackgrounded) {
+        _isBackgrounded = true;
+        _wasPlayingBeforeBackground = _isPlaying;
+        if (_wasPlayingBeforeBackground) {
+          _backgroundResumePosition = _position;
+          unawaited(_saveResumePosition(_position));
+        }
+      }
+      _cancelHideTimer();
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      _isBackgrounded = false;
+      if (_wasPlayingBeforeBackground) {
+        _lastBackgroundResumeAt = DateTime.now();
+        unawaited(_recoverPlaybackAfterBackground());
+      }
+    }
+  }
+
+  Future<void> _recoverPlaybackAfterBackground() async {
+    if (!mounted || _isDisposed || _recoveringFromBackground) return;
+    _recoveringFromBackground = true;
+
+    try {
+      await Future.delayed(const Duration(milliseconds: 450));
+      if (!mounted || _isDisposed) return;
+
+      final savedPosition = _backgroundResumePosition;
+      if (!_isPlaying) {
+        await _player.play();
+        await Future.delayed(const Duration(milliseconds: 650));
+      }
+
+      if (!mounted || _isDisposed) return;
+
+      // Reopen only the exact Media already held by the player, preserving
+      // its existing request headers; never resolve a new MovieBox stream.
+      if (!_isPlaying) {
+        final playlist = _player.state.playlist;
+        final medias = playlist.medias;
+        final index = playlist.index;
+        if (index >= 0 && index < medias.length) {
+          await _player.open(medias[index], play: false);
+          if (savedPosition > Duration.zero) {
+            await _player.seek(savedPosition);
+          }
+          await _player.play();
+        }
+      } else if (savedPosition > Duration.zero &&
+          _position + const Duration(seconds: 2) < savedPosition) {
+        await _player.seek(savedPosition);
+      }
+
+      if (!mounted || _isDisposed) return;
+      if (_isPlaying) {
+        setState(() => _errorMessage = null);
+        _startHideTimer();
+      }
+    } catch (error) {
+      debugPrint('Background playback recovery attempt failed: $error');
+    } finally {
+      _recoveringFromBackground = false;
+      _wasPlayingBeforeBackground = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Persist the latest playback position even if the position stream has
     // not emitted its final update yet when the user leaves the player.
     unawaited(_saveResumePosition(_position));
