@@ -11183,8 +11183,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _player.stream.audioDevices.listen((devices) {
       if (!mounted || _isDisposed) return;
       final selectedDevice = _player.state.audioDevice;
-      if (selectedDevice.id != 'auto' &&
-          !devices.any((device) => device.id == selectedDevice.id)) {
+      if (selectedDevice.name != 'auto' &&
+          !devices.any((device) => device.name == selectedDevice.name)) {
         unawaited(_restoreAudioDeviceAfterDisconnect());
       }
     });
