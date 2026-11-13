@@ -10604,6 +10604,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _loadingQualities = true;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
 
     try {
@@ -10716,11 +10717,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _tvEpisodeError = error.toString();
           _errorMessage = 'Unable to resolve this MovieBox stream.';
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     } finally {
       if (mounted && !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() => _loadingQualities = false);
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     }
   }
@@ -10746,6 +10749,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _errorMessage = null;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
     try {
       for (final candidate in candidates) {
@@ -10795,6 +10799,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               _errorMessage = null;
               _tvEpisodeError = null;
             });
+            if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
           await _restoreResumePosition();
           _startHideTimer();
@@ -10817,6 +10822,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _errorMessage = 'Could not start this MovieBox stream. Please try again.';
           _tvEpisodeError = error.toString();
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
       return false;
     } finally {
@@ -11468,6 +11474,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             _initialized = true;
             _errorMessage = null;
           });
+          if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           await _restoreResumePosition();
           _startHideTimer();
           return;
@@ -11486,6 +11493,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     } finally {
       _isOpening = false;
     }
@@ -11866,7 +11874,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         navigator != null &&
         navigator.mounted &&
         route.isActive) {
-      navigator.popUntil((candidate) => identical(candidate, route));
+      try {
+        navigator.popUntil((candidate) => identical(candidate, route));
+      } catch (error) {
+        debugPrint('Could not restore the full FLIXORA Player: $error');
+      }
     }
     if (!mounted || _isDisposed) return;
     _activeMiniPlayerState.value = null;
@@ -11887,8 +11899,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         navigator != null &&
         navigator.mounted &&
         route.isActive) {
-      navigator.removeRoute(route);
-      return;
+      try {
+        navigator.removeRoute(route);
+        return;
+      } catch (error) {
+        debugPrint('Could not close the FLIXORA mini-player route: $error');
+      }
     }
     if (mounted && !_isDisposed) {
       Navigator.of(context).maybePop();
