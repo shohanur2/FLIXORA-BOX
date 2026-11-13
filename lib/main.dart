@@ -7467,7 +7467,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           final profiles=data['profiles'] as List<Map<String,dynamic>>;final likes=data['likes'] as List<Map<String,dynamic>>;
           if(posts.isEmpty)return _profileMessagePage(Icons.forum_outlined,'No Community posts yet','Be the first to start a movie discussion.');
           return ListView.separated(padding:const EdgeInsets.fromLTRB(14,4,14,20),itemCount:posts.length,separatorBuilder:(_,__)=>const SizedBox(height:10),itemBuilder:(context,index){
-            final post=posts[index];final author=profiles.where((p)=>p['user_id']==post['author_id']).firstOrNull;
+            final post=posts[index];final authorMatches=profiles.where((p)=>p['user_id']==post['author_id']);final author=authorMatches.isEmpty?null:authorMatches.first;
             final postLikes=likes.where((l)=>l['post_id']==post['id']).toList();final liked=postLikes.any((l)=>l['user_id']==user.id);
             return Container(padding:const EdgeInsets.all(14),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(14),border:Border.all(color:ink12)),
               child:Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
@@ -7548,7 +7548,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     for(final membership in memberships){
       final id=membership['conversation_id'];
       final members=List<Map<String,dynamic>>.from(await client.from('conversation_members').select('user_id').eq('conversation_id',id));
-      final other=members.where((m)=>m['user_id']!=userId).firstOrNull;if(other==null)continue;
+      final otherMatches=members.where((m)=>m['user_id']!=userId);final other=otherMatches.isEmpty?null:otherMatches.first;if(other==null)continue;
       final profile=await client.from('community_profiles').select('display_name').eq('user_id',other['user_id']).maybeSingle();
       final last=await client.from('direct_messages').select('body').eq('conversation_id',id).order('created_at',ascending:false).limit(1);
       inbox.add({'conversation_id':id,'display_name':profile?['display_name']??'FLIXORA User','last_message':last.isEmpty?'':last.first['body']});
