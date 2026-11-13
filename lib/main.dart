@@ -14237,7 +14237,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               child: Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
