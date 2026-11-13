@@ -9627,6 +9627,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   bool _isMiniPlayer = false;
   bool _isDisposed = false;
   bool _wasPlayingBeforeBackground = false;
+  bool _isBackgrounded = false;
   bool _recoveringFromBackground = false;
   Duration _backgroundResumePosition = Duration.zero;
   DateTime? _lastBackgroundResumeAt;
@@ -13813,19 +13814,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      _wasPlayingBeforeBackground = _isPlaying;
-      if (_wasPlayingBeforeBackground) {
-        _backgroundResumePosition = _position;
-        unawaited(_saveResumePosition(_position));
+      if (!_isBackgrounded) {
+        _isBackgrounded = true;
+        _wasPlayingBeforeBackground = _isPlaying;
+        if (_wasPlayingBeforeBackground) {
+          _backgroundResumePosition = _position;
+          unawaited(_saveResumePosition(_position));
+        }
       }
       _cancelHideTimer();
       return;
     }
 
-    if (state == AppLifecycleState.resumed &&
-        _wasPlayingBeforeBackground) {
-      _lastBackgroundResumeAt = DateTime.now();
-      unawaited(_recoverPlaybackAfterBackground());
+    if (state == AppLifecycleState.resumed) {
+      _isBackgrounded = false;
+      if (_wasPlayingBeforeBackground) {
+        _lastBackgroundResumeAt = DateTime.now();
+        unawaited(_recoverPlaybackAfterBackground());
+      }
     }
   }
 
