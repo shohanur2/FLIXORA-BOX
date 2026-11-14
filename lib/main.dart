@@ -8436,7 +8436,7 @@ Entertainment Beyond Boundaries.
                     decoration: BoxDecoration(
                       color: panel,
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: gold.withOpacity(0.28)),
+                      border: Border.all(color: gold.withValues(alpha: 0.28)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -8445,7 +8445,7 @@ Entertainment Beyond Boundaries.
                           width: 46,
                           height: 46,
                           decoration: BoxDecoration(
-                            color: gold.withOpacity(0.14),
+                            color: gold.withValues(alpha: 0.14),
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Icon(
