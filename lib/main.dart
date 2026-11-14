@@ -32,6 +32,7 @@ import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
 import 'services/catalog_visibility_service.dart';
+import 'services/admob_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -44,6 +45,7 @@ const String authRedirectUrl =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  unawaited(AdMobService.initialize());
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
@@ -10586,6 +10588,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _updatePosition(Duration.zero);
           _duration = Duration.zero;
           _selectedAudioTrackIndex = 0;
+          if (widget.localFilePath == null) {
+            await AdMobService.showBeforeOnlinePlayback();
+          }
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return false;
+          }
           await _player.play();
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
@@ -11168,6 +11176,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
             play: false,
           );
+          if (!mounted || _isDisposed) return;
+          if (!isLocal) {
+            await AdMobService.showBeforeOnlinePlayback();
+          }
           if (!mounted || _isDisposed) return;
           await _player.play();
           if (!mounted || _isDisposed) return;
