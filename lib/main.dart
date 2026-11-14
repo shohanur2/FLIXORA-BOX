@@ -1756,6 +1756,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _trendingHindiDubbedMovies = [];
   List<Movie> _trendingBollywoodMovies = [];
   List<Movie> _trendingHollywoodMovies = [];
+  bool _rankingCataloguesLoading = false;
   bool _refreshingPlayableTrendingMovies = false;
   bool _playableTrendingRefreshQueued = false;
   List<Movie> popular = [];
@@ -4785,7 +4786,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _rankingTv = tv;
       _rankingCategory = category;
     });
+    if (!tv) unawaited(_ensureRankingMovieCatalogues());
   }
+
+  Future<void> _ensureRankingMovieCatalogues() async {
+    if (_rankingCataloguesLoading ||
+        (bengaliMovies.isNotEmpty && bollywoodMovies.isNotEmpty &&
+            hollywoodMovies.isNotEmpty && southIndianMovies.isNotEmpty)) {
+      return;
+    }
+    _rankingCataloguesLoading = true;
+    if (mounted) setState(() {});
+    try {
+      final results = await Future.wait<List<Movie>>([
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'bn', 'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'hi', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'en', 'with_origin_country': 'US',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ta', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'te', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ml', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+        TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'kn', 'with_origin_country': 'IN',
+          'sort_by': 'popularity.desc',
+        }).catchError((_) => <Movie>[]),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[0]]);
+        bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...results[1]]);
+        hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[2]]);
+        southIndianMovies = _deduplicateMovies([
+          ...southIndianMovies, ...results[3], ...results[4], ...results[5], ...results[6],
+        ]);
+      });
+      await Future.wait([
+        MovieCache.saveList(MovieCache.bengaliMoviesKey, bengaliMovies),
+        MovieCache.saveList(MovieCache.bollywoodMoviesKey, bollywoodMovies),
+        MovieCache.saveList(MovieCache.hollywoodMoviesKey, hollywoodMovies),
+        MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
+      ]);
+    } catch (error) {
+      debugPrint('Ranking movie catalogues could not be refreshed: $error');
+    } finally {
+      _rankingCataloguesLoading = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  List<Movie> _rankingMoviePool() => _deduplicateMovies([
+        ..._trendingMovieCandidates(),
+        ...trending, ...popular, ...latest, ...topRated,
+        ...flixoraMovies.where((movie) => movie.mediaType == 'movie'),
+        ...bengaliMovies, ...bollywoodMovies, ...hollywoodMovies, ...southIndianMovies,
+      ]).where((movie) => movie.mediaType == 'movie').toList(growable: false);
+
+  List<Movie> _rankingRegionalMovies(String category) => _rankingMoviePool()
+      .where((movie) => _trendingMovieCategory(movie) == category)
+      .toList(growable: false);
 
   List<String> _sectionFilterOptions(String section) {
     switch (section) {
@@ -4832,9 +4906,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Hindi Dubbed':
           return _trendingHindiDubbedMovies;
         case 'Bollywood':
+          return _deduplicateMovies([
+            ...bollywoodMovies,
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+          ]);
         case 'Hollywood':
+          return _deduplicateMovies([
+            ...hollywoodMovies,
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+          ]);
         case 'South Indian':
+          return _deduplicateMovies([
+            ...southIndianMovies,
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+          ]);
         case 'Bengali':
+          return _deduplicateMovies([
+            ...bengaliMovies,
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+          ]);
         case 'Asian':
         case 'International':
           return items
@@ -5411,9 +5501,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             sourceIsDeduplicated: true,
           ),
       };
-      final filters = allFilters
-          .where((filter) => filteredByOption[filter]!.isNotEmpty)
-          .toList(growable: false);
+      final filters = title == 'Trending Movies'
+          ? allFilters
+          : allFilters
+              .where((filter) => filteredByOption[filter]!.isNotEmpty)
+              .toList(growable: false);
       cached = _CachedHomeSection(
         deduplicatedMovies: deduplicatedMovies,
         filteredByOption: filteredByOption,
@@ -8891,19 +8983,17 @@ Entertainment Beyond Boundaries.
         ].where((movie) => movie.mediaType == 'movie').toList());
         return movies..sort((a, b) => b.rating.compareTo(a.rating));
       case 'New Bengali':
-        return _deduplicateMovies(bengaliMovies);
+        return _rankingRegionalMovies('Bengali');
       case 'Bollywood':
-        return _deduplicateMovies(bollywoodMovies);
+        return _rankingRegionalMovies('Bollywood');
       case 'Hollywood':
-        return _deduplicateMovies(hollywoodMovies);
+        return _rankingRegionalMovies('Hollywood');
       case 'South Indian':
-        return _deduplicateMovies(southIndianMovies);
+        return _rankingRegionalMovies('South Indian');
       case 'New Release':
         return _deduplicateMovies(_withoutFlixoraDuplicates(latest));
       default:
-        return _deduplicateMovies([
-          ...flixoraMovies, ...trending, ...popular, ...latest, ...topRated,
-        ].where((movie) => movie.mediaType == 'movie').toList());
+        return _rankingMoviePool();
     }
   }
 
@@ -8952,7 +9042,11 @@ Entertainment Beyond Boundaries.
           );
         },
       ))),
-      Expanded(child: movies.isEmpty ? const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))) : ListView.builder(
+      Expanded(child: movies.isEmpty
+          ? (_rankingCataloguesLoading && !_rankingTv
+              ? const Center(child: CircularProgressIndicator(color: gold))
+              : const Center(child: Text('No movies available in this category.', style: TextStyle(color: ink54))))
+          : ListView.builder(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 24), itemCount: movies.length,
         itemBuilder: (context, index) {
           final movie = movies[index];
