@@ -4730,7 +4730,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
           enablePip: _autoMiniPlayer,
-        ),
       ));
       return;
     }
@@ -4770,7 +4769,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
           enablePip: _autoMiniPlayer,
-      ),
     ));
   }
 
@@ -7163,7 +7161,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onMovieSelected: _openMovie,
             isOnline: _online,
             enablePip: _autoMiniPlayer,
-          )));
+          ));
       },
     );
   }
