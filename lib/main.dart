@@ -5523,9 +5523,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ? cached.deduplicatedMovies
         : cached.filteredByOption[selected] ?? const <Movie>[];
 
-    // A category with no matching catalogue items is omitted instead of
-    // leaving an empty strip on the Home page.
-    if (visibleMovies.isEmpty) return const SizedBox.shrink();
+    // Keep Trending Movies and its filter tags visible even when a
+    // selected category currently has no matching titles.
+    if (visibleMovies.isEmpty && title != 'Trending Movies') {
+      return const SizedBox.shrink();
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -5598,7 +5600,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
             ),
           ),
-        _movieRow(visibleMovies),
+        if (visibleMovies.isEmpty && title == 'Trending Movies')
+          const SizedBox(
+            height: 54,
+            child: Center(
+              child: Text(
+                'No movies available in this category.',
+                style: TextStyle(color: ink54, fontSize: 12),
+              ),
+            ),
+          )
+        else
+          _movieRow(visibleMovies),
       ],
     );
   }
