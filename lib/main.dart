@@ -32,6 +32,7 @@ import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
 import 'services/catalog_visibility_service.dart';
+import 'services/admob_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -44,6 +45,7 @@ const String authRedirectUrl =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  unawaited(AdMobService.initialize());
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
@@ -1574,6 +1576,34 @@ class DownloadManager {
         onError: onError,
       );
 }
+// The active Player remains mounted while its floating mini-player is shown.
+// This app-level host keeps the video above Home, Search, details and other routes.
+final ValueNotifier<_MoviePlayerScreenState?> _activeMiniPlayerState =
+    ValueNotifier<_MoviePlayerScreenState?>(null);
+Route<void>? _activePlayerRoute;
+NavigatorState? _activePlayerNavigator;
+
+// A minimized Player must stay mounted without keeping a modal barrier over
+// the app. The empty barrier lets Home, Search and other routes receive taps
+// and scroll gestures while the floating mini-player remains visible.
+class _NonBlockingPlayerRoute extends PageRouteBuilder<void> {
+  _NonBlockingPlayerRoute({required WidgetBuilder pageBuilder})
+      : super(
+          opaque: false,
+          barrierDismissible: false,
+          pageBuilder: (routeContext, animation, secondaryAnimation) =>
+              pageBuilder(routeContext),
+          transitionsBuilder:
+              (routeContext, animation, secondaryAnimation, child) =>
+                  FadeTransition(opacity: animation, child: child),
+          transitionDuration: const Duration(milliseconds: 180),
+          reverseTransitionDuration: const Duration(milliseconds: 140),
+        );
+
+  @override
+  Widget buildModalBarrier() => const SizedBox.shrink();
+}
+
 class FlixoraApp extends StatelessWidget {
   const FlixoraApp({super.key});
 
@@ -1616,6 +1646,23 @@ class FlixoraApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const HomeScreen(),
+      builder: (context, child) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            child ?? const SizedBox.shrink(),
+            ValueListenableBuilder<_MoviePlayerScreenState?>(
+              valueListenable: _activeMiniPlayerState,
+              builder: (context, player, _) {
+                if (player == null || !player.mounted || !player._isMiniPlayer) {
+                  return const SizedBox.shrink();
+                }
+                return player._buildMiniPlayerOverlay(context);
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -4620,6 +4667,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _pushPlayerRoute(WidgetBuilder builder) {
+    final navigator = Navigator.of(context);
+    final previousRoute = _activePlayerRoute;
+    final previousNavigator = _activePlayerNavigator;
+    if (previousRoute != null &&
+        previousNavigator != null &&
+        previousNavigator.mounted &&
+        previousRoute.isActive) {
+      try {
+        previousNavigator.removeRoute(previousRoute);
+      } catch (error) {
+        debugPrint('Could not replace the previous FLIXORA Player route: $error');
+      }
+    }
+
+    _activeMiniPlayerState.value = null;
+    final route = _NonBlockingPlayerRoute(pageBuilder: builder);
+    _activePlayerNavigator = navigator;
+    _activePlayerRoute = route;
+    navigator.push<void>(route);
+  }
+
+
   Future<void> _openResolvedPlayer(
     Movie selectedMovie,
     Movie requestedMovie,
@@ -4643,8 +4713,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (downloaded != null) {
       _recordWatch(selectedMovie);
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => MoviePlayerScreen(
+      _pushPlayerRoute((_) => MoviePlayerScreen(
           movie: selectedMovie,
           localFilePath: downloaded!.filePath,
           localSeasonNumber: downloaded.seasonNumber,
@@ -4661,7 +4730,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           onViewDownloads: _openDownloadsTab,
           isOnline: _online,
           enablePip: _autoMiniPlayer,
-        ),
       ));
       return;
     }
@@ -4687,8 +4755,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Open the player immediately. MoviePlayerScreen resolves MovieBox
     // streams itself and shows its loading/error state without blocking Home.
     _recordWatch(selectedMovie);
-    Navigator.push(context, MaterialPageRoute(
-      builder: (_) => MoviePlayerScreen(
+    _pushPlayerRoute((_) => MoviePlayerScreen(
         movie: selectedMovie,
         recommendedMovies: _allMovies(),
         onMovieSelected: _playMovieFromPlayer,
@@ -4702,7 +4769,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onViewDownloads: _openDownloadsTab,
         isOnline: _online,
           enablePip: _autoMiniPlayer,
-      ),
     ));
   }
 
@@ -7088,14 +7154,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           releaseDate: '',
           videoUrl: task.filePath!,
         );
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MoviePlayerScreen(
+        _pushPlayerRoute((_) => MoviePlayerScreen(
             movie: movie,
             localFilePath: task.filePath,
             recommendedMovies: _allMovies(),
             onMovieSelected: _openMovie,
             isOnline: _online,
             enablePip: _autoMiniPlayer,
-          )));
+          ));
       },
     );
   }
@@ -9587,7 +9653,7 @@ class MoviePlayerScreen extends StatefulWidget {
   State<MoviePlayerScreen> createState() => _MoviePlayerScreenState();
 }
 
-class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
+class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindingObserver {
   late final Player _player;
   late final VideoController _videoController;
   late Future<Map<String, dynamic>> _movieDetailsFuture;
@@ -9598,12 +9664,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   StreamSubscription<bool>? _bufferingSubscription;
   StreamSubscription<String>? _errorSubscription;
   StreamSubscription<Tracks>? _tracksSubscription;
+  StreamSubscription<Track>? _activeTrackSubscription;
+  StreamSubscription<List<AudioDevice>>? _audioDevicesSubscription;
   StreamSubscription<bool>? _completedSubscription;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   final ValueNotifier<Duration> _positionNotifier =
       ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<int> _miniPlayerOverlayRevision = ValueNotifier<int>(0);
+  bool _isSeeking = false;
+  Duration? _seekPreviewPosition;
+  Duration? _pendingSeekPosition;
+  Timer? _seekSyncTimer;
+  int _seekRequestToken = 0;
+  int _playerPointerCount = 0;
 
   bool _isPlaying = false;
   bool _isBuffering = false;
@@ -9612,6 +9687,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   bool _isFullscreen = false;
   bool _isMiniPlayer = false;
   bool _isDisposed = false;
+  bool _wasPlayingBeforeBackground = false;
+  bool _isBackgrounded = false;
+  bool _recoveringFromBackground = false;
+  Duration _backgroundResumePosition = Duration.zero;
+  DateTime? _lastBackgroundResumeAt;
   bool _initialized = false;
   bool _isOpening = false;
   bool _playerIsOnline = true;
@@ -9623,6 +9703,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   String _currentVideoUrl = '';
   bool _loadingQualities = false;
   int _selectedAudioTrackIndex = 0;
+  double _audioDelay = 0.0;
   List<Map<String, dynamic>> _tvSeasons = [];
   List<Map<String, dynamic>> _tvEpisodes = [];
   List<Map<String, dynamic>> _movieBoxSeasons = [];
@@ -9645,6 +9726,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   double _volume = 100;
   double _screenBrightness = 0.5;
 
+  // Subtitle presentation only; stream and playback pipeline remain untouched.
+  double _subtitleFontSize = 46;
+  String _subtitleTextColor = '#FFFFFF';
+  String _subtitleBackgroundColor = '#000000';
+  double _subtitleBackgroundOpacity = 0.62;
+  double _subtitlePosition = 92;
+  double _subtitleDelay = 0;
+  double _subtitleOutlineSize = 1.5;
+  double _subtitleShadowOffset = 1;
+
   double _videoZoom = 1.0;
   String? _gestureMode;
   String _gestureFeedback = '';
@@ -9654,6 +9745,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   double _gestureStartBrightness = 0.5;
   double _gestureStartVolume = 100;
   double _gestureStartZoom = 1.0;
+  bool _volumeGestureEnabled = true;
+  bool _brightnessGestureEnabled = true;
+  bool _doubleTapSkipEnabled = true;
+  int _doubleTapSkipSeconds = 10;
+  double _gestureSensitivity = 1.0;
   Timer? _gestureFeedbackTimer;
 
   Timer? _hideTimer;
@@ -9723,6 +9819,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     _playerIsOnline = widget.isOnline;
     _selectedSeasonNumber = widget.localSeasonNumber ?? 1;
@@ -9733,13 +9830,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _player = Player(
       configuration: PlayerConfiguration(
         title: 'FLIXORA',
-        bufferSize: 48 * 1024 * 1024,
+        // A modestly larger network buffer helps absorb short bandwidth dips.
+        bufferSize: 64 * 1024 * 1024,
         libass: true,
       ),
     );
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
+    unawaited(_configureVolumeBoost());
+    _loadSubtitlePreferences();
+    _loadAudioDelayPreference();
+    _loadGesturePreferences();
     _loadApplicationBrightness();
     _startPlayerConnectionMonitor();
     _prepareAndInitializePlayer();
@@ -9841,6 +9943,97 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       ));
       return;
     }
+  }
+
+  List<List<int>> _episodeNavigationEntries() {
+    if (!widget.movie.isMovieBox ||
+        !widget.movie.movieBoxIsSeries ||
+        widget.localFilePath != null) {
+      return const <List<int>>[];
+    }
+
+    final seasons = _movieBoxSeasons.toList()
+      ..sort((a, b) => _toInt(a['se']).compareTo(_toInt(b['se'])));
+    final entries = <List<int>>[];
+    for (final season in seasons) {
+      final seasonNumber = _toInt(season['se']);
+      if (seasonNumber <= 0) continue;
+      final episodeNumbers = (season['episodes'] as List? ?? const [])
+          .map(_toInt)
+          .where((number) => number > 0)
+          .toSet()
+          .toList()
+        ..sort();
+      for (final episodeNumber in episodeNumbers) {
+        entries.add([seasonNumber, episodeNumber]);
+      }
+    }
+    return entries;
+  }
+
+  int _episodeNavigationIndex(List<List<int>> entries) => entries.indexWhere(
+        (entry) =>
+            entry[0] == _selectedSeasonNumber &&
+            entry[1] == _selectedEpisodeNumber,
+      );
+
+  bool get _hasEpisodeNavigation {
+    final entries = _episodeNavigationEntries();
+    return entries.length > 1 && _episodeNavigationIndex(entries) >= 0;
+  }
+
+  bool _canChangeEpisode(int direction) {
+    if (direction == 0 || _loadingQualities || _isOpening || _isDisposed) {
+      return false;
+    }
+    final entries = _episodeNavigationEntries();
+    final currentIndex = _episodeNavigationIndex(entries);
+    final targetIndex = currentIndex + direction;
+    return currentIndex >= 0 &&
+        targetIndex >= 0 &&
+        targetIndex < entries.length;
+  }
+
+  Future<void> _changeEpisodeBy(int direction) async {
+    if (!_canChangeEpisode(direction)) return;
+    final entries = _episodeNavigationEntries();
+    final currentIndex = _episodeNavigationIndex(entries);
+    final target = entries[currentIndex + direction];
+    final seasonNumber = target[0];
+    final episodeNumber = target[1];
+    final season = _movieBoxSeasons.firstWhere(
+      (item) => _toInt(item['se']) == seasonNumber,
+      orElse: () => <String, dynamic>{},
+    );
+    final episodeNumbers = (season['episodes'] as List? ?? const [])
+        .map(_toInt)
+        .where((number) => number > 0)
+        .toList(growable: false);
+    final episodeItems = episodeNumbers
+        .map((number) => <String, dynamic>{
+              'episode_number': number,
+              'name': 'Episode $number',
+            })
+        .toList(growable: false);
+
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _selectedSeasonNumber = seasonNumber;
+        _selectedEpisodeNumber = episodeNumber;
+        _tvEpisodes = episodeItems;
+        _loadingTvEpisodes = false;
+        _loadingQualities = true;
+        _tvEpisodeError = null;
+        _errorMessage = null;
+      });
+      _miniPlayerOverlayRevision.value++;
+    }
+
+    await _loadMovieBoxStreams(
+      season: seasonNumber,
+      episode: episodeNumber,
+      openPlayer: true,
+    );
   }
 
   Widget _tvEpisodeSelector() {
@@ -10407,6 +10600,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _loadingQualities = true;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
 
     try {
@@ -10519,11 +10713,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _tvEpisodeError = error.toString();
           _errorMessage = 'Unable to resolve this MovieBox stream.';
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     } finally {
       if (mounted && !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() => _loadingQualities = false);
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
     }
   }
@@ -10549,6 +10745,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage = null;
         _tvEpisodeError = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
     try {
       for (final candidate in candidates) {
@@ -10586,6 +10783,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _updatePosition(Duration.zero);
           _duration = Duration.zero;
           _selectedAudioTrackIndex = 0;
+          if (widget.localFilePath == null) {
+            await AdMobService.showBeforeOnlinePlayback();
+          }
+          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+            return false;
+          }
           await _player.play();
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
@@ -10598,6 +10801,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               _errorMessage = null;
               _tvEpisodeError = null;
             });
+            if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
           await _restoreResumePosition();
           _startHideTimer();
@@ -10620,6 +10824,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _errorMessage = 'Could not start this MovieBox stream. Please try again.';
           _tvEpisodeError = error.toString();
         });
+        if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
       return false;
     } finally {
@@ -11002,6 +11207,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _handlePlayerError(value);
         return;
       }
+      final recentResume = _lastBackgroundResumeAt != null &&
+          DateTime.now().difference(_lastBackgroundResumeAt!) <
+              const Duration(seconds: 7);
+      if (_recoveringFromBackground || recentResume) {
+        debugPrint('Deferring transient playback error during background recovery.');
+        return;
+      }
       final shouldShow = PlaybackErrorPolicy.shouldShowError(
         isOpening: _isOpening,
         isPlaying: _isPlaying,
@@ -11026,20 +11238,43 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   void _attachPlayerListeners() {
     _positionSubscription = _player.stream.position.listen((value) {
-      if (!mounted || _isDisposed) return;
-      _updatePosition(value);
-      if (_errorMessage != null && value > Duration.zero) {
+      if (!mounted || _isDisposed || _isSeeking) return;
+
+      final safePosition = _duration > Duration.zero && value > _duration
+          ? _duration
+          : value;
+      final pendingSeek = _pendingSeekPosition;
+      if (pendingSeek != null) {
+        final difference = (safePosition - pendingSeek).inMilliseconds.abs();
+        // Ignore stale time-pos events until mpv has reached the requested
+        // seek target. This prevents the timeline snapping back or jumping
+        // to the end while a network seek is still resolving.
+        if (difference > 2500) return;
+        _pendingSeekPosition = null;
+        _seekSyncTimer?.cancel();
+      }
+
+      // Some streams emit a stale/end position while the demuxer is
+      // buffering. Keep the last stable position until playback resumes.
+      if (_isBuffering &&
+          (safePosition - _position).inMilliseconds.abs() > 2500) {
+        return;
+      }
+
+      _updatePosition(safePosition);
+      if (_errorMessage != null && safePosition > Duration.zero) {
         setState(() => _errorMessage = null);
       }
 
       if (_duration.inSeconds > 0) {
-        _saveResumePosition(value);
+        _saveResumePosition(safePosition);
       }
     });
 
     _durationSubscription = _player.stream.duration.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _duration = value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _playingSubscription = _player.stream.playing.listen((value) {
@@ -11049,6 +11284,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _isPlaying = value;
         if (value && _errorMessage != null) _errorMessage = null;
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       unawaited(PictureInPictureService.setEnabled(
         value && widget.enablePip,
       ));
@@ -11057,18 +11293,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _startHideTimer();
       } else {
         _cancelHideTimer();
-        setState(() => _showControls = true);
+        if (!_isMiniPlayer) setState(() => _showControls = true);
       }
     });
 
     _bufferingSubscription = _player.stream.buffering.listen((value) {
       if (!mounted || _isDisposed) return;
       setState(() => _isBuffering = value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _errorSubscription = _player.stream.error.listen((value) {
       if (!mounted || _isDisposed) return;
       _handlePlayerError(value);
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     });
 
     _tracksSubscription = _player.stream.tracks.listen((value) {
@@ -11079,6 +11317,36 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Re-apply the user's audio sync preference when a new media exposes
+      // its tracks. This only changes the active Player's audio-delay property.
+      if (_audioDelay.abs() >= 0.01) {
+        unawaited(_applyAudioDelay(
+          _audioDelay,
+          persist: false,
+          showFeedback: false,
+        ));
+      }
+    });
+
+    // Recover gracefully if an active audio track is unexpectedly disabled
+    // by a stream/decoder reconfiguration while playable audio tracks remain.
+    _activeTrackSubscription = _player.stream.track.listen((track) {
+      if (!mounted || _isDisposed) return;
+      if (track.audio.id == 'no' && _tracks.audio.isNotEmpty) {
+        unawaited(_restoreAudioTrackAfterDropout());
+      }
+    });
+
+    // If the selected Bluetooth/output route disappears during playback,
+    // fall back to Android's automatic audio device instead of remaining silent.
+    _audioDevicesSubscription =
+        _player.stream.audioDevices.listen((devices) {
+      if (!mounted || _isDisposed) return;
+      final selectedDevice = _player.state.audioDevice;
+      if (selectedDevice.name != 'auto' &&
+          !devices.any((device) => device.name == selectedDevice.name)) {
+        unawaited(_restoreAudioDeviceAfterDisconnect());
+      }
     });
 
     _completedSubscription = _player.stream.completed.listen((completed) {
@@ -11091,6 +11359,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
       _clearResumePosition();
     });
+  }
+
+  Future<void> _restoreAudioTrackAfterDropout() async {
+    if (_isDisposed || _tracks.audio.isEmpty) return;
+    try {
+      await _player.setAudioTrack(AudioTrack.auto());
+      if (!_isDisposed && _audioDelay.abs() >= 0.01) {
+        await _applyAudioDelay(
+          _audioDelay,
+          persist: false,
+          showFeedback: false,
+        );
+      }
+    } catch (error) {
+      debugPrint('FLIXORA audio-track recovery failed: $error');
+    }
+  }
+
+  Future<void> _restoreAudioDeviceAfterDisconnect() async {
+    if (_isDisposed) return;
+    try {
+      await _player.setAudioDevice(AudioDevice.auto());
+    } catch (error) {
+      debugPrint('FLIXORA audio-device recovery failed: $error');
+    }
   }
 
   Future<void> _initializePlayer() async {
@@ -11108,6 +11401,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
 
     _isOpening = true;
+    _seekSyncTimer?.cancel();
+    _seekRequestToken++;
+    _isSeeking = false;
+    _seekPreviewPosition = null;
+    _pendingSeekPosition = null;
     try {
       if (mounted) {
         setState(() {
@@ -11169,6 +11467,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             play: false,
           );
           if (!mounted || _isDisposed) return;
+          if (!isLocal) {
+            await AdMobService.showBeforeOnlinePlayback();
+          }
+          if (!mounted || _isDisposed) return;
           await _player.play();
           if (!mounted || _isDisposed) return;
 
@@ -11178,6 +11480,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             _initialized = true;
             _errorMessage = null;
           });
+          if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           await _restoreResumePosition();
           _startHideTimer();
           return;
@@ -11196,6 +11499,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         _errorMessage =
             'Unable to play this video. Please check the video link and try again.';
       });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     } finally {
       _isOpening = false;
     }
@@ -11280,6 +11584,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _loadGesturePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _volumeGestureEnabled = prefs.getBool('flixora_gesture_volume') ?? true;
+        _brightnessGestureEnabled = prefs.getBool('flixora_gesture_brightness') ?? true;
+        _doubleTapSkipEnabled = prefs.getBool('flixora_gesture_double_tap') ?? true;
+        _doubleTapSkipSeconds = prefs.getInt('flixora_gesture_skip_seconds') ?? 10;
+        _gestureSensitivity = (prefs.getDouble('flixora_gesture_sensitivity') ?? 1.0)
+            .clamp(0.5, 2.0)
+            .toDouble();
+      });
+    } catch (error) {
+      debugPrint('Could not load player gesture preferences: $error');
+    }
+  }
+
+  Future<void> _saveGesturePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('flixora_gesture_volume', _volumeGestureEnabled);
+      await prefs.setBool('flixora_gesture_brightness', _brightnessGestureEnabled);
+      await prefs.setBool('flixora_gesture_double_tap', _doubleTapSkipEnabled);
+      await prefs.setInt('flixora_gesture_skip_seconds', _doubleTapSkipSeconds);
+      await prefs.setDouble('flixora_gesture_sensitivity', _gestureSensitivity);
+    } catch (error) {
+      debugPrint('Could not save player gesture preferences: $error');
+    }
+  }
+
   void _handlePlayerGestureStart(ScaleStartDetails details) {
     _gestureFeedbackTimer?.cancel();
     _gestureStartPoint = details.localFocalPoint;
@@ -11324,11 +11659,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     if (_gestureMode == null) {
       if (delta.distance < 10) return;
 
-      final mode = delta.dx.abs() >= delta.dy.abs()
+      final isHorizontal = delta.dx.abs() >= delta.dy.abs();
+      final isLeftSide =
+          start.dx < MediaQuery.of(context).size.width / 2;
+      final mode = isHorizontal
           ? 'seek'
-          : (start.dx < MediaQuery.of(context).size.width / 2
-              ? 'brightness'
-              : 'volume');
+          : isLeftSide
+              ? (_brightnessGestureEnabled ? 'brightness' : 'disabled')
+              : (_volumeGestureEnabled ? 'volume' : 'disabled');
 
       _cancelHideTimer();
       setState(() {
@@ -11355,7 +11693,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       });
     } else if (_gestureMode == 'brightness') {
       final height = MediaQuery.of(context).size.height;
-      final brightness = (_gestureStartBrightness - delta.dy / height)
+      final brightness = (_gestureStartBrightness -
+              delta.dy / height * _gestureSensitivity)
           .clamp(0.0, 1.0)
           .toDouble();
       _changeApplicationBrightness(brightness);
@@ -11366,8 +11705,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       }
     } else if (_gestureMode == 'volume') {
       final height = MediaQuery.of(context).size.height;
-      final volume = (_gestureStartVolume - delta.dy / height * 100)
-          .clamp(0.0, 100.0)
+      final volume = (_gestureStartVolume -
+              delta.dy / height * 200 * _gestureSensitivity)
+          .clamp(0.0, 200.0)
           .toDouble();
       _changeVolume(volume);
       if (mounted && !_isDisposed) {
@@ -11383,12 +11723,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final previewPosition = _gesturePreviewPosition;
 
     if (mode == 'seek' && previewPosition != null) {
-      await _player.seek(previewPosition);
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _updatePosition(previewPosition);
-        });
-      }
+      await _performSeek(previewPosition);
     }
 
     _gestureStartPoint = null;
@@ -11406,34 +11741,58 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _performSeek(Duration requested) async {
+    if (_duration.inMilliseconds <= 0 || _isDisposed) return;
+
+    final target = Duration(
+      milliseconds: requested.inMilliseconds
+          .clamp(0, _duration.inMilliseconds)
+          .toInt(),
+    );
+    final requestToken = ++_seekRequestToken;
+
+    _seekSyncTimer?.cancel();
+    _isSeeking = false;
+    _seekPreviewPosition = null;
+    _pendingSeekPosition = target;
+    _positionNotifier.value = target;
+
+    // If the stream cannot seek (for example, a server without byte ranges),
+    // release the preview after a bounded wait and show mpv's actual position.
+    _seekSyncTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
+      _pendingSeekPosition = null;
+      final actual = _player.state.position;
+      final safeActual = _duration > Duration.zero && actual > _duration
+          ? _duration
+          : actual;
+      _updatePosition(safeActual);
+    });
+
+    try {
+      await _player.seek(target);
+    } catch (error) {
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
+      _seekSyncTimer?.cancel();
+      _pendingSeekPosition = null;
+      final actual = _player.state.position;
+      _updatePosition(
+        _duration > Duration.zero && actual > _duration ? _duration : actual,
+      );
+      debugPrint('FLIXORA seek failed: $error');
+    }
+  }
+
   Future<void> _seekBy(int seconds) async {
     if (_duration.inMilliseconds <= 0) return;
-
-    final next = _position + Duration(seconds: seconds);
-
-    final clamped = next < Duration.zero
-        ? Duration.zero
-        : next > _duration
-            ? _duration
-            : next;
-
-    await _player.seek(clamped);
-
-    if (mounted && !_isDisposed) {
-      setState(() => _updatePosition(clamped));
-    }
-
+    final base = _pendingSeekPosition ?? _position;
+    final next = base + Duration(seconds: seconds);
+    await _performSeek(next);
     _startHideTimer();
   }
 
   Future<void> _seekTo(double value) async {
-    final target = Duration(milliseconds: value.round());
-
-    await _player.seek(target);
-
-    if (mounted && !_isDisposed) {
-      setState(() => _updatePosition(target));
-    }
+    await _performSeek(Duration(milliseconds: value.round()));
   }
 
   String _formatDuration(Duration duration) {
@@ -11460,8 +11819,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  Future<void> _configureVolumeBoost() async {
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) return;
+
+    try {
+      // mpv's software volume ceiling: 200% permits up to 2x amplification.
+      await platformPlayer.setProperty('volume-max', '200');
+
+      if (widget.localFilePath == null) {
+        // Explicitly enable the network demuxer cache for MovieBox/WeFeed and
+        // direct network streams. Keep immediate initial playback, but let
+        // playback rebuffer briefly before resuming after an underrun.
+        await platformPlayer.setProperty('cache', 'yes');
+        await platformPlayer.setProperty('cache-pause', 'yes');
+        await platformPlayer.setProperty('cache-secs', '12');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+      }
+    } catch (error) {
+      debugPrint('FLIXORA native playback configuration failed: $error');
+    }
+  }
+
   Future<void> _changeVolume(double value) async {
-    final volume = value.clamp(0.0, 100.0);
+    final volume = value.clamp(0.0, 200.0).toDouble();
 
     await _player.setVolume(volume);
 
@@ -11470,18 +11851,69 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     setState(() => _volume = volume);
   }
 
-  void _toggleMiniPlayer() {
-    if (_isFullscreen || _isDisposed) return;
-    final enteringMiniPlayer = !_isMiniPlayer;
+  Future<void> _toggleMiniPlayer() async {
+    if (_isDisposed) return;
+    if (_isMiniPlayer) {
+      _expandMiniPlayer();
+      return;
+    }
+
+    if (_isFullscreen) {
+      await _toggleFullscreen();
+      if (!mounted || _isDisposed) return;
+    }
+
     setState(() {
-      _isMiniPlayer = enteringMiniPlayer;
-      _showControls = !enteringMiniPlayer;
-      if (!enteringMiniPlayer) _miniPlayerOffset = null;
+      _isMiniPlayer = true;
+      _showControls = false;
+      _miniPlayerOffset = null;
     });
-    if (enteringMiniPlayer) {
-      _cancelHideTimer();
-    } else {
-      _startHideTimer();
+    _activeMiniPlayerState.value = this;
+    _miniPlayerOverlayRevision.value++;
+    _cancelHideTimer();
+  }
+
+  void _expandMiniPlayer() {
+    final route = _activePlayerRoute;
+    final navigator = _activePlayerNavigator;
+    if (route != null &&
+        navigator != null &&
+        navigator.mounted &&
+        route.isActive) {
+      try {
+        navigator.popUntil((candidate) => identical(candidate, route));
+      } catch (error) {
+        debugPrint('Could not restore the full FLIXORA Player: $error');
+      }
+    }
+    if (!mounted || _isDisposed) return;
+    _activeMiniPlayerState.value = null;
+    setState(() {
+      _isMiniPlayer = false;
+      _showControls = true;
+      _miniPlayerOffset = null;
+    });
+    _miniPlayerOverlayRevision.value++;
+    _startHideTimer();
+  }
+
+  void _closeMiniPlayer() {
+    final route = _activePlayerRoute;
+    final navigator = _activePlayerNavigator;
+    _activeMiniPlayerState.value = null;
+    if (route != null &&
+        navigator != null &&
+        navigator.mounted &&
+        route.isActive) {
+      try {
+        navigator.removeRoute(route);
+        return;
+      } catch (error) {
+        debugPrint('Could not close the FLIXORA mini-player route: $error');
+      }
+    }
+    if (mounted && !_isDisposed) {
+      Navigator.of(context).maybePop();
     }
   }
 
@@ -11491,7 +11923,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     required double maxBottom,
   }) {
     if (!mounted || !_isMiniPlayer) return;
-    final current = _miniPlayerOffset ?? const Offset(14, 18);
+    final current = _miniPlayerOffset ?? const Offset(14, 92);
     final rightLimit = maxRight < 8 ? 8.0 : maxRight;
     final bottomLimit = maxBottom < 8 ? 8.0 : maxBottom;
     setState(() {
@@ -11500,6 +11932,165 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
         (current.dy - details.delta.dy).clamp(8.0, bottomLimit).toDouble(),
       );
     });
+    _miniPlayerOverlayRevision.value++;
+  }
+
+  Widget _buildMiniPlayerOverlay(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: _miniPlayerOverlayRevision,
+      builder: (context, revision, _) {
+        final media = MediaQuery.of(context);
+        final screenSize = media.size;
+        final viewPadding = media.viewPadding;
+        final viewInsets = media.viewInsets;
+        final requestedWidth = (screenSize.width * 0.58)
+            .clamp(180.0, 280.0)
+            .toDouble();
+        final availableWidth = screenSize.width -
+            viewPadding.left - viewPadding.right - 16;
+        final miniWidth = requestedWidth > availableWidth
+            ? (availableWidth < 150 ? 150.0 : availableWidth)
+            : requestedWidth;
+        final miniHeight = miniWidth * 9 / 16 + 32;
+        final maxRight = screenSize.width -
+            viewPadding.horizontal - miniWidth - 8;
+        final maxBottom = screenSize.height -
+            viewPadding.vertical - viewInsets.bottom - miniHeight - 8;
+        final rightLimit = maxRight < 8 ? 8.0 : maxRight;
+        final bottomLimit = maxBottom < 8 ? 8.0 : maxBottom;
+        final miniRight = (_miniPlayerOffset?.dx ?? 14.0)
+            .clamp(8.0, rightLimit)
+            .toDouble();
+        final miniBottom = (_miniPlayerOffset?.dy ?? 92.0)
+            .clamp(8.0, bottomLimit)
+            .toDouble();
+        final miniTitle = widget.movie.movieBoxIsSeries
+            ? '${widget.movie.title} · S$_selectedSeasonNumber E$_selectedEpisodeNumber'
+            : widget.movie.title;
+
+        return Positioned(
+          right: viewPadding.right + miniRight,
+          bottom: viewPadding.bottom + viewInsets.bottom + miniBottom,
+          child: Material(
+            color: Colors.black,
+            elevation: 20,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(13),
+              side: const BorderSide(color: Color(0x55D9B45B)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SizedBox(
+              width: miniWidth,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    height: 32,
+                    color: const Color(0xFF171717),
+                    padding: const EdgeInsets.only(left: 6, right: 2),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _expandMiniPlayer,
+                            onPanUpdate: (details) => _moveMiniPlayer(
+                              details,
+                              maxRight: rightLimit,
+                              maxBottom: bottomLimit,
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.drag_indicator_rounded,
+                                  color: playerGold,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 3),
+                                Expanded(
+                                  child: Text(
+                                    miniTitle,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        StreamBuilder<bool>(
+                          stream: _player.stream.playing,
+                          initialData: _isPlaying,
+                          builder: (context, snapshot) {
+                            final playing = snapshot.data ?? _isPlaying;
+                            return IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 28,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: playing ? 'Pause' : 'Play',
+                              onPressed: _togglePlay,
+                              icon: Icon(
+                                playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            );
+                          },
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 30,
+                          ),
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Expand player',
+                          onPressed: _expandMiniPlayer,
+                          icon: const Icon(
+                            Icons.open_in_full_rounded,
+                            color: Colors.white,
+                            size: 15,
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 28,
+                            height: 30,
+                          ),
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Close mini player',
+                          onPressed: _closeMiniPlayer,
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                            size: 17,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: _playerBody(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _toggleFullscreen() async {
@@ -11569,6 +12160,210 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
     if (mounted) Navigator.pop(context);
     _startHideTimer();
+  }
+
+  Future<void> _loadSubtitlePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _subtitleFontSize = prefs.getDouble('flixora_sub_font_size') ?? 46;
+      _subtitleTextColor = prefs.getString('flixora_sub_text_color') ?? '#FFFFFF';
+      _subtitleBackgroundColor = prefs.getString('flixora_sub_background_color') ?? '#000000';
+      _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.62;
+      _subtitlePosition = prefs.getDouble('flixora_sub_position') ?? 92;
+      _subtitleDelay = prefs.getDouble('flixora_sub_delay') ?? 0;
+      _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
+      _subtitleShadowOffset = prefs.getDouble('flixora_sub_shadow_offset') ?? 1;
+      if (mounted && !_isDisposed) setState(() {});
+    } catch (error) {
+      debugPrint('Subtitle preferences load failed: $error');
+    }
+  }
+
+  SubtitleViewConfiguration _subtitleViewConfiguration() {
+    final backgroundHex = _subtitleBackgroundColor.replaceFirst('#', '');
+    final backgroundRgb = int.parse(backgroundHex, radix: 16);
+    final backgroundAlpha = (_subtitleBackgroundOpacity * 255)
+        .round().clamp(0, 255).toInt();
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final bottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+        .clamp(8.0, screenHeight * 0.85).toDouble();
+
+    return SubtitleViewConfiguration(
+      style: TextStyle(
+        fontFamily: 'Arial',
+        fontSize: _subtitleFontSize,
+        color: _subtitleColorFromHex(_subtitleTextColor),
+        backgroundColor: Color((backgroundAlpha << 24) | backgroundRgb),
+        fontWeight: FontWeight.w600,
+        shadows: const [
+          Shadow(color: Colors.black87, blurRadius: 2, offset: Offset(1, 1)),
+        ],
+      ),
+      textAlign: TextAlign.center,
+      padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPadding),
+    );
+  }
+
+  Future<void> _saveSubtitlePreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('flixora_sub_font_size', _subtitleFontSize);
+    await prefs.setString('flixora_sub_text_color', _subtitleTextColor);
+    await prefs.setString('flixora_sub_background_color', _subtitleBackgroundColor);
+    await prefs.setDouble('flixora_sub_background_opacity', _subtitleBackgroundOpacity);
+    await prefs.setDouble('flixora_sub_position', _subtitlePosition);
+    await prefs.setDouble('flixora_sub_delay', _subtitleDelay);
+    await prefs.setDouble('flixora_sub_outline_size', _subtitleOutlineSize);
+    await prefs.setDouble('flixora_sub_shadow_offset', _subtitleShadowOffset);
+  }
+
+  Color _subtitleColorFromHex(String value) {
+    final hex = value.replaceFirst('#', '');
+    return Color(int.parse('FF$hex', radix: 16));
+  }
+
+  void _showSubtitleStyleSettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
+      backgroundColor: playerPanel,
+      builder: (sheetContext) {
+        var fontSize = _subtitleFontSize;
+        var textColor = _subtitleTextColor;
+        var backgroundColor = _subtitleBackgroundColor;
+        var opacity = _subtitleBackgroundOpacity;
+        var position = _subtitlePosition;
+        var delay = _subtitleDelay;
+        var outline = _subtitleOutlineSize;
+        var shadow = _subtitleShadowOffset;
+        const colors = <String, String>{
+          'White': '#FFFFFF', 'Yellow': '#FFFF00', 'Green': '#00FF80',
+          'Cyan': '#00D5FF', 'Orange': '#FFB347', 'Red': '#FF7070',
+        };
+        const backgrounds = <String, String>{
+          'Black': '#000000', 'Dark Grey': '#333333', 'Navy': '#101827',
+        };
+
+        return StatefulBuilder(
+          builder: (context, updateSheet) {
+            Widget sectionLabel(String label) => Padding(
+              padding: const EdgeInsets.only(top: 14, bottom: 4),
+              child: Text(label, style: const TextStyle(
+                color: playerGoldLight, fontSize: 13, fontWeight: FontWeight.w800,
+              )),
+            );
+            Widget sliderRow({
+              required String label, required double value,
+              required double min, required double max, required int divisions,
+              required String display, required ValueChanged<double> onChanged,
+            }) => Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Expanded(child: Text(label, style: const TextStyle(color: playerWhite, fontSize: 12))),
+                  Text(display, style: const TextStyle(color: playerGoldLight, fontSize: 12, fontWeight: FontWeight.w700)),
+                ]),
+                Slider(value: value.clamp(min, max).toDouble(), min: min, max: max,
+                  divisions: divisions, activeColor: playerGold,
+                  inactiveColor: const Color(0x33FFFFFF), onChanged: onChanged),
+              ],
+            );
+
+            return SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + MediaQuery.viewInsetsOf(context).bottom),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Subtitle Appearance', style: TextStyle(
+                        color: playerWhite, fontSize: 18, fontWeight: FontWeight.w800,
+                      )),
+                      const SizedBox(height: 4),
+                      const Text('Font: Arial', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
+                      sectionLabel('TEXT SIZE'),
+                      sliderRow(label: 'Font size', value: fontSize, min: 24, max: 72,
+                        divisions: 24, display: '${fontSize.round()}',
+                        onChanged: (v) => updateSheet(() => fontSize = v)),
+                      sectionLabel('TEXT COLOUR'),
+                      DropdownButtonFormField<String>(
+                        initialValue: colors.containsValue(textColor) ? textColor : '#FFFFFF',
+                        dropdownColor: playerPanel,
+                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                        items: colors.entries.map((entry) => DropdownMenuItem(
+                          value: entry.value,
+                          child: Row(children: [
+                            Container(width: 16, height: 16, decoration: BoxDecoration(
+                              color: _subtitleColorFromHex(entry.value), shape: BoxShape.circle,
+                            )),
+                            const SizedBox(width: 10),
+                            Text(entry.key, style: const TextStyle(color: playerWhite)),
+                          ]),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) updateSheet(() => textColor = v); },
+                      ),
+                      sectionLabel('BACKGROUND'),
+                      DropdownButtonFormField<String>(
+                        initialValue: backgrounds.containsValue(backgroundColor) ? backgroundColor : '#000000',
+                        dropdownColor: playerPanel,
+                        decoration: const InputDecoration(isDense: true, border: OutlineInputBorder()),
+                        items: backgrounds.entries.map((entry) => DropdownMenuItem(
+                          value: entry.value,
+                          child: Text(entry.key, style: const TextStyle(color: playerWhite)),
+                        )).toList(),
+                        onChanged: (v) { if (v != null) updateSheet(() => backgroundColor = v); },
+                      ),
+                      sliderRow(label: 'Background opacity', value: opacity, min: 0, max: 1,
+                        divisions: 20, display: '${(opacity * 100).round()}%',
+                        onChanged: (v) => updateSheet(() => opacity = v)),
+                      sectionLabel('POSITION'),
+                      sliderRow(label: 'Vertical position', value: position, min: 5, max: 95,
+                        divisions: 18, display: '${position.round()}%',
+                        onChanged: (v) => updateSheet(() => position = v)),
+                      sectionLabel('SYNC'),
+                      sliderRow(label: 'Subtitle delay', value: delay, min: -10, max: 10,
+                        divisions: 200, display: '${delay >= 0 ? '+' : ''}${delay.toStringAsFixed(1)}s',
+                        onChanged: (v) => updateSheet(() => delay = v)),
+                      sectionLabel('READABILITY'),
+                      sliderRow(label: 'Outline', value: outline, min: 0, max: 5,
+                        divisions: 10, display: outline.toStringAsFixed(1),
+                        onChanged: (v) => updateSheet(() => outline = v)),
+                      sliderRow(label: 'Shadow', value: shadow, min: 0, max: 5,
+                        divisions: 10, display: shadow.toStringAsFixed(1),
+                        onChanged: (v) => updateSheet(() => shadow = v)),
+                      const SizedBox(height: 12),
+                      SizedBox(width: double.infinity, child: FilledButton(
+                        style: FilledButton.styleFrom(backgroundColor: playerGold, foregroundColor: Colors.black),
+                        onPressed: () async {
+                          setState(() {
+                            _subtitleFontSize = fontSize;
+                            _subtitleTextColor = textColor;
+                            _subtitleBackgroundColor = backgroundColor;
+                            _subtitleBackgroundOpacity = opacity;
+                            _subtitlePosition = position;
+                            _subtitleDelay = delay;
+                            _subtitleOutlineSize = outline;
+                            _subtitleShadowOffset = shadow;
+                          });
+                          await _saveSubtitlePreferences();
+                          if (sheetContext.mounted) Navigator.pop(sheetContext);
+                          _startHideTimer();
+                        },
+                        child: const Text('Save Subtitle Settings', style: TextStyle(fontWeight: FontWeight.w800)),
+                      )),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
   }
 
   Future<void> _addExternalSubtitle() async {
@@ -11655,6 +12450,104 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     }
   }
 
+  String _audioTrackDetails(AudioTrack track) {
+    final details = <String>[];
+    final codec = track.codec?.trim();
+    if (codec != null && codec.isNotEmpty) {
+      details.add(codec.toUpperCase());
+    }
+
+    final channelLayout = track.channels?.trim() ?? '';
+    if (channelLayout.isNotEmpty) {
+      details.add(channelLayout);
+    } else {
+      final channelCount = track.channelscount ?? track.audiochannels;
+      if (channelCount != null && channelCount > 0) {
+        final label = switch (channelCount) {
+          1 => 'Mono',
+          2 => 'Stereo',
+          6 => '5.1',
+          8 => '7.1',
+          _ => '$channelCount channels',
+        };
+        details.add(label);
+      }
+    }
+
+    final sampleRate = track.samplerate;
+    if (sampleRate != null && sampleRate > 0) {
+      final rate = sampleRate / 1000;
+      details.add('${rate.toStringAsFixed(rate == rate.roundToDouble() ? 0 : 1)} kHz');
+    }
+
+    final bitrate = track.bitrate;
+    if (bitrate != null && bitrate > 0) {
+      details.add('${(bitrate / 1000).round()} kbps');
+    }
+
+    return details.join(' • ');
+  }
+
+  Future<void> _loadAudioDelayPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedDelay = (prefs.getDouble('flixora_audio_delay') ?? 0.0)
+          .clamp(-5.0, 5.0)
+          .toDouble();
+      if (!mounted || _isDisposed) return;
+      _audioDelay = savedDelay;
+      if (savedDelay.abs() >= 0.01) {
+        await _applyAudioDelay(
+          savedDelay,
+          persist: false,
+          showFeedback: false,
+        );
+      }
+    } catch (error) {
+      debugPrint('Audio delay preference load failed: $error');
+    }
+  }
+
+  Future<bool> _applyAudioDelay(
+    double value, {
+    bool persist = true,
+    bool showFeedback = true,
+  }) async {
+    final nextDelay = value.clamp(-5.0, 5.0).toDouble();
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Audio sync is not supported by this playback platform.')),
+        );
+      }
+      return false;
+    }
+
+    try {
+      // NativePlayer exposes libmpv's audio-delay property. Positive values
+      // delay audio; negative values advance it relative to the video.
+      await platformPlayer.setProperty(
+        'audio-delay',
+        nextDelay.toStringAsFixed(2),
+      );
+      if (!mounted || _isDisposed) return false;
+      setState(() => _audioDelay = nextDelay);
+      if (persist) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setDouble('flixora_audio_delay', nextDelay);
+      }
+      return true;
+    } catch (error) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not adjust audio sync: $error')),
+        );
+      }
+      return false;
+    }
+  }
+
   void _showAudioTracks() {
     final audioTracks = _tracks.audio;
     final selectedIndex = audioTracks.isEmpty
@@ -11668,204 +12561,482 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       isScrollControlled: true,
       useSafeArea: true,
       builder: (sheetContext) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: playerPanel,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-            border: Border(top: BorderSide(color: Color(0x24FFFFFF))),
-          ),
-          child: SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 38,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0x66FFFFFF),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
+        var showOutputDevices = false;
+        var sheetAudioDelay = _audioDelay;
+
+        return StatefulBuilder(
+          builder: (sheetContext, updateSheet) {
+            final availableDevices = _player.state.audioDevices;
+            final outputDevices = <AudioDevice>[
+              AudioDevice.auto(),
+              ...availableDevices.where((device) => device.name != 'auto'),
+            ];
+            final selectedDeviceName = _player.state.audioDevice.name;
+
+            Future<void> changeAudioDelay(double value) async {
+              final next = value.clamp(-5.0, 5.0).toDouble();
+              final applied = await _applyAudioDelay(next);
+              if (applied) {
+                updateSheet(() => sheetAudioDelay = next);
+              }
+            }
+
+            Future<void> selectOutputDevice(AudioDevice device) async {
+              try {
+                await _player.setAudioDevice(device);
+                if (!mounted || _isDisposed) return;
+                setState(() {});
+                updateSheet(() => showOutputDevices = false);
+                final label = device.name == 'auto'
+                    ? 'System default'
+                    : (device.description.trim().isNotEmpty
+                        ? device.description
+                        : device.name);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Audio output: $label')),
+                );
+              } catch (error) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Could not change audio output: $error')),
+                  );
+                }
+              }
+            }
+
+            return Container(
+              decoration: const BoxDecoration(
+                color: playerPanel,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+                border: Border(top: BorderSide(color: Color(0x24FFFFFF))),
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 22),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: playerGold.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: const Icon(
-                          Icons.graphic_eq_rounded,
-                          color: playerGoldLight,
-                          size: 23,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Audio language',
-                              style: TextStyle(
-                                color: playerWhite,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            SizedBox(height: 3),
-                            Text(
-                              'Choose the audio track for this movie',
-                              style: TextStyle(
-                                color: Color(0x99FFFFFF),
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  if (audioTracks.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 18),
-                      child: Center(
-                        child: Text(
-                          'This stream does not expose alternate audio tracks.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Color(0x99FFFFFF),
-                            fontSize: 12,
+                      Center(
+                        child: Container(
+                          width: 38,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: const Color(0x66FFFFFF),
+                            borderRadius: BorderRadius.circular(20),
                           ),
                         ),
                       ),
-                    )
-                  else
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: MediaQuery.of(sheetContext).size.height * 0.52,
-                      ),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: audioTracks.length,
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final track = audioTracks[index];
-                          final selected = index == selectedIndex;
-                          final label = _audioTrackLabel(track, index);
-                          final rawTitle = track.title?.trim() ?? '';
-                          final showTrackDetail = rawTitle.isNotEmpty &&
-                              rawTitle.toLowerCase() != label.toLowerCase() &&
-                              !RegExp(
-                                r'^(audio|track)\s*#?\s*\d*$',
-                                caseSensitive: false,
-                              ).hasMatch(rawTitle);
-
-                          return Material(
-                            color: selected
-                                ? playerGold.withValues(alpha: 0.13)
-                                : playerBg,
-                            borderRadius: BorderRadius.circular(14),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(14),
-                              onTap: () => _selectAudioTrack(track),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 13,
-                                ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: selected
-                                        ? playerGold.withValues(alpha: 0.8)
-                                        : const Color(0x1FFFFFFF),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          if (showOutputDevices)
+                            IconButton(
+                              onPressed: () => updateSheet(() => showOutputDevices = false),
+                              icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
+                              tooltip: 'Back to audio tracks',
+                            )
+                          else
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: playerGold.withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(13),
+                              ),
+                              child: const Icon(
+                                Icons.graphic_eq_rounded,
+                                color: playerGoldLight,
+                                size: 23,
+                              ),
+                            ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  showOutputDevices ? 'Audio output' : 'Audio language',
+                                  style: const TextStyle(
+                                    color: playerWhite,
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
                                   ),
                                 ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 38,
-                                      height: 38,
-                                      decoration: BoxDecoration(
+                                const SizedBox(height: 3),
+                                Text(
+                                  showOutputDevices
+                                      ? 'Choose an available output device'
+                                      : 'Choose the audio track for this movie',
+                                  style: const TextStyle(
+                                    color: Color(0x99FFFFFF),
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      if (showOutputDevices)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: MediaQuery.of(sheetContext).size.height * 0.52,
+                          ),
+                          child: ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: outputDevices.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final device = outputDevices[index];
+                              final selected = device.name == selectedDeviceName;
+                              final label = device.name == 'auto'
+                                  ? 'System default'
+                                  : (device.description.trim().isNotEmpty
+                                      ? device.description
+                                      : device.name);
+                              return Material(
+                                color: selected
+                                    ? playerGold.withValues(alpha: 0.13)
+                                    : playerBg,
+                                borderRadius: BorderRadius.circular(14),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: () => selectOutputDevice(device),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 13,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
                                         color: selected
-                                            ? playerGold.withValues(alpha: 0.18)
-                                            : const Color(0x14FFFFFF),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Icon(
-                                        Icons.audiotrack_rounded,
-                                        color: selected
-                                            ? playerGoldLight
-                                            : const Color(0xB3FFFFFF),
-                                        size: 19,
+                                            ? playerGold.withValues(alpha: 0.8)
+                                            : const Color(0x1FFFFFFF),
                                       ),
                                     ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            label,
-                                            style: TextStyle(
-                                              color: playerWhite,
-                                              fontSize: 14,
-                                              fontWeight: selected
-                                                  ? FontWeight.w800
-                                                  : FontWeight.w600,
-                                            ),
-                                          ),
-                                          if (showTrackDetail) ...[
-                                            const SizedBox(height: 3),
-                                            Text(
-                                              rawTitle,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                color: Color(0x80FFFFFF),
-                                                fontSize: 10,
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.speaker_rounded,
+                                          color: playerGoldLight,
+                                          size: 21,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                label,
+                                                style: const TextStyle(
+                                                  color: playerWhite,
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
                                               ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
+                                              if (device.name != 'auto' &&
+                                                  device.description.isNotEmpty &&
+                                                  device.description != device.name)
+                                                Text(
+                                                  device.name,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    color: Color(0x80FFFFFF),
+                                                    fontSize: 10,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (selected)
+                                          const Icon(
+                                            Icons.check_circle_rounded,
+                                            color: playerGoldLight,
+                                            size: 21,
+                                          ),
+                                      ],
                                     ),
-                                    if (selected)
-                                      const Icon(
-                                        Icons.check_circle_rounded,
-                                        color: playerGoldLight,
-                                        size: 22,
-                                      )
-                                    else
-                                      const Icon(
-                                        Icons.circle_outlined,
-                                        color: Color(0x55FFFFFF),
-                                        size: 21,
-                                      ),
-                                  ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        )
+                      else ...[
+                        if (audioTracks.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 18),
+                            child: Center(
+                              child: Text(
+                                'This stream does not expose alternate audio tracks.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Color(0x99FFFFFF),
+                                  fontSize: 12,
                                 ),
                               ),
                             ),
-                          );
-                        },
-                      ),
-                    ),
-                ],
+                          )
+                        else
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: MediaQuery.of(sheetContext).size.height * 0.38,
+                            ),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: audioTracks.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final track = audioTracks[index];
+                                final selected = index == selectedIndex;
+                                final label = _audioTrackLabel(track, index);
+                                final rawTitle = track.title?.trim() ?? '';
+                                final showTrackTitle = rawTitle.isNotEmpty &&
+                                    rawTitle.toLowerCase() != label.toLowerCase() &&
+                                    !RegExp(
+                                      r'^(audio|track)\\s*#?\\s*\\d*$',
+                                      caseSensitive: false,
+                                    ).hasMatch(rawTitle);
+                                final technicalDetails = _audioTrackDetails(track);
+
+                                return Material(
+                                  color: selected
+                                      ? playerGold.withValues(alpha: 0.13)
+                                      : playerBg,
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(14),
+                                    onTap: () => _selectAudioTrack(track),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 13,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(14),
+                                        border: Border.all(
+                                          color: selected
+                                              ? playerGold.withValues(alpha: 0.8)
+                                              : const Color(0x1FFFFFFF),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 38,
+                                            height: 38,
+                                            decoration: BoxDecoration(
+                                              color: selected
+                                                  ? playerGold.withValues(alpha: 0.18)
+                                                  : const Color(0x14FFFFFF),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              Icons.audiotrack_rounded,
+                                              color: selected
+                                                  ? playerGoldLight
+                                                  : const Color(0xB3FFFFFF),
+                                              size: 19,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  label,
+                                                  style: TextStyle(
+                                                    color: playerWhite,
+                                                    fontSize: 14,
+                                                    fontWeight: selected
+                                                        ? FontWeight.w800
+                                                        : FontWeight.w600,
+                                                  ),
+                                                ),
+                                                if (showTrackTitle) ...[
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    rawTitle,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Color(0x80FFFFFF),
+                                                      fontSize: 10,
+                                                    ),
+                                                  ),
+                                                ],
+                                                if (technicalDetails.isNotEmpty) ...[
+                                                  const SizedBox(height: 3),
+                                                  Text(
+                                                    technicalDetails,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      color: Color(0x80FFFFFF),
+                                                      fontSize: 10,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                          if (selected)
+                                            const Icon(
+                                              Icons.check_circle_rounded,
+                                              color: playerGoldLight,
+                                              size: 22,
+                                            )
+                                          else
+                                            const Icon(
+                                              Icons.circle_outlined,
+                                              color: Color(0x55FFFFFF),
+                                              size: 21,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        Container(
+                          margin: const EdgeInsets.only(top: 14),
+                          padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+                          decoration: BoxDecoration(
+                            color: playerBg,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0x1FFFFFFF)),
+                          ),
+                          child: Column(
+                            children: [
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Audio sync',
+                                          style: TextStyle(
+                                            color: playerWhite,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          '− earlier  •  + later',
+                                          style: TextStyle(
+                                            color: Color(0x80FFFFFF),
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: sheetAudioDelay > -5.0
+                                        ? () => changeAudioDelay(sheetAudioDelay - 0.1)
+                                        : null,
+                                    icon: const Icon(Icons.remove_circle_outline_rounded),
+                                    color: playerGoldLight,
+                                    tooltip: 'Audio earlier by 0.1 seconds',
+                                  ),
+                                  Text(
+                                    '${sheetAudioDelay >= 0 ? '+' : ''}${sheetAudioDelay.toStringAsFixed(1)}s',
+                                    style: const TextStyle(
+                                      color: playerGoldLight,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    onPressed: sheetAudioDelay < 5.0
+                                        ? () => changeAudioDelay(sheetAudioDelay + 0.1)
+                                        : null,
+                                    icon: const Icon(Icons.add_circle_outline_rounded),
+                                    color: playerGoldLight,
+                                    tooltip: 'Audio later by 0.1 seconds',
+                                  ),
+                                ],
+                              ),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: sheetAudioDelay.abs() >= 0.01
+                                      ? () => changeAudioDelay(0)
+                                      : null,
+                                  child: const Text('Reset sync'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Material(
+                          color: playerBg,
+                          borderRadius: BorderRadius.circular(13),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(13),
+                            onTap: () => updateSheet(() => showOutputDevices = true),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 13,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.speaker_group_rounded,
+                                    color: playerGoldLight,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
+                                    child: Text(
+                                      'Audio output device',
+                                      style: TextStyle(
+                                        color: playerWhite,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    selectedDeviceName == 'auto'
+                                        ? 'System default'
+                                        : selectedDeviceName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Color(0x99FFFFFF),
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  const Icon(
+                                    Icons.chevron_right_rounded,
+                                    color: Color(0x99FFFFFF),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     ).whenComplete(_startHideTimer);
@@ -11928,6 +13099,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     onTap: () => _selectSubtitleTrack(track),
                   );
                 }),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded, color: playerGoldLight),
+                  title: const Text('Subtitle Appearance', style: TextStyle(color: playerWhite)),
+                  subtitle: const Text(
+                    'Arial · Size · Colour · Background · Sync',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showSubtitleStyleSettings();
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.add, color: playerGold),
                   title: const Text(
@@ -12046,6 +13229,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
       context: context,
       backgroundColor: playerPanel,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
       builder: (context) {
         const speeds = [
           0.25,
@@ -12067,8 +13253,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             return SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 25),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
@@ -12233,33 +13420,192 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         _showSubtitleTracks();
                       },
                     ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.gesture_rounded,
+                        color: playerGold,
+                      ),
+                      title: const Text(
+                        'Gesture controls',
+                        style: TextStyle(color: playerWhite),
+                      ),
+                      subtitle: const Text(
+                        'Swipe sensitivity and double-tap skip',
+                        style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Color(0x8AFFFFFF),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showGestureSettings();
+                      },
+                    ),
                   ],
+                  ),
                 ),
-              ),            );
+              ),
+            );
           },
         );
       },
     ).whenComplete(_startHideTimer);
   }
 
+  void _showGestureSettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          Future<void> persist() => _saveGesturePreferences();
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Gesture Controls',
+                    style: TextStyle(
+                      color: playerWhite,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Customize touch gestures while watching videos.',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Right-side volume swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the right side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _volumeGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _volumeGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Left-side brightness swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the left side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _brightnessGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _brightnessGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Double-tap to skip', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Double-tap left or right to seek', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _doubleTapSkipEnabled,
+                    onChanged: (value) {
+                      setState(() => _doubleTapSkipEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Swipe sensitivity', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                      ),
+                      Text('${_gestureSensitivity.toStringAsFixed(2)}x', style: const TextStyle(color: playerGoldLight, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                  Slider(
+                    value: _gestureSensitivity,
+                    min: 0.5,
+                    max: 2.0,
+                    divisions: 6,
+                    activeColor: playerGold,
+                    inactiveColor: const Color(0x3DFFFFFF),
+                    onChanged: (value) {
+                      setState(() => _gestureSensitivity = value);
+                      updateSheet(() {});
+                    },
+                    onChangeEnd: (_) => persist(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Double-tap skip duration', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [5, 10, 15, 20, 30].map((seconds) {
+                      final selected = _doubleTapSkipSeconds == seconds;
+                      return ChoiceChip(
+                        label: Text('${seconds}s'),
+                        selected: selected,
+                        selectedColor: playerGold,
+                        backgroundColor: playerBg,
+                        labelStyle: TextStyle(color: selected ? Colors.black : playerWhite),
+                        onSelected: (_) {
+                          setState(() => _doubleTapSkipSeconds = seconds);
+                          updateSheet(() {});
+                          persist();
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Your gesture preferences are saved on this device.',
+                    style: TextStyle(color: Color(0x80FFFFFF), fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).whenComplete(_startHideTimer);
+  }
+
   Widget _centerControls() {
+    // Keep the large center controls only in landscape/fullscreen.
+    // Portrait uses double-tap for 10-second seeking and has no center buttons.
+    if (!_isFullscreen) return const SizedBox.shrink();
+
     Widget skipControl({
       required IconData icon,
       required String tooltip,
       required VoidCallback onPressed,
     }) {
       return Container(
-        width: 48,
-        height: 48,
+        width: 46,
+        height: 46,
         decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.42),
+          color: Colors.black.withValues(alpha: 0.48),
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0x33FFFFFF)),
+          border: Border.all(color: const Color(0x55FFFFFF)),
         ),
         child: IconButton(
           tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
           onPressed: onPressed,
-          icon: Icon(icon, color: playerWhite, size: 27),
+          icon: Icon(icon, color: playerWhite, size: 25),
         ),
       );
     }
@@ -12272,34 +13618,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           tooltip: 'Back 10 seconds',
           onPressed: () => _seekBy(-10),
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 22),
         Container(
-          width: 72,
-          height: 72,
+          width: 58,
+          height: 58,
           decoration: BoxDecoration(
-            color: playerGold,
             shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [playerGoldLight, playerGold],
+            ),
+            border: Border.all(color: const Color(0xCCFFFFFF), width: 1.1),
             boxShadow: [
               BoxShadow(
-                color: playerGold.withValues(alpha: 0.35),
-                blurRadius: 24,
-                spreadRadius: 2,
+                color: playerGold.withValues(alpha: 0.28),
+                blurRadius: 18,
+                spreadRadius: 1,
               ),
             ],
           ),
           child: IconButton(
             tooltip: _isPlaying ? 'Pause' : 'Play',
             onPressed: _togglePlay,
-            iconSize: 43,
+            iconSize: 34,
             color: playerWhite,
             icon: Icon(
-              _isPlaying
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
+              _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
             ),
           ),
         ),
-        const SizedBox(width: 28),
+        const SizedBox(width: 22),
         skipControl(
           icon: Icons.forward_10_rounded,
           tooltip: 'Forward 10 seconds',
@@ -12311,133 +13660,179 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
 
   Widget _bottomControls() {
     final max = _duration.inMilliseconds.toDouble();
+    final compact = !_isFullscreen;
+
+    Widget compactAction({
+      required String tooltip,
+      required IconData icon,
+      required VoidCallback onPressed,
+      bool enabled = true,
+      Color color = playerWhite,
+    }) {
+      return IconButton(
+        tooltip: tooltip,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 42, height: 38),
+        padding: EdgeInsets.zero,
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(
+          icon,
+          color: enabled ? color : color.withValues(alpha: 0.32),
+          size: 24,
+        ),
+      );
+    }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 66, 18),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ValueListenableBuilder<Duration>(
-            valueListenable: _positionNotifier,
-            builder: (context, position, _) {
-              final current = position.inMilliseconds
-                  .toDouble()
-                  .clamp(0.0, max > 0 ? max : 1.0)
-                  .toDouble();
+      padding: EdgeInsets.fromLTRB(
+        compact ? 10 : 18,
+        0,
+        compact ? 10 : 66,
+        compact ? 6 : 18,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: compact ? Colors.black.withValues(alpha: 0.42) : null,
+          gradient: compact
+              ? null
+              : LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    const Color(0xD9101117),
+                    Colors.black.withValues(alpha: 0.76),
+                  ],
+                ),
+          borderRadius: BorderRadius.circular(compact ? 12 : 18),
+          border: Border.all(color: const Color(0x2EFFFFFF)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 8 : 12,
+            compact ? 1 : 7,
+            compact ? 8 : 12,
+            compact ? 1 : 5,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<Duration>(
+                valueListenable: _positionNotifier,
+                builder: (context, position, _) {
+                  final displayPosition =
+                      _isSeeking && _seekPreviewPosition != null
+                          ? _seekPreviewPosition!
+                          : position;
+                  final current = displayPosition.inMilliseconds
+                      .toDouble()
+                      .clamp(0.0, max > 0 ? max : 1.0)
+                      .toDouble();
 
-              return Row(
+                  return Row(
+                    children: [
+                      Text(
+                        _formatDuration(displayPosition),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: compact ? 1.8 : 3,
+                            activeTrackColor: playerGold,
+                            inactiveTrackColor: const Color(0x55FFFFFF),
+                            thumbColor: playerWhite,
+                            overlayColor: playerGold.withValues(alpha: 0.14),
+                            thumbShape: RoundSliderThumbShape(
+                              enabledThumbRadius: compact ? 4 : 5.5,
+                            ),
+                            overlayShape: RoundSliderOverlayShape(
+                              overlayRadius: compact ? 8 : 10,
+                            ),
+                          ),
+                          child: Slider(
+                            value: current,
+                            min: 0,
+                            max: max > 0 ? max : 1,
+                            onChangeStart: max > 0
+                                ? (value) {
+                                    _isSeeking = true;
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
+                                : null,
+                            onChanged: max > 0
+                                ? (value) {
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
+                                : null,
+                            onChangeEnd: max > 0 ? _seekTo : null,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _formatDuration(_duration),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              Row(
                 children: [
-                  Text(
-                    _formatDuration(position),
-                    style: const TextStyle(
-                      color: playerWhite,
-                      fontSize: 11,
-                    ),
+                  compactAction(
+                    tooltip: _isPlaying ? 'Pause' : 'Play',
+                    icon: _isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    onPressed: _togglePlay,
                   ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 2.5,
-                        activeTrackColor: playerGold,
-                        inactiveTrackColor: const Color(0x4DFFFFFF),
-                        thumbColor: playerWhite,
-                        overlayColor: playerGold.withValues(alpha: 0.16),
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 5.5,
-                        ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 10,
-                        ),
-                      ),
-                      child: Slider(
-                        value: current,
-                        min: 0,
-                        max: max > 0 ? max : 1,
-                        onChanged: max > 0
-                            ? (value) => _updatePosition(
-                                  Duration(milliseconds: value.round()),
-                                )
-                            : null,
-                        onChangeEnd: max > 0 ? _seekTo : null,
-                      ),
+                  if (_hasEpisodeNavigation) ...[
+                    compactAction(
+                      tooltip: 'Previous episode',
+                      icon: Icons.skip_previous_rounded,
+                      enabled: _canChangeEpisode(-1),
+                      onPressed: () => _changeEpisodeBy(-1),
                     ),
-                  ),
-                  Text(
-                    _formatDuration(_duration),
-                    style: const TextStyle(
-                      color: playerWhite,
-                      fontSize: 11,
+                    compactAction(
+                      tooltip: 'Next episode',
+                      icon: Icons.skip_next_rounded,
+                      enabled: _canChangeEpisode(1),
+                      onPressed: () => _changeEpisodeBy(1),
                     ),
+                  ],
+                  const Spacer(),
+                  if (compact)
+                    compactAction(
+                      tooltip: 'Picture-in-picture',
+                      icon: Icons.picture_in_picture_alt_rounded,
+                      color: playerGoldLight,
+                      onPressed: _toggleMiniPlayer,
+                    ),
+                  compactAction(
+                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                    icon: _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: _toggleFullscreen,
                   ),
                 ],
-              );
-            },
-          ),
-          Row(
-            children: [
-              IconButton(
-                constraints: const BoxConstraints(
-                  minWidth: 34,
-                  minHeight: 40,
-                ),
-                padding: EdgeInsets.zero,
-                onPressed: () => _changeVolume(_volume - 10),
-                icon: const Icon(
-                  Icons.volume_down,
-                  color: playerWhite,
-                  size: 20,
-                ),
-              ),
-              SizedBox(
-                width: 52,
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    trackHeight: 3,
-                    activeTrackColor: playerGold,
-                    inactiveTrackColor: const Color(0x3DFFFFFF),
-                    thumbColor: playerWhite,
-                    overlayColor: playerGold.withValues(alpha: 0.16),
-                    thumbShape: const RoundSliderThumbShape(
-                      enabledThumbRadius: 5,
-                    ),
-                    overlayShape: const RoundSliderOverlayShape(
-                      overlayRadius: 10,
-                    ),
-                  ),
-                  child: Slider(
-                    value: _volume.clamp(0.0, 100.0),
-                    min: 0,
-                    max: 100,
-                    onChanged: _changeVolume,
-                  ),
-                ),
-              ),
-              IconButton(
-                constraints: const BoxConstraints(
-                  minWidth: 34,
-                  minHeight: 40,
-                ),
-                padding: EdgeInsets.zero,
-                onPressed: () => _changeVolume(_volume + 10),
-                icon: const Icon(
-                  Icons.volume_up,
-                  color: playerWhite,
-                  size: 20,
-                ),
-              ),
-              TextButton(
-                onPressed: _showSettings,
-                child: Text(
-                  '${_speed}x',
-                  style: const TextStyle(
-                    color: playerGold,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -12449,6 +13844,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     final audioLabel = audioIndex >= 0
         ? _audioTrackLabel(_tracks.audio[audioIndex], audioIndex)
         : 'Audio';
+    final showEpisodeIndicator = _isFullscreen &&
+        (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -12459,6 +13856,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Back',
+              visualDensity: VisualDensity.compact,
               onPressed: () {
                 if (_isFullscreen) {
                   _toggleFullscreen();
@@ -12466,27 +13864,55 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                   Navigator.pop(context);
                 }
               },
-              icon: const Icon(
-                Icons.arrow_back_rounded,
-                color: playerWhite,
-              ),
+              icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  widget.movie.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: playerWhite,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    if (showEpisodeIndicator) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: playerGold.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: playerGold.withValues(alpha: 0.58),
+                          ),
+                        ),
+                        child: Text(
+                          'S${_selectedSeasonNumber.toString().padLeft(2, '0')} · E${_selectedEpisodeNumber.toString().padLeft(2, '0')}',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: playerGoldLight,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 2),
                 const Text(
@@ -12501,8 +13927,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               ],
             ),
           ),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: playerGoldLight,
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              minimumSize: const Size(38, 34),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: _showSettings,
+            child: Text(
+              '${_speed}x',
+              style: const TextStyle(
+                color: playerGoldLight,
+                fontWeight: FontWeight.w800,
+                fontSize: 11,
+              ),
+            ),
+          ),
           if (widget.localFilePath == null) ...[
-            const SizedBox(width: 5),
+            const SizedBox(width: 2),
             _playerTopAction(
               icon: Icons.high_quality_rounded,
               label: _loadingQualities
@@ -12516,12 +13960,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             ),
           ],
           if (_tracks.audio.isNotEmpty) ...[
-            const SizedBox(width: 3),
+            const SizedBox(width: 2),
             Material(
               color: Colors.black.withValues(alpha: 0.48),
               shape: const CircleBorder(),
               child: IconButton(
                 tooltip: 'Audio language: $audioLabel',
+                visualDensity: VisualDensity.compact,
                 onPressed: _showAudioTracks,
                 icon: const Icon(
                   Icons.audiotrack_rounded,
@@ -12531,34 +13976,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               ),
             ),
           ],
-          const SizedBox(width: 3),
-          Material(
-            color: Colors.black.withValues(alpha: 0.48),
-            shape: const CircleBorder(),
-            child: IconButton(
-              tooltip: _isMiniPlayer ? 'Expand player' : 'Mini player',
-              onPressed: _toggleMiniPlayer,
-              icon: Icon(
-                _isMiniPlayer
-                    ? Icons.open_in_full_rounded
-                    : Icons.picture_in_picture_alt_rounded,
-                color: playerGoldLight,
-                size: 20,
+          if (_isFullscreen) ...[
+            const SizedBox(width: 2),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: _isMiniPlayer ? 'Expand player' : 'Mini player',
+                visualDensity: VisualDensity.compact,
+                onPressed: _toggleMiniPlayer,
+                icon: Icon(
+                  _isMiniPlayer
+                      ? Icons.open_in_full_rounded
+                      : Icons.picture_in_picture_alt_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 3),
+          ],
+          const SizedBox(width: 2),
           Material(
             color: Colors.black.withValues(alpha: 0.48),
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Playback settings',
+              visualDensity: VisualDensity.compact,
               onPressed: _showSettings,
-              icon: const Icon(
-                Icons.tune_rounded,
-                color: playerWhite,
-                size: 21,
-              ),
+              icon: const Icon(Icons.tune_rounded, color: playerWhite, size: 21),
             ),
           ),
           Material(
@@ -12566,6 +14011,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
             shape: const CircleBorder(),
             child: IconButton(
               tooltip: 'Lock controls',
+              visualDensity: VisualDensity.compact,
               onPressed: () {
                 setState(() {
                   _isLocked = true;
@@ -12573,11 +14019,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                 });
                 _cancelHideTimer();
               },
-              icon: const Icon(
-                Icons.lock_outline_rounded,
-                color: playerWhite,
-                size: 20,
-              ),
+              icon: const Icon(Icons.lock_outline_rounded, color: playerWhite, size: 20),
             ),
           ),
         ],
@@ -12749,20 +14191,36 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                         ? BoxFit.cover
                         : BoxFit.contain),
                 controls: NoVideoControls,
+                subtitleViewConfiguration: _subtitleViewConfiguration(),
               ),
             ),
           ),
         ),
         if ((_isBuffering || !_initialized) && _errorMessage == null)
-          const IgnorePointer(
+          IgnorePointer(
             child: Center(
-              child: SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  color: playerGold,
-                  strokeWidth: 2.2,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 25,
+                    height: 25,
+                    child: CircularProgressIndicator(
+                      color: playerGold,
+                      strokeWidth: 2.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _initialized ? 'Buffering...' : 'Starting playback...',
+                    style: const TextStyle(
+                      color: Color(0xD9FFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.25,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -12799,14 +14257,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
               onScaleStart: _handlePlayerGestureStart,
               onScaleUpdate: _handlePlayerGestureUpdate,
               onScaleEnd: _handlePlayerGestureEnd,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               onDoubleTapDown: (details) {
+                if (!_doubleTapSkipEnabled) return;
                 final width = MediaQuery.of(context).size.width;
-
+                final seconds = _doubleTapSkipSeconds;
                 if (details.localPosition.dx < width / 2) {
-                  _seekBy(-10);
+                  _seekBy(-seconds);
                 } else {
-                  _seekBy(10);
+                  _seekBy(seconds);
                 }
               },
               onDoubleTap: () {},
@@ -12817,7 +14276,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _toggleControls,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
               child: Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -12832,34 +14291,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
                     stops: [0, 0.28, 0.62, 1],
                   ),
                 ),
-                child: Column(
+                child: Stack(
+                  fit: StackFit.expand,
                   children: [
-                    _topControls(),
-                    const Spacer(),
-                    _centerControls(),
-                    const Spacer(),
-                    _bottomControls(),
+                    Positioned(top: 0, left: 0, right: 0, child: _topControls()),
+                    Center(child: _centerControls()),
+                    Positioned(left: 0, right: 0, bottom: 0, child: _bottomControls()),
                   ],
-                ),
-              ),
-            ),
-          ),
-        if (_showControls && !_isLocked && _errorMessage == null)
-          Positioned(
-            right: 10,
-            bottom: 8,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                shape: BoxShape.circle,
-                border: Border.all(color: Color(0x3DFFFFFF)),
-              ),
-              child: IconButton(
-                tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
-                onPressed: _toggleFullscreen,
-                icon: Icon(
-                  _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                  color: playerWhite,
                 ),
               ),
             ),
@@ -12921,13 +14359,95 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (!_isBackgrounded) {
+        _isBackgrounded = true;
+        _wasPlayingBeforeBackground = _isPlaying;
+        if (_wasPlayingBeforeBackground) {
+          _backgroundResumePosition = _position;
+          unawaited(_saveResumePosition(_position));
+        }
+      }
+      _cancelHideTimer();
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      _isBackgrounded = false;
+      if (_wasPlayingBeforeBackground) {
+        _lastBackgroundResumeAt = DateTime.now();
+        unawaited(_recoverPlaybackAfterBackground());
+      }
+    }
+  }
+
+  Future<void> _recoverPlaybackAfterBackground() async {
+    if (!mounted || _isDisposed || _recoveringFromBackground) return;
+    _recoveringFromBackground = true;
+
+    try {
+      await Future.delayed(const Duration(milliseconds: 450));
+      if (!mounted || _isDisposed) return;
+
+      final savedPosition = _backgroundResumePosition;
+      if (!_isPlaying) {
+        await _player.play();
+        await Future.delayed(const Duration(milliseconds: 650));
+      }
+
+      if (!mounted || _isDisposed) return;
+
+      // Reopen only the exact Media already held by the player, preserving
+      // its existing request headers; never resolve a new MovieBox stream.
+      if (!_isPlaying) {
+        final playlist = _player.state.playlist;
+        final medias = playlist.medias;
+        final index = playlist.index;
+        if (index >= 0 && index < medias.length) {
+          await _player.open(medias[index], play: false);
+          if (savedPosition > Duration.zero) {
+            await _player.seek(savedPosition);
+          }
+          await _player.play();
+        }
+      } else if (savedPosition > Duration.zero &&
+          _position + const Duration(seconds: 2) < savedPosition) {
+        await _player.seek(savedPosition);
+      }
+
+      if (!mounted || _isDisposed) return;
+      if (_isPlaying) {
+        setState(() => _errorMessage = null);
+        _startHideTimer();
+      }
+    } catch (error) {
+      debugPrint('Background playback recovery attempt failed: $error');
+    } finally {
+      _recoveringFromBackground = false;
+      _wasPlayingBeforeBackground = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Persist the latest playback position even if the position stream has
     // not emitted its final update yet when the user leaves the player.
     unawaited(_saveResumePosition(_position));
     _isDisposed = true;
+    if (identical(_activeMiniPlayerState.value, this)) {
+      _activeMiniPlayerState.value = null;
+    }
+    _miniPlayerOverlayRevision.dispose();
     unawaited(PictureInPictureService.setEnabled(false));
     _gestureFeedbackTimer?.cancel();
+    _seekSyncTimer?.cancel();
+    _playerPointerCount = 0;
     _playerConnectionTimer?.cancel();
     _playbackErrorTimer?.cancel();
     unawaited(_resetApplicationBrightness());
@@ -12939,6 +14459,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _bufferingSubscription?.cancel();
     _errorSubscription?.cancel();
     _tracksSubscription?.cancel();
+    _activeTrackSubscription?.cancel();
+    _audioDevicesSubscription?.cancel();
     _completedSubscription?.cancel();
     _positionNotifier.dispose();
 
@@ -13612,6 +15134,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     _startHideTimer();
   }
 
+  void _handlePlayerPointerDown(PointerDownEvent event) {
+    if (_isDisposed) return;
+    _playerPointerCount++;
+    if (mounted) setState(() {});
+  }
+
+  void _handlePlayerPointerEnd(PointerEvent event) {
+    if (_playerPointerCount > 0) _playerPointerCount--;
+    if (mounted) setState(() {});
+  }
+
   Widget _playerPageContent() {
     final related = _relatedMovies;
     final recommended = _recommendedMovies;
@@ -13648,13 +15181,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
     return Stack(
       children: [
         CustomScrollView(
-      slivers: [
+          // A touch that starts inside the Player belongs to the Player's
+          // swipe/seek/pinch controls, not the surrounding portrait page.
+          physics: _playerPointerCount > 0
+              ? const NeverScrollableScrollPhysics()
+              : null,
+          slivers: [
             SliverToBoxAdapter(
               child: _isMiniPlayer
                   ? const SizedBox(height: 8)
-                  : AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: _playerBody(),
+                  : Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: _handlePlayerPointerDown,
+                      onPointerUp: _handlePlayerPointerEnd,
+                      onPointerCancel: _handlePlayerPointerEnd,
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: _playerBody(),
+                      ),
                     ),
             ),
         SliverToBoxAdapter(
@@ -13854,20 +15398,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> {
           _toggleFullscreen();
         }
       },
-      child: Scaffold(
-        backgroundColor: playerBg,
-        body: _isFullscreen
-            ? SafeArea(
-                top: false,
-                bottom: false,
-                child: _playerBody(),
-              )
-            : SafeArea(
-                top: true,
-                bottom: true,
-                child: _playerPageContent(),
-              ),
-      ),
+      child: _isMiniPlayer
+          ? const IgnorePointer(child: SizedBox.expand())
+          : Scaffold(
+              backgroundColor: playerBg,
+              body: _isFullscreen
+                  ? SafeArea(
+                      top: false,
+                      bottom: false,
+                      child: _playerBody(),
+                    )
+                  : SafeArea(
+                      top: true,
+                      bottom: true,
+                      child: _playerPageContent(),
+                    ),
+            ),
     );
   }
 }
