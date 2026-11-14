@@ -84,7 +84,6 @@ class AdMobService {
       if (ad == null) return;
 
       final completed = Completer<void>();
-      var didShow = false;
       var disposed = false;
 
       void disposeAd() {
@@ -100,7 +99,6 @@ class AdMobService {
 
       ad.fullScreenContentCallback = FullScreenContentCallback(
         onAdShowedFullScreenContent: (shownAd) {
-          didShow = true;
           final shownAt = DateTime.now().millisecondsSinceEpoch;
           _lastShownAtMs = shownAt;
           unawaited(_persistShownAt(shownAt));
@@ -123,11 +121,8 @@ class AdMobService {
         finish();
       }
 
-      // A successful display completes from the SDK's dismiss callback.
-      // If the SDK rejects show before displaying, fail open immediately.
-      if (!didShow && !completed.isCompleted) {
-        finish();
-      }
+      // The SDK's dismiss/failure callback completes this future. The show()
+      // method itself may return before the full-screen ad is dismissed.
       await completed.future;
     } catch (error) {
       debugPrint('FLIXORA AdMob unavailable; continuing playback: $error');
