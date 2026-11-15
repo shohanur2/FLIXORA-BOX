@@ -2341,7 +2341,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (title.mediaType != 'tv') return false;
 
       final country = title.originCountry.toUpperCase();
-      final countryCodes = country.split(RegExp(r'[,\\s]+'));
+      final countryCodes = country.split(RegExp(r'[,\s]+'));
       final hasPakistaniCountry = country == 'PK' ||
           country.contains('PAKISTAN') ||
           countryCodes.contains('PK');
