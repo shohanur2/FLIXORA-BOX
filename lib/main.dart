@@ -5172,6 +5172,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final navigator = Navigator.of(context);
     final previousRoute = _activePlayerRoute;
     final previousNavigator = _activePlayerNavigator;
+
+    _activeMiniPlayerState.value = null;
+    final route = _NonBlockingPlayerRoute(pageBuilder: builder);
+    _activePlayerNavigator = navigator;
+    _activePlayerRoute = route;
+
+    // Put the replacement Player on top before removing the old route.
+    // Removing first briefly exposes Home underneath during recommendations.
+    navigator.push<void>(route);
     if (previousRoute != null &&
         previousNavigator != null &&
         previousNavigator.mounted &&
@@ -5182,12 +5191,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         debugPrint('Could not replace the previous FLIXORA Player route: $error');
       }
     }
-
-    _activeMiniPlayerState.value = null;
-    final route = _NonBlockingPlayerRoute(pageBuilder: builder);
-    _activePlayerNavigator = navigator;
-    _activePlayerRoute = route;
-    navigator.push<void>(route);
   }
 
 
