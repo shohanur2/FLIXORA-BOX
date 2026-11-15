@@ -11385,7 +11385,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         .toList(growable: false);
   }
 
-  String get _resumeKey => _resumeKeys.first
+  String get _resumeKey => _resumeKeys.first;
 
   String _resolveInitialNetworkUrl() {
     // Admin-managed encodes take priority over the legacy single video_url.
@@ -13205,7 +13205,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await prefs.setInt(key, seconds);
         await prefs.setInt('${key}_duration', durationSeconds);
       }
-      for (final recentKey of recentKeys) {
+      for (final recentKey in recentKeys) {
         await prefs.setInt(recentKey, seconds);
         await prefs.setInt('${recentKey}_duration', durationSeconds);
       }
