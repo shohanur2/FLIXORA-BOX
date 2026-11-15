@@ -2321,7 +2321,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // MovieBox records stay first so their playable source remains canonical.
     final candidates = _deduplicateMovies([
       ...pakistaniSectionItems,
-      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ..._regularMovieBoxItems.where(isSeries),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ..._pakistaniTrendingTv,
       ..._tmdbTrendingTv,
@@ -3221,7 +3221,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(sections);
-      unawaited(_refreshPakistaniDramaCatalogue(forceRefresh: forceRefresh));
       unawaited(_refreshCatalogVisibility(
         candidates: sections.expand((section) => section.items).toList(),
         forceRefresh: true,
@@ -3552,6 +3551,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       // MovieBox sections can render independently while TMDB is loading.
       unawaited(_refreshMovieBoxHome(forceRefresh: forceRefresh));
+      unawaited(_refreshPakistaniDramaCatalogue(forceRefresh: forceRefresh));
 
       var completedRequests = 0;
       const primaryRequestCount = 5;
