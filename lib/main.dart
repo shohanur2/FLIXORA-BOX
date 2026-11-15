@@ -4235,6 +4235,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     unawaited(_runDownloadTask(task));
   }
 
+  Future<void> addDownload(
+    Movie movie, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
+    final preparationKey =
+        '${movie.source}:${movie.id}:${seasonNumber ?? 0}:${episodeNumber ?? 0}';
+    if (!_downloadPreparationKeys.add(preparationKey)) return;
+
+    _showMessage('Preparing download options...');
+    try {
+      await _prepareDownload(
+        movie,
+        seasonNumber: seasonNumber,
+        episodeNumber: episodeNumber,
+      );
+    } finally {
+      _downloadPreparationKeys.remove(preparationKey);
+    }
+  }
+
   Future<void> _prepareDownload(
     Movie movie, {
     int? seasonNumber,
