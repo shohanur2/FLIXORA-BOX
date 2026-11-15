@@ -14734,7 +14734,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           : storedSubtitleFontSize.clamp(12, 36).toDouble();
       _subtitleTextColor = prefs.getString('flixora_sub_text_color') ?? '#FFFFFF';
       _subtitleBackgroundColor = prefs.getString('flixora_sub_background_color') ?? '#000000';
-      _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.62;
+      _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.24;
       _subtitlePosition = prefs.getDouble('flixora_sub_position') ?? 92;
       _subtitleDelay = prefs.getDouble('flixora_sub_delay') ?? 0;
       _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
@@ -15038,6 +15038,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           language: 'external',
         ),
       );
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', 'yes');
+      }
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
 
       if (mounted) {
         Navigator.pop(context);
