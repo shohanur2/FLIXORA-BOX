@@ -7850,7 +7850,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, index) {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-            return GestureDetector(onTap: () => _openMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onTap: () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
@@ -7863,16 +7863,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<int?> _watchProgressPercent(Movie movie) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id;
+      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id.abs();
       final resumeKey = 'flixora_resume_${movie.mediaType}_$id';
       final recentKey = 'flixora_recent_resume_${movie.mediaType}_$id';
-      final position = prefs.getInt(recentKey) ??
-          prefs.getInt(resumeKey) ??
-          0;
-      final duration = prefs.getInt('${recentKey}_duration') ??
-          prefs.getInt('${resumeKey}_duration') ??
-          0;
-      if (position <= 0 || duration <= 0) return null;
+
+      int readMilliseconds(String key) {
+        final precise = prefs.getInt('${key}_ms');
+        return precise ?? ((prefs.getInt(key) ?? 0) * 1000);
+      }
+
+      int readDurationMilliseconds(String key) {
+        final precise = prefs.getInt('${key}_duration_ms');
+        return precise ??
+            ((prefs.getInt('${key}_duration') ?? 0) * 1000);
+      }
+
+      var position = readMilliseconds(recentKey);
+      var duration = readDurationMilliseconds(recentKey);
+      if (position <= 0 || duration <= 0) {
+        position = readMilliseconds(resumeKey);
+        duration = readDurationMilliseconds(resumeKey);
+      }
+      if (position <= 0 || duration <= 0) {
+        final episodePrefix = 'flixora_resume_${movie.mediaType}_${id}_s';
+        var bestProgress = 0;
+        for (final key in prefs.getKeys()) {
+          if (!key.startsWith(episodePrefix) ||
+              key.endsWith('_duration') ||
+              key.endsWith('_ms') ||
+              key.endsWith('_duration_ms')) {
+            continue;
+          }
+          final episodePosition = readMilliseconds(key);
+          final episodeDuration = readDurationMilliseconds(key);
+          if (episodePosition <= 0 || episodeDuration <= 0) continue;
+          final percent = ((episodePosition / episodeDuration) * 100)
+              .round()
+              .clamp(0, 100);
+          if (percent > bestProgress) bestProgress = percent;
+        }
+        if (bestProgress > 0) return bestProgress;
+        return 0;
+      }
       return ((position / duration) * 100).round().clamp(0, 100);
     } catch (_) {
       return null;
@@ -7909,9 +7941,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               FutureBuilder<int?>(
                 future: _watchProgressPercent(movie),
                 builder: (context, snapshot) {
-                  final progress = snapshot.data;
+                  final progress = snapshot.data ?? 0;
                   return Text(
-                    progress == null ? '' : '$progress% watched',
+                    '$progress% watched',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -9475,7 +9507,7 @@ Entertainment Beyond Boundaries.
               const Spacer(),
               Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
+            IconButton(onPressed: () => _playMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
@@ -11331,6 +11363,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   int _tvSeasonRequestToken = 0;
   int _movieBoxPlaybackRequestToken = 0;
   String? _tvEpisodeError;
+  bool _showAllSeasonEpisodes = false;
+  bool _loadingAllEpisodes = false;
+  List<Map<String, dynamic>> _allTvEpisodes = [];
 
   String? _errorMessage;
 
@@ -11384,7 +11419,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   List<String> get _resumeKeys {
     final ids = <int>{
       if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
-      if (widget.movie.id > 0) widget.movie.id,
+      if (widget.movie.id != 0) widget.movie.id.abs(),
     };
     final episodeKey = widget.movie.mediaType == 'tv'
         ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
@@ -11395,6 +11430,61 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   String get _resumeKey => _resumeKeys.first;
+
+  List<String> get _lastEpisodeKeys {
+    if (widget.movie.mediaType != 'tv') return const <String>[];
+    final ids = <int>{
+      if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
+      if (widget.movie.id != 0) widget.movie.id.abs(),
+    };
+    return ids
+        .map((id) => 'flixora_last_episode_tv_$id')
+        .toList(growable: false);
+  }
+
+  Future<List<int>?> _readLastEpisodeSelection() async {
+    if (widget.movie.mediaType != 'tv' || widget.localFilePath != null) {
+      return null;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in _lastEpisodeKeys) {
+        final raw = prefs.getString(key);
+        if (raw == null || raw.isEmpty) continue;
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) continue;
+        final season = _toInt(decoded['season']);
+        final episode = _toInt(decoded['episode']);
+        if (season > 0 && episode > 0) return <int>[season, episode];
+      }
+    } catch (error) {
+      debugPrint('Could not read last FLIXORA episode: $error');
+    }
+    return null;
+  }
+
+  Future<void> _persistLastEpisodeSelection(
+    int season,
+    int episode,
+  ) async {
+    if (widget.movie.mediaType != 'tv' ||
+        season <= 0 ||
+        episode <= 0) {
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = jsonEncode(<String, int>{
+        'season': season,
+        'episode': episode,
+      });
+      for (final key in _lastEpisodeKeys) {
+        await prefs.setString(key, value);
+      }
+    } catch (error) {
+      debugPrint('Could not save last FLIXORA episode: $error');
+    }
+  }
 
   String _resolveInitialNetworkUrl() {
     // Admin-managed encodes take priority over the legacy single video_url.
@@ -11461,7 +11551,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
-    unawaited(_configureVolumeBoost());
     _loadSubtitlePreferences();
     _loadAudioDelayPreference();
     _loadGesturePreferences();
@@ -11491,15 +11580,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         final firstSeason = seasons.isNotEmpty
             ? _toInt(seasons.first['season_number'])
             : 1;
+        final savedSelection = await _readLastEpisodeSelection();
+        final savedSeason = savedSelection == null
+            ? firstSeason
+            : (seasons.any((item) =>
+                    _toInt(item['season_number']) == savedSelection[0])
+                ? savedSelection[0]
+                : firstSeason);
+        final savedEpisode = savedSelection?[1];
         if (mounted && !_isDisposed) {
           setState(() {
             _tvSeasons = seasons;
-            _selectedSeasonNumber = firstSeason;
-            _selectedEpisodeNumber = 1;
+            _selectedSeasonNumber = savedSeason;
+            _selectedEpisodeNumber = savedEpisode ?? 1;
           });
         }
 
-        await _loadTvSeasonEpisodes(firstSeason);
+        await _loadTvSeasonEpisodes(
+          savedSeason,
+          preferredEpisode: savedEpisode,
+        );
       }
       return details;
     } catch (e) {
@@ -11508,9 +11608,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _loadTvSeasonEpisodes(int seasonNumber) async {
+  Future<void> _loadTvSeasonEpisodes(
+    int seasonNumber, {
+    int? preferredEpisode,
+  }) async {
     if (widget.movie.isMovieBox) {
-      await _loadMovieBoxSeasonEpisodes(seasonNumber, resolveStreams: true);
+      await _loadMovieBoxSeasonEpisodes(
+        seasonNumber,
+        resolveStreams: true,
+        preferredEpisode: preferredEpisode,
+      );
       return;
     }
     if (widget.movie.tmdbId <= 0 || _isDisposed) return;
@@ -11520,7 +11627,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _loadingTvEpisodes = true;
         _tvEpisodeError = null;
         _selectedSeasonNumber = seasonNumber;
-        _selectedEpisodeNumber = 1;
+        _selectedEpisodeNumber = preferredEpisode ?? 1;
       });
     }
     List<Map<String, dynamic>> episodes = [];
@@ -11543,13 +11650,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final firstEpisode = episodes.isNotEmpty
         ? _toInt(episodes.first['episode_number'])
         : 1;
+    final selectedEpisode = preferredEpisode != null &&
+            episodes.any((item) =>
+                _toInt(item['episode_number']) == preferredEpisode)
+        ? preferredEpisode
+        : firstEpisode;
     if (!mounted || _isDisposed || requestToken != _tvSeasonRequestToken) return;
     setState(() {
       _tvEpisodes = episodes;
-      _selectedEpisodeNumber = firstEpisode;
+      _selectedEpisodeNumber = selectedEpisode;
       _loadingTvEpisodes = false;
       _tvEpisodeError = errorMessage;
     });
+    await _persistLastEpisodeSelection(seasonNumber, selectedEpisode);
   }
 
   void _selectTvEpisode(int episodeNumber) {
@@ -11560,6 +11673,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Persist the currently selected episode before changing the key.
     unawaited(_saveResumePosition(_position));
     setState(() => _selectedEpisodeNumber = episodeNumber);
+    unawaited(_persistLastEpisodeSelection(
+      _selectedSeasonNumber,
+      episodeNumber,
+    ));
     if (widget.movie.isMovieBox) {
       unawaited(_loadMovieBoxStreams(
         season: _selectedSeasonNumber,
@@ -11659,6 +11776,169 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       episode: episodeNumber,
       openPlayer: true,
     );
+  }
+
+  Future<void> _toggleAllEpisodes() async {
+    if (_showAllSeasonEpisodes) {
+      if (mounted) setState(() => _showAllSeasonEpisodes = false);
+      return;
+    }
+    if (_allTvEpisodes.isNotEmpty) {
+      if (mounted) setState(() => _showAllSeasonEpisodes = true);
+      return;
+    }
+
+    if (mounted) {
+      setState(() => _loadingAllEpisodes = true);
+    }
+    try {
+      if (!widget.movie.isMovieBox && _tvSeasons.isEmpty) {
+        await _movieDetailsFuture;
+        if (!mounted || _isDisposed) return;
+      }
+      final allEpisodes = <Map<String, dynamic>>[];
+      if (widget.movie.isMovieBox && widget.movie.movieBoxIsSeries) {
+        for (final entry in _episodeNavigationEntries()) {
+          allEpisodes.add(<String, dynamic>{
+            'season_number': entry[0],
+            'episode_number': entry[1],
+            'name': 'Episode ${entry[1]}',
+          });
+        }
+      } else {
+        final seasons = _tvSeasons
+            .map((season) => _toInt(season['season_number']))
+            .where((number) => number > 0)
+            .toSet()
+            .toList()
+          ..sort();
+        final results = await Future.wait(
+          seasons.map((seasonNumber) async {
+            try {
+              return await TmdbService.seasonDetails(
+                widget.movie.tmdbId,
+                seasonNumber,
+              );
+            } catch (_) {
+              return <String, dynamic>{};
+            }
+          }),
+        );
+        for (var index = 0; index < results.length; index++) {
+          final seasonNumber = seasons[index];
+          final episodes = (results[index]['episodes'] as List? ?? const [])
+              .whereType<Map>()
+              .map((episode) {
+                final item = Map<String, dynamic>.from(episode);
+                item['season_number'] = seasonNumber;
+                return item;
+              });
+          allEpisodes.addAll(episodes);
+        }
+      }
+
+      if (allEpisodes.isEmpty) {
+        allEpisodes.addAll(_tvEpisodes.map((episode) => <String, dynamic>{
+              ...episode,
+              'season_number': _selectedSeasonNumber,
+            }));
+      }
+      allEpisodes.sort((a, b) {
+        final seasonCompare = _toInt(a['season_number'])
+            .compareTo(_toInt(b['season_number']));
+        if (seasonCompare != 0) return seasonCompare;
+        return _toInt(a['episode_number'])
+            .compareTo(_toInt(b['episode_number']));
+      });
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _allTvEpisodes = allEpisodes;
+          _showAllSeasonEpisodes = true;
+        });
+      }
+    } catch (error) {
+      debugPrint('Could not load all FLIXORA episodes: $error');
+      if (mounted && !_isDisposed) {
+        setState(() => _tvEpisodeError = 'Could not load all episodes. Please try again.');
+      }
+    } finally {
+      if (mounted && !_isDisposed) {
+        setState(() => _loadingAllEpisodes = false);
+      }
+    }
+  }
+
+  Future<void> _selectEpisodeFromAll(int seasonNumber, int episodeNumber) async {
+    if (seasonNumber <= 0 ||
+        episodeNumber <= 0 ||
+        _loadingQualities ||
+        _isOpening ||
+        _isDisposed) {
+      return;
+    }
+    if (widget.movie.isMovieBox && widget.movie.movieBoxIsSeries) {
+      if (seasonNumber == _selectedSeasonNumber) {
+        _selectTvEpisode(episodeNumber);
+        return;
+      }
+      final season = _movieBoxSeasons.cast<Map<String, dynamic>?>().firstWhere(
+        (item) => _toInt(item?['se']) == seasonNumber,
+        orElse: () => null,
+      );
+      final episodeNumbers = (season?['episodes'] as List? ?? const [])
+          .map(_toInt)
+          .where((number) => number > 0)
+          .toList(growable: false);
+      final episodes = episodeNumbers
+          .map((number) => <String, dynamic>{
+                'episode_number': number,
+                'name': 'Episode $number',
+              })
+          .toList(growable: false);
+      if (!episodeNumbers.contains(episodeNumber)) return;
+      unawaited(_saveResumePosition(_position));
+      if (mounted) {
+        setState(() {
+          _selectedSeasonNumber = seasonNumber;
+          _selectedEpisodeNumber = episodeNumber;
+          _tvEpisodes = episodes;
+          _loadingTvEpisodes = false;
+          _tvEpisodeError = null;
+          _loadingQualities = true;
+          _errorMessage = null;
+        });
+      }
+      await _persistLastEpisodeSelection(seasonNumber, episodeNumber);
+      await _loadMovieBoxStreams(
+        season: seasonNumber,
+        episode: episodeNumber,
+        openPlayer: true,
+      );
+      return;
+    }
+
+    if (seasonNumber != _selectedSeasonNumber) {
+      await _loadTvSeasonEpisodes(
+        seasonNumber,
+        preferredEpisode: episodeNumber,
+      );
+    } else {
+      _selectTvEpisode(episodeNumber);
+    }
+  }
+
+  int get _totalTvEpisodeCount {
+    if (widget.movie.isMovieBox && widget.movie.movieBoxIsSeries) {
+      final actualCount = _episodeNavigationEntries().length;
+      if (actualCount > 0) return actualCount;
+    }
+    final declaredCount = _tvSeasons.fold<int>(
+      0,
+      (total, season) => total + _toInt(season['episode_count']),
+    );
+    if (declaredCount > 0) return declaredCount;
+    if (_allTvEpisodes.isNotEmpty) return _allTvEpisodes.length;
+    return _tvEpisodes.length;
   }
 
   Widget _tvEpisodeSelector() {
@@ -11775,75 +12055,166 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   },
           ),
           const SizedBox(height: 13),
-          const Text(
-            'Episodes',
-            style: TextStyle(
+          Text(
+            _totalTvEpisodeCount > 0
+                ? 'Episodes ($_totalTvEpisodeCount)'
+                : 'Episodes',
+            style: const TextStyle(
               color: playerWhite,
               fontSize: 12,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 8),
-          if (episodeNumbers.isNotEmpty)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 13,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: playerGold.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: playerGold.withValues(alpha: 0.8),
-                      ),
-                    ),
-                    child: const Text(
-                      'All',
-                      style: TextStyle(
-                        color: playerGoldLight,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 7),
-                  ...episodeNumbers.map((number) {
-                    final selected = number == safeEpisode;
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 7),
-                      child: ChoiceChip(
-                        label: Text(number.toString().padLeft(2, '0')),
-                        selected: selected,
+          if (seasonNumbers.isNotEmpty)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      ChoiceChip(
+                        label: Text(
+                          _totalTvEpisodeCount > 0
+                              ? 'All ($_totalTvEpisodeCount)'
+                              : 'All',
+                        ),
+                        selected: _showAllSeasonEpisodes,
                         showCheckmark: false,
-                        onSelected: (_loadingTvEpisodes || _loadingQualities || _isOpening)
+                        onSelected: (_loadingTvEpisodes ||
+                                _loadingQualities ||
+                                _isOpening ||
+                                _loadingAllEpisodes)
                             ? null
-                            : (_) => _selectTvEpisode(number),
+                            : (_) => _toggleAllEpisodes(),
                         selectedColor: playerGold.withValues(alpha: 0.22),
                         backgroundColor: playerBg,
                         side: BorderSide(
-                          color: selected
+                          color: _showAllSeasonEpisodes
                               ? playerGold
                               : const Color(0x3DFFFFFF),
                         ),
                         labelStyle: TextStyle(
-                          color: selected
+                          color: _showAllSeasonEpisodes
                               ? playerGoldLight
                               : playerWhite,
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
                         ),
-                        visualDensity: VisualDensity.compact,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
                       ),
-                    );
-                  }),
-                ],
-              ),
+                      const SizedBox(width: 7),
+                      if (!_showAllSeasonEpisodes)
+                        ...episodeNumbers.map((number) {
+                          final selected = number == safeEpisode;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 7),
+                            child: ChoiceChip(
+                              label: Text(number.toString().padLeft(2, '0')),
+                              selected: selected,
+                              showCheckmark: false,
+                              onSelected: (_loadingTvEpisodes ||
+                                      _loadingQualities ||
+                                      _isOpening)
+                                  ? null
+                                  : (_) => _selectTvEpisode(number),
+                              selectedColor: playerGold.withValues(alpha: 0.22),
+                              backgroundColor: playerBg,
+                              side: BorderSide(
+                                color: selected
+                                    ? playerGold
+                                    : const Color(0x3DFFFFFF),
+                              ),
+                              labelStyle: TextStyle(
+                                color: selected
+                                    ? playerGoldLight
+                                    : playerWhite,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          );
+                        }),
+                    ],
+                  ),
+                ),
+                if (episodeNumbers.isEmpty &&
+                    !_loadingTvEpisodes &&
+                    !_showAllSeasonEpisodes)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'No episodes available in this season.',
+                      style: TextStyle(
+                        color: Color(0x99FFFFFF),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                if (_loadingAllEpisodes)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 10),
+                    child: LinearProgressIndicator(
+                      minHeight: 2,
+                      color: playerGold,
+                      backgroundColor: playerBg,
+                    ),
+                  ),
+                if (_showAllSeasonEpisodes && _allTvEpisodes.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 190),
+                      child: Scrollbar(
+                        thumbVisibility: true,
+                        child: SingleChildScrollView(
+                          child: Wrap(
+                            spacing: 7,
+                            runSpacing: 7,
+                            children: _allTvEpisodes.map((episode) {
+                              final season = _toInt(episode['season_number']);
+                              final number = _toInt(episode['episode_number']);
+                              final selected = season == safeSeason &&
+                                  number == safeEpisode;
+                              return ChoiceChip(
+                                label: Text(
+                                  'S$season E${number.toString().padLeft(2, '0')}',
+                                ),
+                                selected: selected,
+                                showCheckmark: false,
+                                onSelected: (_loadingTvEpisodes ||
+                                        _loadingQualities ||
+                                        _isOpening)
+                                    ? null
+                                    : (_) => _selectEpisodeFromAll(season, number),
+                                selectedColor: playerGold.withValues(alpha: 0.22),
+                                backgroundColor: playerBg,
+                                side: BorderSide(
+                                  color: selected
+                                      ? playerGold
+                                      : const Color(0x3DFFFFFF),
+                                ),
+                                labelStyle: TextStyle(
+                                  color: selected
+                                      ? playerGoldLight
+                                      : playerWhite,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                                visualDensity: VisualDensity.compact,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             )
           else if (!_loadingTvEpisodes)
             const Text(
@@ -12041,68 +12412,130 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     try {
       final rawItem = widget.movie.toMovieBoxMap();
-      final pendingRequests = <Future<dynamic>>[
-        MovieBoxService.playDetail(rawItem)
-            .timeout(const Duration(seconds: 18)),
-      ];
+      final detailFuture = MovieBoxService.playDetail(rawItem)
+          .timeout(const Duration(seconds: 18));
+      final seasonsFuture = widget.movie.movieBoxIsSeries
+          ? MovieBoxService.seasons(widget.movie.movieBoxId)
+              .timeout(const Duration(seconds: 18))
+          : Future<dynamic>.value(const <dynamic>[]);
+
+      // The detail response is required for stream resolution; season metadata
+      // is only needed for the selector. Start resolving the selected stream
+      // as soon as the required detail is ready instead of waiting for both.
+      _movieBoxDetail = Map<String, dynamic>.from(await detailFuture as Map);
+      if (_isDisposed) return;
+
+      final savedSelection = await _readLastEpisodeSelection();
+      var targetSeason = savedSelection?[0] ?? 1;
+      var targetEpisode = savedSelection?[1] ?? 1;
+
       if (widget.movie.movieBoxIsSeries) {
-        pendingRequests.add(
-          MovieBoxService.seasons(widget.movie.movieBoxId)
-              .timeout(const Duration(seconds: 18)),
-        );
-      }
-
-      // These requests do not depend on one another. Resolve them together,
-      // and keep rich cast/detail metadata out of the playback critical path.
-      final resolved = await Future.wait<dynamic>(pendingRequests);
-      _movieBoxDetail = Map<String, dynamic>.from(resolved.first as Map);
-
-      if (widget.movie.movieBoxIsSeries) {
-        _movieBoxSeasons = (resolved[1] as List)
-            .whereType<Map>()
-            .map((season) => Map<String, dynamic>.from(season))
-            .toList(growable: false);
-        final normalizedSeasons = _movieBoxSeasons
-            .map((season) {
-              final episodes = (season['episodes'] as List? ?? const [])
-                  .map(_toInt)
-                  .where((number) => number > 0)
-                  .toList(growable: false);
-              return <String, dynamic>{
-                'season_number': _toInt(season['se']),
-                'episode_count': _toInt(season['maxEp']),
-                'episodes': episodes,
-              };
-            })
-            .where((season) => _toInt(season['season_number']) > 0)
-            .toList(growable: false)
-          ..sort((a, b) => _toInt(a['season_number'])
-              .compareTo(_toInt(b['season_number'])));
-
-        if (normalizedSeasons.isNotEmpty) {
-          final firstSeason = _toInt(normalizedSeasons.first['season_number']);
-          if (mounted && !_isDisposed) {
-            setState(() {
-              _tvSeasons = normalizedSeasons;
-              _selectedSeasonNumber = firstSeason;
-              _selectedEpisodeNumber = 1;
-            });
-          }
-          await _loadMovieBoxSeasonEpisodes(
-            firstSeason,
-            resolveStreams: false,
-          );
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _selectedSeasonNumber = targetSeason;
+            _selectedEpisodeNumber = targetEpisode;
+          });
         }
       }
 
-      await _loadMovieBoxStreams(
-        season: widget.movie.movieBoxIsSeries ? _selectedSeasonNumber : 0,
-        episode: widget.movie.movieBoxIsSeries ? _selectedEpisodeNumber : 0,
+      final streamFuture = _loadMovieBoxStreams(
+        season: widget.movie.movieBoxIsSeries ? targetSeason : 0,
+        episode: widget.movie.movieBoxIsSeries ? targetEpisode : 0,
         openPlayer: true,
       );
+
+      if (widget.movie.movieBoxIsSeries) {
+        try {
+          final rawSeasons = await seasonsFuture;
+          _movieBoxSeasons = (rawSeasons as List)
+              .whereType<Map>()
+              .map((season) => Map<String, dynamic>.from(season))
+              .toList(growable: false);
+          final normalizedSeasons = _movieBoxSeasons
+              .map((season) {
+                final episodes = (season['episodes'] as List? ?? const [])
+                    .map(_toInt)
+                    .where((number) => number > 0)
+                    .toList(growable: false);
+                return <String, dynamic>{
+                  'season_number': _toInt(season['se']),
+                  'episode_count': _toInt(season['maxEp']),
+                  'episodes': episodes,
+                };
+              })
+              .where((season) => _toInt(season['season_number']) > 0)
+              .toList(growable: false)
+            ..sort((a, b) => _toInt(a['season_number'])
+                .compareTo(_toInt(b['season_number'])));
+
+          if (normalizedSeasons.isNotEmpty) {
+            final hasSavedSeason = normalizedSeasons.any((season) =>
+                _toInt(season['season_number']) == targetSeason);
+            if (!hasSavedSeason) {
+              targetSeason = _toInt(normalizedSeasons.first['season_number']);
+              final firstEpisodes =
+                  normalizedSeasons.first['episodes'] as List? ?? const [];
+              targetEpisode = firstEpisodes.isNotEmpty
+                  ? _toInt(firstEpisodes.first)
+                  : 1;
+            } else {
+              final selectedSeason = normalizedSeasons.firstWhere((season) =>
+                  _toInt(season['season_number']) == targetSeason);
+              final validEpisodes =
+                  selectedSeason['episodes'] as List? ?? const [];
+              if (!validEpisodes.contains(targetEpisode)) {
+                targetEpisode = validEpisodes.isNotEmpty
+                    ? _toInt(validEpisodes.first)
+                    : 1;
+              }
+            }
+
+            final selectedSeason = normalizedSeasons.firstWhere((season) =>
+                _toInt(season['season_number']) == targetSeason);
+            final episodeNumbers =
+                selectedSeason['episodes'] as List? ?? const [];
+            final episodeItems = episodeNumbers
+                .map((number) => <String, dynamic>{
+                      'episode_number': _toInt(number),
+                      'name': 'Episode ${_toInt(number)}',
+                    })
+                .toList(growable: false);
+
+            if (mounted && !_isDisposed) {
+              setState(() {
+                _tvSeasons = normalizedSeasons;
+                _selectedSeasonNumber = targetSeason;
+                _selectedEpisodeNumber = targetEpisode;
+                _tvEpisodes = episodeItems;
+              });
+            }
+            await _persistLastEpisodeSelection(targetSeason, targetEpisode);
+
+            // Correct an unavailable saved/default episode only after the
+            // metadata confirms the valid first episode for that season.
+            final initialSelectionWasCorrect =
+                savedSelection == null
+                    ? targetSeason == 1 && targetEpisode == 1
+                    : savedSelection[0] == targetSeason &&
+                        savedSelection[1] == targetEpisode;
+            if (!initialSelectionWasCorrect) {
+              await _loadMovieBoxStreams(
+                season: targetSeason,
+                episode: targetEpisode,
+                openPlayer: true,
+              );
+            }
+          }
+        } catch (error) {
+          // A slow season-list request must not prevent the stream from playing.
+          debugPrint('MovieBox season metadata unavailable during startup: $error');
+        }
+      }
+
+      await streamFuture;
     } catch (error) {
       debugPrint('MovieBox playback preparation failed: $error');
-      if (mounted && !_isDisposed) {
+      if (mounted && !_isDisposed && !_initialized) {
         setState(() {
           _errorMessage = 'MovieBox could not resolve a playable stream. Please retry.';
           _tvEpisodeError = error.toString();
@@ -12118,6 +12551,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _loadMovieBoxSeasonEpisodes(
     int seasonNumber, {
     required bool resolveStreams,
+    int? preferredEpisode,
   }) async {
     if (_isDisposed) return;
     final requestToken = resolveStreams
@@ -12146,13 +12580,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             })
         .toList(growable: false);
     final firstEpisode = episodeNumbers.isNotEmpty ? episodeNumbers.first : 1;
+    final selectedEpisode = preferredEpisode != null &&
+            episodeNumbers.contains(preferredEpisode)
+        ? preferredEpisode
+        : firstEpisode;
 
     if (!mounted || _isDisposed) return;
     // Keep the previous episode's timestamp under its original season/episode key.
     unawaited(_saveResumePosition(_position));
     setState(() {
       _selectedSeasonNumber = seasonNumber;
-      _selectedEpisodeNumber = firstEpisode;
+      _selectedEpisodeNumber = selectedEpisode;
       _tvEpisodes = episodes;
       _loadingTvEpisodes = false;
       _tvEpisodeError = episodes.isEmpty
@@ -12163,11 +12601,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _errorMessage = null;
       }
     });
+    await _persistLastEpisodeSelection(seasonNumber, selectedEpisode);
 
     if (resolveStreams) {
       await _loadMovieBoxStreams(
         season: seasonNumber,
-        episode: firstEpisode,
+        episode: selectedEpisode,
         openPlayer: true,
       );
     }
@@ -12204,6 +12643,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }) async {
     final detail = _movieBoxDetail;
     if (detail == null || _isDisposed) return;
+    if (widget.movie.movieBoxIsSeries && season > 0 && episode > 0) {
+      unawaited(_persistLastEpisodeSelection(season, episode));
+    }
     final requestToken = ++_movieBoxPlaybackRequestToken;
 
     if (openPlayer && _initialized) {
@@ -12600,6 +13042,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _prepareAndInitializePlayer() async {
+    // Apply MPV cache settings before opening a network stream.
+    await _configureVolumeBoost();
+    if (_isDisposed) return;
+
     // A downloaded MovieBox movie/episode must play from local storage without
     // trying to resolve online seasons or CDN streams again.
     if (widget.localFilePath != null) {
@@ -12610,6 +13056,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (widget.movie.isMovieBox) {
       await _prepareMovieBoxPlayback();
       return;
+    }
+
+    if (widget.movie.mediaType == 'tv') {
+      final savedSelection = await _readLastEpisodeSelection();
+      if (savedSelection != null && mounted && !_isDisposed) {
+        _selectedSeasonNumber = savedSelection[0];
+        _selectedEpisodeNumber = savedSelection[1];
+      }
     }
 
     // Start a valid direct source immediately while quality metadata loads.
@@ -13172,19 +13626,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (_isDisposed) return;
     _restoringResumePosition = true;
     try {
+      final lastEpisode = await _readLastEpisodeSelection();
+      if (lastEpisode != null && mounted && !_isDisposed) {
+        _selectedSeasonNumber = lastEpisode[0];
+        _selectedEpisodeNumber = lastEpisode[1];
+      }
       final prefs = await SharedPreferences.getInstance();
       final resumeKeys = _resumeKeys;
-      var savedSeconds = 0;
+      var savedMilliseconds = 0;
       String? savedKey;
       for (final key in resumeKeys) {
-        final candidate = prefs.getInt(key) ?? 0;
-        if (candidate > savedSeconds) {
-          savedSeconds = candidate;
+        final legacySeconds = prefs.getInt(key) ?? 0;
+        final candidate = prefs.getInt('${key}_ms') ??
+            (legacySeconds * 1000);
+        if (candidate > savedMilliseconds) {
+          savedMilliseconds = candidate;
           savedKey = key;
         }
       }
-      if (savedSeconds <= 5) return;
-      final savedPosition = Duration(seconds: savedSeconds);
+      if (savedMilliseconds <= 5000) return;
+      final savedPosition = Duration(milliseconds: savedMilliseconds);
 
       // Network streams may expose duration only after MPV has started.
       var mediaDuration = _player.state.duration > Duration.zero
@@ -13204,32 +13665,59 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           savedPosition >= mediaDuration - const Duration(seconds: 15)) {
         for (final key in resumeKeys) {
           await prefs.remove(key);
+          await prefs.remove('${key}_ms');
+          await prefs.remove('${key}_duration');
+          await prefs.remove('${key}_duration_ms');
         }
         return;
       }
 
-      // Seek and verify the native MPV position. Some CDN streams need a
-      // second seek after their range/index metadata becomes available.
-      for (var pass = 0; pass < 2; pass++) {
-        await _player.seek(savedPosition);
-        for (var attempt = 0; attempt < 12; attempt++) {
-          await Future.delayed(const Duration(milliseconds: 250));
-          if (!mounted || _isDisposed) return;
+      // Use frame-accurate seeking for resume restoration. Normal interactive
+      // seeks remain keyframe-optimized to reduce network wait.
+      final nativePlayer = _player.platform;
+      if (nativePlayer is NativePlayer) {
+        try {
+          await nativePlayer.setProperty('hr-seek', 'yes');
+        } catch (_) {}
+      }
+      try {
+        for (var pass = 0; pass < 2; pass++) {
+          await _player.seek(savedPosition);
+          for (var attempt = 0; attempt < 12; attempt++) {
+            await Future.delayed(const Duration(milliseconds: 250));
+            if (!mounted || _isDisposed) return;
+            final actual = _player.state.position;
+            if ((actual - savedPosition).inMilliseconds.abs() <= 1500) break;
+          }
           final actual = _player.state.position;
-          if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+          if ((actual - savedPosition).inMilliseconds.abs() <= 1500) break;
         }
-        final actual = _player.state.position;
-        if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+      } finally {
+        if (nativePlayer is NativePlayer) {
+          try {
+            await nativePlayer.setProperty('hr-seek', 'no');
+          } catch (_) {}
+        }
       }
 
       if (savedKey != null && savedKey != _resumeKey) {
-        await prefs.setInt(_resumeKey, savedSeconds);
+        await prefs.setInt(_resumeKey, (savedMilliseconds / 1000).floor());
+        await prefs.setInt('${_resumeKey}_ms', savedMilliseconds);
+        final savedDurationMs = prefs.getInt('${savedKey}_duration_ms') ??
+            ((prefs.getInt('${savedKey}_duration') ?? 0) * 1000);
+        if (savedDurationMs > 0) {
+          await prefs.setInt('${_resumeKey}_duration_ms', savedDurationMs);
+          await prefs.setInt('${_resumeKey}_duration', (savedDurationMs / 1000).floor());
+        }
       }
       if (mounted && !_isDisposed) {
         final actual = _player.state.position;
-        setState(() => _updatePosition(
-          actual > Duration.zero ? actual : savedPosition,
-        ));
+        final restoredPosition =
+            actual > Duration.zero &&
+                    (actual - savedPosition).inMilliseconds.abs() <= 1500
+                ? actual
+                : savedPosition;
+        setState(() => _updatePosition(restoredPosition));
       }
     } catch (error) {
       debugPrint('FLIXORA resume restoration failed: $error');
@@ -13239,32 +13727,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _saveResumePosition(Duration position) {
-    if (_isDisposed || _duration.inSeconds <= 0) {
+    if (_isDisposed || position.inMilliseconds < 5000) {
       return Future<void>.value();
     }
-    if (position.inSeconds < 5) return Future<void>.value();
 
     // Capture the key immediately. If the user changes episode while a
-    // preference write is pending, the old timestamp must stay with the
-    // episode it came from.
+    // preference write is pending, the old timestamp must stay with its
+    // original movie/season/episode.
     final keys = _resumeKeys;
     final recentKeys = <String>{
       if (widget.movie.tmdbId > 0)
         'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.tmdbId}',
-      if (widget.movie.id > 0)
-        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id}',
+      if (widget.movie.id != 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id.abs()}',
     };
+    final milliseconds = position.inMilliseconds;
     final seconds = position.inSeconds;
+    final durationMilliseconds = _duration.inMilliseconds;
     final durationSeconds = _duration.inSeconds;
     _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
       for (final key in keys) {
         await prefs.setInt(key, seconds);
+        await prefs.setInt('${key}_ms', milliseconds);
         await prefs.setInt('${key}_duration', durationSeconds);
+        await prefs.setInt('${key}_duration_ms', durationMilliseconds);
       }
       for (final recentKey in recentKeys) {
         await prefs.setInt(recentKey, seconds);
+        await prefs.setInt('${recentKey}_ms', milliseconds);
         await prefs.setInt('${recentKey}_duration', durationSeconds);
+        await prefs.setInt('${recentKey}_duration_ms', durationMilliseconds);
       }
     }).catchError((error) {
       debugPrint('Could not persist FLIXORA resume position: $error');
@@ -13277,6 +13770,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final prefs = await SharedPreferences.getInstance();
       for (final key in _resumeKeys) {
         await prefs.remove(key);
+        await prefs.remove('${key}_ms');
+        await prefs.remove('${key}_duration');
+        await prefs.remove('${key}_duration_ms');
       }
     } catch (_) {}
   }
@@ -13507,6 +14003,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
 
     try {
+      await Future.delayed(const Duration(milliseconds: 120));
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
       await _player.seek(target);
     } catch (error) {
       if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
@@ -13570,7 +14068,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '15');
+        await platformPlayer.setProperty('cache-secs', '30');
         await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
@@ -16397,13 +16895,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
       if (!_isBackgrounded) {
         _isBackgrounded = true;
         _wasPlayingBeforeBackground = _isPlaying;
         final nativePosition = _player.state.position;
-        _backgroundResumePosition =
-            nativePosition > _position ? nativePosition : _position;
+        _backgroundResumePosition = _pendingSeekPosition ??
+            (nativePosition > Duration.zero ? nativePosition : _position);
         // Flush the latest native timestamp before Android can reclaim memory.
         unawaited(_persistResumePositionNow());
       }
@@ -16426,7 +16925,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final state = _player.state;
       if (state.duration > _duration) _duration = state.duration;
       final nativePosition = state.position;
-      final latestPosition = nativePosition > _position ? nativePosition : _position;
+      final latestPosition = _pendingSeekPosition ??
+          (nativePosition > Duration.zero ? nativePosition : _position);
       if (latestPosition > Duration.zero) _updatePosition(latestPosition);
       await _saveResumePosition(latestPosition);
       await _resumeSaveQueue;
@@ -16488,9 +16988,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Capture MPV's freshest timestamp before disposing the native player.
     final finalNativePosition = _player.state.position;
     if (_player.state.duration > _duration) _duration = _player.state.duration;
-    final finalPosition = finalNativePosition > _position
-        ? finalNativePosition
-        : _position;
+    final finalPosition = _pendingSeekPosition ??
+        (finalNativePosition > Duration.zero ? finalNativePosition : _position);
     unawaited(_saveResumePosition(finalPosition));
     _isDisposed = true;
     if (identical(_activeMiniPlayerState.value, this)) {
