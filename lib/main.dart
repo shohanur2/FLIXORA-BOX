@@ -3791,7 +3791,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..sort()),
     };
     var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
-    final selectedEpisodes = <int>{
+    var selectedRangeStart = 0;
+    final selectedEpisodes = <int>{}
       if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
         initialEpisode,
     };
@@ -3831,6 +3832,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
           final allEpisodesSelected = episodeNumbers.isNotEmpty &&
               selectedEpisodes.length == episodeNumbers.length;
+          final episodeRangeStarts = <int>[
+            for (var start = 0; start < episodeNumbers.length; start += 50)
+              start,
+          ];
+          final visibleEpisodes = episodeNumbers
+              .skip(selectedRangeStart)
+              .take(50)
+              .toList(growable: false);
 
           return SafeArea(
             child: Padding(
@@ -3929,6 +3938,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           setSheetState(() {
                             selectedSeason = number;
                             episodeNumbers = nextEpisodes;
+                            selectedRangeStart = 0;
                             selectedEpisodes
                               ..clear()
                               ..add(nextEpisodes.first);
@@ -3960,6 +3970,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       ),
                     ],
                     const SizedBox(height: 12),
+                    if (isSeries) ...[
+                      const Text(
+                        'Available qualities',
+                        style: TextStyle(
+                          color: white, fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      ...qualities.map((quality) {
+                        final selected = selectedQualities.contains(quality);
+                        final item = languageOptions.firstWhere(
+                          (entry) => _downloadQuality(entry) == quality,
+                        );
+                        return CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          activeColor: const Color(0xFF27DFA0),
+                          checkColor: Colors.black,
+                          value: selected,
+                          title: Text(quality, style: const TextStyle(color: white)),
+                          subtitle: Text(
+                            item['size_label'] ?? 'Size detected during download',
+                            style: const TextStyle(color: ink60, fontSize: 12),
+                          ),
+                          onChanged: (checked) => setSheetState(() {
+                            if (checked == true) {
+                              selectedQualities.add(quality);
+                            } else {
+                              selectedQualities.remove(quality);
+                            }
+                          }),
+                        );
+                      }),
+                      const SizedBox(height: 6),
+                    ],
                     if (isSeries)
                       Row(
                         children: [
@@ -3996,13 +4041,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                    if (isSeries)
+                    if (isSeries) ...[
+                    if (isSeries && episodeRangeStarts.length > 1)
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: episodeRangeStarts.map((start) {
+                            final end = (start + 50).clamp(0, episodeNumbers.length);
+                            final selectedRange = start == selectedRangeStart;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 7),
+                              child: ChoiceChip(
+                                label: Text(
+                                  '${episodeNumbers[start]}-${episodeNumbers[end - 1]}',
+                                ),
+                                selected: selectedRange,
+                                onSelected: (_) => setSheetState(() {
+                                  selectedRangeStart = start;
+                                }),
+                                selectedColor: const Color(0xFF1B5948),
+                                backgroundColor: bg,
+                                labelStyle: TextStyle(
+                                  color: selectedRange
+                                      ? const Color(0xFF35E9A5)
+                                      : white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
                       Flexible(
                         child: ListView.builder(
                           shrinkWrap: true,
-                          itemCount: episodeNumbers.length,
+                          itemCount: visibleEpisodes.length,
                           itemBuilder: (context, index) {
-                            final episode = episodeNumbers[index];
+                            final episode = visibleEpisodes[index];
                             return CheckboxListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
@@ -4024,7 +4099,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             );
                           },
                         ),
-                      )
+                      ),
+                    ]
                     else
                       Flexible(
                         child: ListView(
