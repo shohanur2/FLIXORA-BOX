@@ -100,7 +100,19 @@ Deno.serve(async (request: Request) => {
       };
     });
     if (results.length === 0) return json({ error: "No downloadable subtitles were found for the requested languages." }, 404);
-    return json({ subtitles: results });
+    // Keep the previous English-only response fields so already-installed
+    // FLIXORA builds continue to work while the updated app is being tested.
+    const english = results.find((item) => item.language === "en");
+    return json({
+      subtitles: results,
+      ...(english ? {
+        language: "English",
+        format: english.format,
+        fileName: english.fileName,
+        releaseName: english.releaseName,
+        downloadUrl: english.downloadUrl,
+      } : {}),
+    });
   } catch {
     return json({ error: "Automatic English subtitle lookup failed." }, 500);
   }
