@@ -307,8 +307,7 @@ jobs:
               --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
               --dart-define=SUPABASE_URL="$SUPABASE_URL" \
               --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
-              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID" \
-              --dart-define=ADMOB_INTERSTITIAL_AD_UNIT_ID="ca-app-pub-4723306941960370/4946198089"; then
+              --dart-define=DAILYMOTION_PLAYER_ID="$DAILYMOTION_PLAYER_ID"; then
               echo "APK build successful."
               exit 0
             fi
