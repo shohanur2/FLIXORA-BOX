@@ -3792,7 +3792,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     };
     var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
     var selectedRangeStart = 0;
-    final selectedEpisodes = <int>{}
+    final selectedEpisodes = <int>{
       if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
         initialEpisode,
     };
