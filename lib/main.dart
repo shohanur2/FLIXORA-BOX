@@ -16197,6 +16197,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       fit: StackFit.expand,
       alignment: Alignment.center,
       children: [
+        if (!_initialized && widget.movie.backdropUrl.isNotEmpty)
+          Positioned.fill(
+            child: FlixoraCachedImage(
+              imageUrl: widget.movie.backdropUrl,
+              isOnline: _playerIsOnline,
+              fit: BoxFit.cover,
+            ),
+          ),
+        if (!_initialized)
+          const Positioned.fill(
+            child: ColoredBox(color: Color(0x55000000)),
+          ),
         Positioned.fill(
           child: ClipRect(
             child: Transform.scale(
