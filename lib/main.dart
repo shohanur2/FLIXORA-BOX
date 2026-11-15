@@ -9,6 +9,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -2260,7 +2261,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((movie) =>
         movie.mediaType == 'movie' &&
         (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
-      .take(24)
+      // Keep enough mixed catalogue entries so regional filters do not
+      // look empty when one region dominates the first TMDB results.
+      .take(48)
       .toList(growable: false);
   }
 
@@ -3733,6 +3736,400 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }).where((item) => item['video_url']?.isNotEmpty == true).toList();
   }
 
+  String _downloadLanguage(Map<String, String> option) {
+    final explicit = (option['language'] ?? '').trim();
+    if (explicit.isNotEmpty) return explicit;
+    final label = option['quality'] ?? '';
+    final match = RegExp(r'\[([^\]]+)\]\s*$').firstMatch(label);
+    return match?.group(1)?.trim() ?? 'Original';
+  }
+
+  String _downloadQuality(Map<String, String> option) {
+    final explicit = (option['quality'] ?? '').trim();
+    final match = RegExp(r'^\s*(\d{3,4}p)', caseSensitive: false)
+        .firstMatch(explicit);
+    return match?.group(1)?.toUpperCase() ?? explicit;
+  }
+
+  Future<Map<String, dynamic>?> _showDownloadSelectionSheet({
+    required Movie movie,
+    required List<Map<String, String>> initialOptions,
+    required bool isSeries,
+    required List<Map<String, dynamic>> seasons,
+    required int initialSeason,
+    required int initialEpisode,
+  }) async {
+    var options = initialOptions;
+    var selectedSeason = initialSeason;
+    var selectedLanguage = _downloadLanguage(options.first);
+    var selectedQuality = _downloadQuality(options.first);
+    var loadingSeasonOptions = false;
+    var seasonRequestToken = 0;
+    final optionCache = <String, List<Map<String, String>>>{
+      if (isSeries) '$initialSeason:$initialEpisode': initialOptions,
+    };
+    final episodesBySeason = <int, List<int>>{
+      for (final season in seasons)
+        _toInt(season['se']): ((season['episodes'] as List? ?? const [])
+            .map(_toInt)
+            .where((number) => number > 0)
+            .toList()
+          ..sort()),
+    };
+    var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
+    final selectedEpisodes = <int>{
+      if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
+        initialEpisode,
+    };
+    if (isSeries && selectedEpisodes.isEmpty && episodeNumbers.isNotEmpty) {
+      selectedEpisodes.add(episodeNumbers.first);
+    }
+    final selectedQualities = <String>{selectedQuality};
+
+    return showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      backgroundColor: panel,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final languages = options.map(_downloadLanguage).toSet().toList()..sort();
+          if (!languages.contains(selectedLanguage) && languages.isNotEmpty) {
+            selectedLanguage = languages.first;
+          }
+          final languageOptions = options
+              .where((item) => _downloadLanguage(item) == selectedLanguage)
+              .toList();
+          final qualities = languageOptions
+              .map(_downloadQuality)
+              .where((item) => item.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort((a, b) {
+              final av = int.tryParse(RegExp(r'\d+').firstMatch(a)?.group(0) ?? '') ?? 0;
+              final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
+              return bv.compareTo(av);
+            });
+          final allEpisodesSelected = episodeNumbers.isNotEmpty &&
+              selectedEpisodes.length == episodeNumbers.length;
+          final allQualitiesSelected = qualities.isNotEmpty &&
+              qualities.every(selectedQualities.contains);
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              18, 12, 18, 12 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.84,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.max,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Download', style: TextStyle(
+                          color: white, fontSize: 21, fontWeight: FontWeight.w800,
+                        )),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(Icons.close, color: ink60),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    movie.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: ink70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      primary: false,
+                      physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                      padding: const EdgeInsets.only(top: 5, bottom: 12),
+                      children: [
+                        DropdownButtonFormField<String>(
+                          initialValue: languages.contains(selectedLanguage)
+                              ? selectedLanguage
+                              : (languages.isNotEmpty ? languages.first : null),
+                          dropdownColor: panel,
+                          decoration: const InputDecoration(
+                            labelText: 'Audio / Language', filled: true, fillColor: bg,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          ),
+                          items: languages.map((language) => DropdownMenuItem(
+                            value: language, child: Text(language),
+                          )).toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setSheetState(() {
+                              selectedLanguage = value;
+                              final matching = options
+                                  .where((item) => _downloadLanguage(item) == value)
+                                  .map(_downloadQuality).toSet();
+                              selectedQuality = matching.isEmpty ? '' : matching.first;
+                              selectedQualities
+                                ..clear()
+                                ..addAll(matching);
+                            });
+                          },
+                        ),
+                        if (isSeries) ...[
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<int>(
+                            initialValue: selectedSeason,
+                            dropdownColor: panel,
+                            decoration: const InputDecoration(
+                              labelText: 'Season', filled: true, fillColor: bg,
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            ),
+                            items: seasons.map((season) {
+                              final number = _toInt(season['se']);
+                              return DropdownMenuItem(
+                                value: number,
+                                child: Text('Season ' + number.toString().padLeft(2, '0')),
+                              );
+                            }).toList(),
+                            onChanged: loadingSeasonOptions ? null : (number) async {
+                              if (number == null || number == selectedSeason) return;
+                              final nextEpisodes = episodesBySeason[number] ?? <int>[];
+                              if (nextEpisodes.isEmpty) return;
+                              final nextEpisode = nextEpisodes.first;
+                              final cacheKey = '$number:$nextEpisode';
+                              final cachedOptions = optionCache[cacheKey];
+                              final requestToken = ++seasonRequestToken;
+                              setSheetState(() {
+                                selectedSeason = number;
+                                episodeNumbers = nextEpisodes;
+                                selectedEpisodes
+                                  ..clear()
+                                  ..add(nextEpisode);
+                                if (cachedOptions != null) {
+                                  options = cachedOptions;
+                                  selectedLanguage = _downloadLanguage(options.first);
+                                  selectedQuality = _downloadQuality(options.first);
+                                  selectedQualities
+                                    ..clear()
+                                    ..add(selectedQuality);
+                                  loadingSeasonOptions = false;
+                                } else {
+                                  loadingSeasonOptions = true;
+                                }
+                              });
+                              if (cachedOptions != null) return;
+                              try {
+                                final nextOptions = await _movieBoxDirectDownloadOptions(
+                                  movie, season: number, episode: nextEpisode,
+                                );
+                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
+                                optionCache[cacheKey] = nextOptions;
+                                setSheetState(() {
+                                  options = nextOptions;
+                                  if (options.isNotEmpty) {
+                                    selectedLanguage = _downloadLanguage(options.first);
+                                    selectedQuality = _downloadQuality(options.first);
+                                    selectedQualities
+                                      ..clear()
+                                      ..add(selectedQuality);
+                                  } else {
+                                    selectedQualities.clear();
+                                  }
+                                  loadingSeasonOptions = false;
+                                });
+                              } catch (error) {
+                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
+                                setSheetState(() => loadingSeasonOptions = false);
+                              }
+                            },
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            const Expanded(child: Text('Available qualities', style: TextStyle(
+                              color: white, fontSize: 15, fontWeight: FontWeight.w700,
+                            ))),
+                            TextButton(
+                              onPressed: qualities.isEmpty ? null : () => setSheetState(() {
+                                if (allQualitiesSelected) {
+                                  selectedQualities.removeAll(qualities);
+                                } else {
+                                  selectedQualities.addAll(qualities);
+                                }
+                              }),
+                              child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
+                            ),
+                          ],
+                        ),
+                        if (loadingSeasonOptions)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Center(child: CircularProgressIndicator(color: gold)),
+                          ),
+                        if (qualities.isEmpty && !loadingSeasonOptions)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text('No direct MP4 qualities are available for this season.',
+                              style: TextStyle(color: ink60, fontSize: 12)),
+                          ),
+                        ...qualities.map((quality) {
+                          final selected = selectedQualities.contains(quality);
+                          final item = languageOptions.firstWhere(
+                            (entry) => _downloadQuality(entry) == quality,
+                          );
+                          return CheckboxListTile(
+                            dense: true, contentPadding: EdgeInsets.zero,
+                            activeColor: gold, checkColor: bg, value: selected,
+                            title: Text(quality, style: const TextStyle(color: white)),
+                            subtitle: Text(
+                              item['size_label'] ?? 'Size detected during download',
+                              style: const TextStyle(color: ink60, fontSize: 12),
+                            ),
+                            onChanged: loadingSeasonOptions ? null : (checked) => setSheetState(() {
+                              if (checked == true) { selectedQualities.add(quality); }
+                              else { selectedQualities.remove(quality); }
+                            }),
+                          );
+                        }),
+                        if (isSeries) ...[
+                          const SizedBox(height: 10),
+                          const Text('Episodes', style: TextStyle(
+                            color: white, fontSize: 15, fontWeight: FontWeight.w700,
+                          )),
+                          ...episodeNumbers.map((episode) => CheckboxListTile(
+                            dense: true, contentPadding: EdgeInsets.zero,
+                            activeColor: gold, checkColor: bg,
+                            value: selectedEpisodes.contains(episode),
+                            title: Text(
+                              'S' + selectedSeason.toString().padLeft(2, '0') +
+                              ' E' + episode.toString().padLeft(2, '0'),
+                              style: const TextStyle(color: white),
+                            ),
+                            onChanged: (checked) => setSheetState(() {
+                              if (checked == true) selectedEpisodes.add(episode);
+                              else selectedEpisodes.remove(episode);
+                            }),
+                          )),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      if (isSeries)
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: goldLight, side: const BorderSide(color: gold),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            onPressed: episodeNumbers.isEmpty ? null : () => setSheetState(() {
+                              if (allEpisodesSelected) selectedEpisodes.clear();
+                              else selectedEpisodes.addAll(episodeNumbers);
+                            }),
+                            icon: const Icon(Icons.select_all_rounded, size: 18),
+                            label: Text(allEpisodesSelected ? 'Clear episodes' : 'Select All'),
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: Text(
+                            selectedQualities.length.toString() + ' quality(s) selected',
+                            style: const TextStyle(color: ink70, fontSize: 12),
+                          ),
+                        ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: gold, foregroundColor: bg,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          onPressed: loadingSeasonOptions ||
+                                  (isSeries ? selectedEpisodes.isEmpty : selectedQualities.isEmpty) ||
+                                  selectedQualities.isEmpty
+                              ? null
+                              : () => Navigator.pop(sheetContext, <String, dynamic>{
+                                  'language': selectedLanguage,
+                                  'qualities': selectedQualities.toList(),
+                                  'season': selectedSeason,
+                                  'episodes': selectedEpisodes.toList()..sort(),
+                                }),
+                          icon: const Icon(Icons.download_rounded),
+                          label: const Text('Download', style: TextStyle(fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+  Future<void> _queueSelectedDownload(
+    Movie movie,
+    Map<String, String> selected, {
+    int? seasonNumber,
+    int? episodeNumber,
+  }) async {
+    final quality = _downloadQuality(selected);
+    final existing = _downloads.where((item) =>
+        item.movieId == movie.id &&
+        (item.seasonNumber ?? 0) == (seasonNumber ?? 0) &&
+        (item.episodeNumber ?? 0) == (episodeNumber ?? 0) &&
+        item.quality == quality).toList();
+    if (existing.any((item) => item.status == 'Completed')) {
+      _showMessage(movie.title + ' is already downloaded in ' + quality + '.');
+      return;
+    }
+    final resumable = existing.where((item) =>
+        item.status == 'Paused' || item.status == 'Failed').toList();
+    if (resumable.isNotEmpty) {
+      await _pauseResumeDownload(resumable.first);
+      return;
+    }
+    if (existing.any((item) =>
+        item.status == 'Downloading' || item.status == 'Waiting')) {
+      _showMessage(quality + ' is already in the download queue.');
+      return;
+    }
+
+    final downloadId = DateTime.now().microsecondsSinceEpoch;
+    final task = DownloadTask(
+      movieId: movie.id,
+      downloadId: downloadId,
+      title: movie.title,
+      poster: movie.posterUrl,
+      videoUrl: selected['video_url'] ?? '',
+      quality: quality,
+      headers: _decodeDownloadHeaders(selected['headers']),
+      seasonNumber: seasonNumber,
+      episodeNumber: episodeNumber,
+      totalBytes: int.tryParse(selected['size_bytes'] ?? '') ?? 0,
+      status: 'Waiting',
+    );
+    if (task.videoUrl.isEmpty) return;
+    if (mounted) setState(() => _downloads.insert(0, task));
+    unawaited(_runDownloadTask(task));
+  }
+
   Future<void> addDownload(
     Movie movie, {
     int? seasonNumber,
@@ -3742,7 +4139,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         '${movie.source}:${movie.id}:${seasonNumber ?? 0}:${episodeNumber ?? 0}';
     if (!_downloadPreparationKeys.add(preparationKey)) return;
 
-    // Give instant tap feedback while source lookup runs in the background.
     _showMessage('Preparing download options...');
     try {
       await _prepareDownload(
@@ -3771,58 +4167,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
       return;
     }
-
     if (mounted && !_online) setState(() => _online = true);
 
+    final isSeries = movie.isMovieBox && movie.movieBoxIsSeries;
     var resolvedSeason = seasonNumber ?? 0;
     var resolvedEpisode = episodeNumber ?? 0;
-    if (movie.isMovieBox &&
-        movie.movieBoxIsSeries &&
-        (resolvedSeason <= 0 || resolvedEpisode <= 0)) {
+    var availableSeasons = <Map<String, dynamic>>[];
+    if (isSeries) {
       try {
-        final seasons = await MovieBoxService.seasons(movie.movieBoxId);
-        if (seasons.isEmpty) {
+        availableSeasons = await MovieBoxService.seasons(movie.movieBoxId);
+        if (availableSeasons.isEmpty) {
           _showMessage('No seasons are available to download for this series.');
           return;
         }
-        final season = seasons.firstWhere(
+        final chosen = availableSeasons.firstWhere(
           (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
-          orElse: () => seasons.first,
+          orElse: () => availableSeasons.first,
         );
-        resolvedSeason = _toInt(season['se']);
-        final episodes = (season['episodes'] as List? ?? const [])
+        resolvedSeason = _toInt(chosen['se']);
+        final episodes = (chosen['episodes'] as List? ?? const [])
             .map(_toInt)
             .where((number) => number > 0)
             .toList(growable: false);
-        if (resolvedEpisode <= 0 ||
-            (episodes.isNotEmpty && !episodes.contains(resolvedEpisode))) {
-          resolvedEpisode = episodes.isNotEmpty ? episodes.first : 1;
+        if (episodes.isEmpty) {
+          _showMessage('No episodes are available in this season.');
+          return;
+        }
+        if (!episodes.contains(resolvedEpisode)) {
+          resolvedEpisode = episodes.first;
         }
       } catch (error) {
         debugPrint('MovieBox season lookup for download failed: $error');
         _showMessage('Could not load this series episode list. Please retry.');
         return;
       }
-    }
-
-    final existing = _downloads.where((item) =>
-        item.movieId == movie.id &&
-        (item.seasonNumber ?? 0) == resolvedSeason &&
-        (item.episodeNumber ?? 0) == resolvedEpisode).toList();
-    if (existing.any((item) => item.status == 'Completed')) {
-      _showMessage('This movie is already downloaded.');
-      return;
-    }
-    final resumable = existing.where((item) =>
-        item.status == 'Paused' || item.status == 'Failed').toList();
-    if (resumable.isNotEmpty) {
-      await _pauseResumeDownload(resumable.first);
-      return;
-    }
-    if (existing.any((item) =>
-        item.status == 'Downloading' || item.status == 'Waiting')) {
-      _showMessage('This movie is already in the download queue.');
-      return;
     }
 
     List<Map<String, String>> rawOptions;
@@ -3842,141 +4220,101 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (rawOptions.isEmpty) {
       _showMessage(
         movie.isMovieBox
-            ? 'Only HLS/DASH adaptive streams are available. Direct MP4 download is not available for this episode yet.'
+            ? 'A direct MP4 download source is not available for this title or episode.'
             : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
       );
       return;
     }
 
-    // Do not issue one or more HEAD/Range requests before showing the
-    // quality picker. The downloader reads Content-Length from the actual
-    // transfer response, so the size can be detected without delaying the tap.
-    final options = rawOptions
-        .map((item) => <String, String>{
-              ...item,
-              'size_bytes': '',
-              'size_label': 'Detected when download starts',
-            })
-        .toList(growable: false);
+    final options = rawOptions.map((item) {
+      final label = item['quality'] ?? 'Original';
+      final languageMatch = RegExp(r'\[([^\]]+)\]\s*$').firstMatch(label);
+      final qualityMatch = RegExp(r'^\s*(\d{3,4}p)', caseSensitive: false)
+          .firstMatch(label);
+      final language = (item['language'] ??
+              languageMatch?.group(1) ??
+              movie.originalLanguage)
+          .toString()
+          .trim();
+      return <String, String>{
+        ...item,
+        'quality': qualityMatch?.group(1)?.toUpperCase() ?? label,
+        'language': language.isEmpty ? 'Original' : language,
+        'size_bytes': '',
+        'size_label': 'Detected when download starts',
+      };
+    }).toList(growable: false);
 
-    if (!mounted) return;
-    final selected = await showModalBottomSheet<Map<String, String>>(
-      context: context,
-      backgroundColor: panel,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(sheetContext).size.height * 0.72,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Choose Download Quality',
-                  style: TextStyle(
-                    color: white,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  movie.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: ink70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Flexible(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: options.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final item = options[index];
-                      final quality = item['quality'] ?? 'Original';
-                      return Material(
-                        color: bg,
-                        borderRadius: BorderRadius.circular(12),
-                        child: ListTile(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: const BorderSide(color: ink12),
-                          ),
-                          leading: const Icon(
-                            Icons.high_quality_rounded,
-                            color: goldLight,
-                            size: 25,
-                          ),
-                          title: Text(
-                            VideoQualityService.displayName(quality),
-                            style: const TextStyle(
-                              color: white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Text(
-                            'File size: ${item['size_label']}',
-                            style: const TextStyle(
-                              color: ink70,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          trailing: const Icon(
-                            Icons.download_rounded,
-                            color: Color(0xFF37E69A),
-                          ),
-                          onTap: () => Navigator.pop(sheetContext, item),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    final selection = await _showDownloadSelectionSheet(
+      movie: movie,
+      initialOptions: options,
+      isSeries: isSeries,
+      seasons: availableSeasons,
+      initialSeason: resolvedSeason,
+      initialEpisode: resolvedEpisode,
     );
+    if (!mounted || selection == null) return;
 
-    if (!mounted || selected == null) return;
-    final selectedUrl = selected['video_url'] ?? '';
-    if (selectedUrl.isEmpty) {
-      _showMessage('This download source is not valid.');
+    final language = (selection['language'] ?? 'Original').toString();
+    final qualities = (selection['qualities'] as List? ?? const [])
+        .map((item) => item.toString())
+        .toSet();
+    if (isSeries) {
+      final selectedSeason = _toInt(selection['season']);
+      final episodes = (selection['episodes'] as List? ?? const [])
+          .map(_toInt)
+          .where((number) => number > 0)
+          .toList();
+      var queued = 0;
+      var unavailable = 0;
+      for (final episode in episodes) {
+        List<Map<String, String>> episodeOptions;
+        try {
+          episodeOptions = await _movieBoxDirectDownloadOptions(
+            movie,
+            season: selectedSeason,
+            episode: episode,
+          );
+        } catch (error) {
+          debugPrint('Download options unavailable for S' + selectedSeason.toString() + ' E' + episode.toString() + ': ' + error.toString());
+          unavailable++;
+          continue;
+        }
+        final match = episodeOptions.firstWhere(
+          (item) =>
+              _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
+              qualities.contains(_downloadQuality(item)),
+          orElse: () => <String, String>{},
+        );
+        if (match.isEmpty) {
+          unavailable++;
+          continue;
+        }
+        await _queueSelectedDownload(
+          movie,
+          match,
+          seasonNumber: selectedSeason,
+          episodeNumber: episode,
+        );
+        queued++;
+      }
+      if (unavailable > 0) {
+        _showMessage(queued.toString() + ' episode(s) queued; ' + unavailable.toString() + ' had no matching direct MP4 source.');
+      } else if (queued > 0) {
+        _showMessage(queued.toString() + ' episode(s) added to downloads.');
+      }
       return;
     }
 
-    final expectedBytes = int.tryParse(selected['size_bytes'] ?? '') ?? 0;
-    final quality = selected['quality'] ?? 'Original';
-    final downloadId = DateTime.now().millisecondsSinceEpoch;
-    final task = DownloadTask(
-      movieId: movie.id,
-      downloadId: downloadId,
-      title: movie.title,
-      poster: movie.posterUrl,
-      videoUrl: selectedUrl,
-      quality: quality,
-      headers: _decodeDownloadHeaders(selected['headers']),
-      seasonNumber: resolvedSeason > 0 ? resolvedSeason : null,
-      episodeNumber: resolvedEpisode > 0 ? resolvedEpisode : null,
-      totalBytes: expectedBytes,
-      status: 'Waiting',
-    );
-
-    setState(() => _downloads.insert(0, task));
-    await _runDownloadTask(task);
+    final selectedOptions = options.where((item) =>
+        _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
+        qualities.contains(_downloadQuality(item))).toList();
+    for (final option in selectedOptions) {
+      await _queueSelectedDownload(movie, option);
+    }
+    if (selectedOptions.isNotEmpty) {
+      _showMessage(selectedOptions.length.toString() + ' download option(s) added to queue.');
+    }
   }
 
   Future<void> _runDownloadTask(
@@ -4827,6 +5165,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ]);
       if (!mounted) return;
       setState(() {
+        _homeSectionCache.clear();
         bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[0]]);
         bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...results[1]]);
         hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[2]]);
@@ -4902,7 +5241,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (section == 'Trending Movies') {
       switch (filter) {
         case 'Hindi Dubbed':
-          return _trendingHindiDubbedMovies;
+          return _trendingHindiDubbedMovies.isNotEmpty
+              ? _trendingHindiDubbedMovies
+              : _rankingMoviePool().where(_hasHindiAudio).toList(growable: false);
         case 'Bollywood':
           return _deduplicateMovies([
             ...bollywoodMovies,
@@ -4925,7 +5266,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ]);
         case 'Asian':
         case 'International':
-          return items
+          return _rankingMoviePool()
               .where((movie) => _trendingMovieCategory(movie) == filter)
               .toList(growable: false);
         default:
@@ -5583,7 +5924,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 final active = selected == value;
                 return InkWell(
                   borderRadius: BorderRadius.circular(8),
-                  onTap: () => setState(() => _sectionFilters[title] = value),
+                  onTap: () {
+                    setState(() => _sectionFilters[title] = value);
+                    if (title == 'Trending Movies' && value != 'All') {
+                      // Ensure regional catalogue data is loaded when a
+                      // visitor selects a regional Trending Movies filter.
+                      unawaited(_ensureRankingMovieCatalogues());
+                    }
+                  },
                   child: Center(
                     child: Text(
                       value,
@@ -7512,37 +7860,85 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]);
   }
 
+  Future<int?> _watchProgressPercent(Movie movie) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id;
+      final resumeKey = 'flixora_resume_${movie.mediaType}_$id';
+      final recentKey = 'flixora_recent_resume_${movie.mediaType}_$id';
+      final position = prefs.getInt(recentKey) ??
+          prefs.getInt(resumeKey) ??
+          0;
+      final duration = prefs.getInt('${recentKey}_duration') ??
+          prefs.getInt('${resumeKey}_duration') ??
+          0;
+      if (position <= 0 || duration <= 0) return null;
+      return ((position / duration) * 100).round().clamp(0, 100);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget _watchHistoryPage() {
     if (_watchHistory.isEmpty) return _profileMessagePage(Icons.history, 'No watch history yet', 'Movies you start watching will appear here.');
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 24), itemCount: _watchHistory.length,
+      key: const PageStorageKey<String>('flixora-watch-history-list'),
+      primary: true,
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 104),
+      itemCount: _watchHistory.length,
       separatorBuilder: (_, __) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final movie = _watchHistory[index];
         final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-        return Row(children: [
-          ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
-            FlixoraCachedImage(imageUrl: image, isOnline: _online),
-            Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
-          ]))),
-          const SizedBox(width: 11),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
-            const SizedBox(height: 7),
-            const Text('Recently watched', style: TextStyle(color: ink60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
-          ])),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: ink60), color: panel,
-            onSelected: (value) async {
-              if (value == 'remove') {
-                setState(() => _watchHistory.removeWhere((item) => item.id == movie.id));
-                await MovieCache.saveList(MovieCache.historyKey, _watchHistory);
-              }
-            },
-            itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
-          ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
-        ]);
+        return InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: () => _playMovie(movie),
+          child: Row(children: [
+            ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
+              FlixoraCachedImage(imageUrl: image, isOnline: _online),
+              Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
+            ]))),
+            const SizedBox(width: 11),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
+              const SizedBox(height: 7),
+              FutureBuilder<int?>(
+                future: _watchProgressPercent(movie),
+                builder: (context, snapshot) {
+                  final progress = snapshot.data;
+                  return Text(
+                    progress == null ? '' : '$progress% watched',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: ink60,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  );
+                },
+              ),
+            ])),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: ink60), color: panel,
+              onSelected: (value) async {
+                if (value == 'remove') {
+                  setState(() => _watchHistory.removeWhere((item) =>
+                      item.id == movie.id ||
+                      (movie.tmdbId > 0 && item.tmdbId == movie.tmdbId)));
+                  await MovieCache.saveList(MovieCache.historyKey, _watchHistory);
+                }
+              },
+              itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
+            ),
+            IconButton(tooltip: 'Play', onPressed: () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
+          ]),
+        );
       },
     );
   }
@@ -9133,6 +9529,8 @@ Entertainment Beyond Boundaries.
 
         return _homeContent();
 
+      case 1:
+        return _watchHistoryPage();
       case 2:
         return _libraryContent();
       case 3:
@@ -9178,6 +9576,7 @@ Entertainment Beyond Boundaries.
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
+    if (_tab == 1) return 'Watch History';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
     if (_tab == 4) return 'Free Movies';
@@ -9283,6 +9682,7 @@ Entertainment Beyond Boundaries.
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
+                _bottomNavItem(1, Icons.history_rounded, Icons.history, 'History'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
               ],
@@ -9510,7 +9910,12 @@ class DownloadsScreen extends StatelessWidget {
         ),
         Expanded(
           child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            key: const PageStorageKey<String>('flixora-downloads-list'),
+            primary: false,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 96),
             itemCount: tasks.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (context, index) {
@@ -9520,9 +9925,9 @@ class DownloadsScreen extends StatelessWidget {
               final paused = task.status == 'Paused';
               final downloading = task.status == 'Downloading';
               final statusColor = completed
-                  ? const Color(0xFF39E69B)
+                  ? gold
                   : failed
-                      ? Colors.redAccent
+                      ? goldLight
                       : paused
                           ? ink70
                           : goldLight;
@@ -9534,9 +9939,7 @@ class DownloadsScreen extends StatelessWidget {
                   color: panel,
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: completed
-                        ? const Color(0x5539E69B)
-                        : ink12,
+                    color: completed ? gold : ink12,
                   ),
                 ),
                 child: Row(
@@ -10900,6 +11303,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   bool _recoveringFromBackground = false;
   Duration _backgroundResumePosition = Duration.zero;
   DateTime? _lastBackgroundResumeAt;
+  Future<void> _resumeSaveQueue = Future<void>.value();
   bool _initialized = false;
   bool _isOpening = false;
   bool _playerIsOnline = true;
@@ -10943,8 +11347,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleDelay = 0;
   double _subtitleOutlineSize = 1.5;
   double _subtitleShadowOffset = 1;
+  bool _automaticSubtitleLoading = false;
+  bool _subtitleManuallySelected = false;
+  String? _automaticSubtitlePath;
+  String? _automaticSubtitleMessage;
+  SubtitleTrack? _automaticEnglishTrack;
+  int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
+  bool _isStretched = false;
   String? _gestureMode;
   String _gestureFeedback = '';
   Offset? _gestureStartPoint;
@@ -10968,18 +11379,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     subtitle: [SubtitleTrack.auto()],
   );
 
-  String get _resumeKey {
-    final id = widget.movie.tmdbId > 0
-        ? widget.movie.tmdbId
-        : widget.movie.id;
+  List<String> get _resumeKeys {
+    final ids = <int>{
+      if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
+      if (widget.movie.id > 0) widget.movie.id,
+    };
     final episodeKey = widget.movie.mediaType == 'tv'
         ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
         : '';
-
-    // Every TV episode has its own resume point; never carry the previous
-    // episode's position into a newly selected episode.
-    return 'flixora_resume_$id$episodeKey';
+    return ids
+        .map((id) => 'flixora_resume_${widget.movie.mediaType}_$id$episodeKey')
+        .toList(growable: false);
   }
+
+  String get _resumeKey => _resumeKeys.first;
 
   String _resolveInitialNetworkUrl() {
     // Admin-managed encodes take priority over the legacy single video_url.
@@ -11142,6 +11555,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         episodeNumber == _selectedEpisodeNumber ||
         _loadingQualities ||
         _isOpening) return;
+    // Persist the currently selected episode before changing the key.
+    unawaited(_saveResumePosition(_position));
     setState(() => _selectedEpisodeNumber = episodeNumber);
     if (widget.movie.isMovieBox) {
       unawaited(_loadMovieBoxStreams(
@@ -11731,6 +12146,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final firstEpisode = episodeNumbers.isNotEmpty ? episodeNumbers.first : 1;
 
     if (!mounted || _isDisposed) return;
+    // Keep the previous episode's timestamp under its original season/episode key.
+    unawaited(_saveResumePosition(_position));
     setState(() {
       _selectedSeasonNumber = seasonNumber;
       _selectedEpisodeNumber = firstEpisode;
@@ -11945,6 +12362,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     Object? lastError;
 
     _isOpening = true;
+    _automaticSubtitleRequestToken++;
+    _automaticSubtitleLoading = false;
+    _automaticEnglishTrack = null;
+    _automaticSubtitlePath = null;
+    _automaticSubtitleMessage = null;
+    _subtitleManuallySelected = false;
+    _tracks = Tracks(
+      video: [VideoTrack.auto()],
+      audio: [AudioTrack.auto()],
+      subtitle: [SubtitleTrack.auto()],
+    );
     _currentVideoUrl = '';
     _playbackErrorTimer?.cancel();
     if (mounted) {
@@ -12009,6 +12437,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
           await _restoreResumePosition();
+          _subtitleManuallySelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           _prewarmNextMovieBoxEpisode();
           return true;
@@ -12177,12 +12610,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       return;
     }
 
-    // Admin-managed direct MP4/HLS sources are played by the native player.
-    await _loadVideoQualities();
-    if (!mounted || _isDisposed) return;
-
+    // Start a valid direct source immediately while quality metadata loads.
+    // If the movie has no legacy URL, retry once the quality list is ready.
+    final qualitiesFuture = _loadVideoQualities();
     await _initializePlayer();
     if (!mounted || _isDisposed) return;
+    await qualitiesFuture;
+    if (!mounted || _isDisposed) return;
+    if (!_initialized && _validVideoUrl) {
+      await _initializePlayer();
+      if (!mounted || _isDisposed) return;
+    }
 
     if (!_validVideoUrl && widget.localFilePath == null && _errorMessage == null) {
       setState(() {
@@ -12606,11 +13044,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     _isOpening = true;
+    _automaticSubtitleRequestToken++;
+    _automaticSubtitleLoading = false;
+    _automaticEnglishTrack = null;
+    _automaticSubtitlePath = null;
+    _automaticSubtitleMessage = null;
+    _subtitleManuallySelected = false;
+    _tracks = Tracks(
+      video: [VideoTrack.auto()],
+      audio: [AudioTrack.auto()],
+      subtitle: [SubtitleTrack.auto()],
+    );
     _seekSyncTimer?.cancel();
     _seekRequestToken++;
     _isSeeking = false;
     _seekPreviewPosition = null;
     _pendingSeekPosition = null;
+    // A new media item must not inherit the previous item's duration or time.
+    _duration = Duration.zero;
+    _updatePosition(Duration.zero);
     try {
       if (mounted) {
         setState(() {
@@ -12672,9 +13124,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             play: false,
           );
           if (!mounted || _isDisposed) return;
-          if (!mounted || _isDisposed) return;
-          await _player.play();
-          if (!mounted || _isDisposed) return;
 
           if (!isLocal) _currentVideoUrl = playbackSource;
           setState(() {
@@ -12683,7 +13132,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             _errorMessage = null;
           });
           if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
+
+          // Seek to the persisted timestamp before playback starts. Starting
+          // at zero first can race the restore on slower network streams.
           await _restoreResumePosition();
+          if (!mounted || _isDisposed) return;
+          await _player.play();
+          if (!mounted || _isDisposed) return;
+          _subtitleManuallySelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           return;
         } catch (error) {
@@ -12710,19 +13170,49 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _restoreResumePosition() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedSeconds = prefs.getInt(_resumeKey) ?? 0;
-
+      final resumeKeys = _resumeKeys;
+      var savedSeconds = 0;
+      String? savedKey;
+      for (final key in resumeKeys) {
+        final candidate = prefs.getInt(key) ?? 0;
+        if (candidate > savedSeconds) {
+          savedSeconds = candidate;
+          savedKey = key;
+        }
+      }
       if (savedSeconds <= 5) return;
-
       final savedPosition = Duration(seconds: savedSeconds);
 
-      if (_duration.inSeconds > 0 &&
-          savedPosition >= _duration - const Duration(seconds: 15)) {
-        await prefs.remove(_resumeKey);
+      // Wait briefly for the newly opened media's duration. Without this,
+      // an old duration (or zero duration) can make the resume seek unreliable.
+      // Read mpv's current state first: the duration event can arrive a
+      // little later than the value exposed by PlayerState. This avoids an
+      // unnecessary wait before resuming on streams whose duration is ready.
+      var mediaDuration = _player.state.duration > Duration.zero
+          ? _player.state.duration
+          : _duration;
+      for (var attempt = 0;
+          mediaDuration <= Duration.zero && attempt < 8;
+          attempt++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (!mounted || _isDisposed) return;
+        mediaDuration = _player.state.duration > Duration.zero
+            ? _player.state.duration
+            : _duration;
+      }
+
+      if (mediaDuration > Duration.zero &&
+          savedPosition >= mediaDuration - const Duration(seconds: 15)) {
+        for (final key in resumeKeys) {
+          await prefs.remove(key);
+        }
         return;
       }
 
       await _player.seek(savedPosition);
+      if (savedKey != null && savedKey != _resumeKey) {
+        await prefs.setInt(_resumeKey, savedSeconds);
+      }
 
       if (mounted && !_isDisposed) {
         setState(() => _updatePosition(savedPosition));
@@ -12730,19 +13220,46 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     } catch (_) {}
   }
 
-  Future<void> _saveResumePosition(Duration position) async {
-    if (_isDisposed || _duration.inSeconds <= 0) return;
-    if (position.inSeconds < 5) return;
+  Future<void> _saveResumePosition(Duration position) {
+    if (_isDisposed || _duration.inSeconds <= 0) {
+      return Future<void>.value();
+    }
+    if (position.inSeconds < 5) return Future<void>.value();
 
-    try {
+    // Capture the key immediately. If the user changes episode while a
+    // preference write is pending, the old timestamp must stay with the
+    // episode it came from.
+    final keys = _resumeKeys;
+    final recentKeys = <String>{
+      if (widget.movie.tmdbId > 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.tmdbId}',
+      if (widget.movie.id > 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id}',
+    };
+    final seconds = position.inSeconds;
+    final durationSeconds = _duration.inSeconds;
+    _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_resumeKey, position.inSeconds);
-    } catch (_) {}  }
+      for (final key in keys) {
+        await prefs.setInt(key, seconds);
+        await prefs.setInt('${key}_duration', durationSeconds);
+      }
+      for (final recentKey in recentKeys) {
+        await prefs.setInt(recentKey, seconds);
+        await prefs.setInt('${recentKey}_duration', durationSeconds);
+      }
+    }).catchError((error) {
+      debugPrint('Could not persist FLIXORA resume position: $error');
+    });
+    return _resumeSaveQueue;
+  }
 
   Future<void> _clearResumePosition() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_resumeKey);
+      for (final key in _resumeKeys) {
+        await prefs.remove(key);
+      }
     } catch (_) {}
   }
 
@@ -13035,8 +13552,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '12');
-        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+        await platformPlayer.setProperty('cache-secs', '8');
+        await platformPlayer.setProperty('cache-pause-wait', '0.2');
+        // Prefer keyframe seeks for faster response on network streams.
+        // This can land a fraction earlier/later than frame-accurate seeking.
+        await platformPlayer.setProperty('hr-seek', 'no');
+        // Keep libmpv subtitle output enabled for embedded and external tracks.
+        await platformPlayer.setProperty('sub-visibility', 'yes');
       }
     } catch (error) {
       debugPrint('FLIXORA native playback configuration failed: $error');
@@ -13358,10 +13880,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    await _player.setSubtitleTrack(track);
-
-    if (mounted) Navigator.pop(context);
-    _startHideTimer();
+    _subtitleManuallySelected = true;
+    try {
+      await _player.setSubtitleTrack(track);
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      if (mounted && !_isDisposed) Navigator.of(context).maybePop();
+      _startHideTimer();
+    } catch (error) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not change subtitle track: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _loadSubtitlePreferences() async {
@@ -13376,8 +13907,48 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
       _subtitleShadowOffset = prefs.getDouble('flixora_sub_shadow_offset') ?? 1;
       if (mounted && !_isDisposed) setState(() {});
+      // Apply the saved subtitle timing offset to libmpv, not just the UI.
+      unawaited(_applySubtitleDelay(_subtitleDelay, showFeedback: false));
     } catch (error) {
       debugPrint('Subtitle preferences load failed: $error');
+    }
+  }
+
+  Future<bool> _applySubtitleDelay(
+    double value, {
+    bool showFeedback = true,
+  }) async {
+    final nextDelay = value.clamp(-10.0, 10.0).toDouble();
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Subtitle sync is not supported by this playback platform.'),
+          ),
+        );
+      }
+      return false;
+    }
+
+    try {
+      // libmpv measures sub-delay in seconds; positive delays subtitles and
+      // negative values bring them forward relative to the dialogue.
+      await platformPlayer.setProperty(
+        'sub-delay',
+        nextDelay.toStringAsFixed(2),
+      );
+      await platformPlayer.setProperty('sub-visibility', 'yes');
+      if (!mounted || _isDisposed) return false;
+      setState(() => _subtitleDelay = nextDelay);
+      return true;
+    } catch (error) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not adjust subtitle sync: $error')),
+        );
+      }
+      return false;
     }
   }
 
@@ -13391,6 +13962,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         .clamp(8.0, screenHeight * 0.85).toDouble();
 
     return SubtitleViewConfiguration(
+      visible: true,
       style: TextStyle(
         fontFamily: 'Arial',
         fontSize: _subtitleFontSize,
@@ -13551,6 +14123,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                             _subtitleOutlineSize = outline;
                             _subtitleShadowOffset = shadow;
                           });
+                          await _applySubtitleDelay(delay, showFeedback: false);
                           await _saveSubtitlePreferences();
                           if (sheetContext.mounted) Navigator.pop(sheetContext);
                           _startHideTimer();
@@ -14244,6 +14817,177 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     ).whenComplete(_startHideTimer);
   }
 
+
+  bool _isEnglishSubtitleTrack(SubtitleTrack track) {
+    final language = (track.language ?? '').toLowerCase();
+    final title = (track.title ?? '').toLowerCase();
+    return language == 'en' || language == 'eng' ||
+        language.contains('english') || title.contains('english') ||
+        title.startsWith('eng ') || title == 'eng';
+  }
+
+  int _automaticSubtitleMediaId() =>
+      widget.movie.tmdbId > 0 ? widget.movie.tmdbId : widget.movie.id;
+
+  String _automaticSubtitleCacheKey() {
+    final isSeries = widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries;
+    final episode = isSeries
+        ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+        : '';
+    return 'english_${widget.movie.mediaType}_${_automaticSubtitleMediaId()}$episode';
+  }
+
+  Future<void> _ensureAutomaticEnglishSubtitle() async {
+    if (_isDisposed || widget.localFilePath != null || !_playerIsOnline ||
+        _automaticSubtitleLoading || _subtitleManuallySelected) return;
+    final requestToken = ++_automaticSubtitleRequestToken;
+    final mediaId = _automaticSubtitleMediaId();
+    if (mediaId <= 0) return;
+
+    setState(() {
+      _automaticSubtitleLoading = true;
+      _automaticSubtitleMessage = 'Finding English subtitle…';
+    });
+
+    try {
+      // Prefer a real English track already embedded in the video.
+      for (var attempt = 0; attempt < 8; attempt++) {
+        final embedded = _tracks.subtitle.where(_isEnglishSubtitleTrack);
+        if (embedded.isNotEmpty) {
+          final track = embedded.first;
+          if (requestToken != _automaticSubtitleRequestToken ||
+              _subtitleManuallySelected || _isDisposed) return;
+          await _player.setSubtitleTrack(track);
+          await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+          if (mounted && !_isDisposed) {
+            setState(() {
+              _automaticEnglishTrack = track;
+              _automaticSubtitleMessage = 'Available in this video';
+            });
+          }
+          return;
+        }
+        if (attempt < 7) {
+          await Future.delayed(const Duration(milliseconds: 250));
+        }
+      }
+
+      final support = await getApplicationSupportDirectory();
+      final cacheDir = Directory('${support.path}/flixora_subtitles');
+      if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
+      final cacheBase = _automaticSubtitleCacheKey();
+      File? cachedFile;
+      for (final extension in ['srt', 'ass', 'ssa', 'vtt', 'sub']) {
+        final candidate = File('${cacheDir.path}/$cacheBase.$extension');
+        if (await candidate.exists() && await candidate.length() > 16) {
+          cachedFile = candidate;
+          break;
+        }
+      }
+
+      if (cachedFile == null) {
+        final client = supabaseClient;
+        if (client == null) {
+          throw StateError('Subtitle service is unavailable.');
+        }
+        final response = await client.functions.invoke(
+          'flixora-subtitles',
+          body: {
+            'tmdbId': widget.movie.tmdbId,
+            'title': widget.movie.title,
+            'year': widget.movie.year,
+            'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+            if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+              'season': _selectedSeasonNumber,
+              'episode': _selectedEpisodeNumber,
+            },
+          },
+        ).timeout(const Duration(seconds: 18));
+        final payload = response.data;
+        if (payload is! Map) {
+          throw StateError('No English subtitle was found.');
+        }
+        final downloadUrl = (payload['downloadUrl'] ?? '').toString();
+        final uri = Uri.tryParse(downloadUrl);
+        if (uri == null || uri.scheme != 'https' ||
+            uri.host != 'dl.subdl.com' ||
+            !uri.path.startsWith('/subtitle/')) {
+          throw StateError('Subtitle provider returned an invalid file.');
+        }
+        final extension = (payload['format'] ?? 'srt')
+            .toString().toLowerCase().replaceAll('.', '');
+        if (!['srt', 'ass', 'ssa', 'vtt', 'sub'].contains(extension)) {
+          throw StateError('Unsupported English subtitle format.');
+        }
+        final download = await http.get(uri)
+            .timeout(const Duration(seconds: 20));
+        if (download.statusCode != 200 ||
+            download.bodyBytes.length < 16 ||
+            download.bodyBytes.length > 10 * 1024 * 1024) {
+          throw StateError('Could not download the English subtitle.');
+        }
+        // SubDL unpack=1 should return a single text subtitle, never a ZIP.
+        if (download.bodyBytes.length >= 2 &&
+            download.bodyBytes[0] == 0x50 &&
+            download.bodyBytes[1] == 0x4b) {
+          throw StateError('Subtitle provider returned an archive, not a subtitle file.');
+        }
+        cachedFile = File('${cacheDir.path}/$cacheBase.$extension');
+        await cachedFile.writeAsBytes(download.bodyBytes, flush: true);
+      }
+
+      if (requestToken != _automaticSubtitleRequestToken ||
+          _subtitleManuallySelected || _isDisposed) return;
+      final track = SubtitleTrack.uri(
+        cachedFile.path,
+        title: 'English',
+        language: 'en',
+      );
+      await _player.setSubtitleTrack(track);
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _automaticSubtitlePath = cachedFile!.path;
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage = 'Downloaded and ready';
+        });
+      }
+    } catch (error) {
+      debugPrint('FLIXORA automatic English subtitle: $error');
+      if (mounted && !_isDisposed &&
+          requestToken == _automaticSubtitleRequestToken) {
+        setState(() {
+          _automaticSubtitleMessage = error.toString().contains('503') ||
+                  error.toString().contains('not configured')
+              ? 'Subtitle service needs API setup'
+              : 'No English subtitle found';
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed &&
+          requestToken == _automaticSubtitleRequestToken) {
+        setState(() => _automaticSubtitleLoading = false);
+      }
+    }
+  }
+
+  Future<void> _selectAutomaticEnglishSubtitle() async {
+    if (_automaticEnglishTrack != null) {
+      await _selectSubtitleTrack(_automaticEnglishTrack!);
+      return;
+    }
+    if (_automaticSubtitlePath != null) {
+      await _selectSubtitleTrack(SubtitleTrack.uri(
+        _automaticSubtitlePath!,
+        title: 'English',
+        language: 'en',
+      ));
+      return;
+    }
+    Navigator.of(context).pop();
+    await _ensureAutomaticEnglishSubtitle();
+  }
+
   void _showSubtitleTracks() {
     final subtitleTracks = _tracks.subtitle;
 
@@ -14267,6 +15011,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ),
                 ),
                 const SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(
+                    _automaticSubtitleLoading
+                        ? Icons.downloading_rounded
+                        : Icons.subtitles,
+                    color: playerGold,
+                  ),
+                  title: const Text('English', style: TextStyle(color: playerWhite)),
+                  subtitle: Text(
+                    _automaticSubtitleMessage ??
+                        (_automaticSubtitlePath != null
+                            ? 'Downloaded and cached'
+                            : 'Find and download automatically'),
+                    style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                  ),
+                  trailing: _automaticSubtitleLoading
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: playerGold),
+                        )
+                      : const Icon(Icons.chevron_right, color: playerGoldLight),
+                  onTap: _selectAutomaticEnglishSubtitle,
+                ),
                 ListTile(
                   leading: const Icon(
                     Icons.subtitles_off,
@@ -15023,6 +15790,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGoldLight,
                       onPressed: _toggleMiniPlayer,
                     ),
+                  if (!compact) ...[
+                    compactAction(
+                      tooltip: _isStretched ? 'Fit video' : 'Stretch video',
+                      icon: Icons.aspect_ratio_rounded,
+                      color: _isStretched ? playerGoldLight : playerWhite,
+                      onPressed: () {
+                        setState(() => _isStretched = !_isStretched);
+                        _startHideTimer();
+                      },
+                    ),
+                    compactAction(
+                      tooltip: 'Subtitles',
+                      icon: Icons.subtitles_rounded,
+                      color: playerGoldLight,
+                      onPressed: _showSubtitleTracks,
+                    ),
+                  ],
                   compactAction(
                     tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
                     icon: _isFullscreen
@@ -15388,7 +16172,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 // the camera-cutout side. Outside fullscreen, preserve the
                 // complete frame without cropping.
                 fit: _isFullscreen
-                    ? BoxFit.cover
+                    ? (_isStretched ? BoxFit.fill : BoxFit.cover)
                     : (_videoZoom > 1.01
                         ? BoxFit.cover
                         : BoxFit.contain),
@@ -15570,10 +16354,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (!_isBackgrounded) {
         _isBackgrounded = true;
         _wasPlayingBeforeBackground = _isPlaying;
-        if (_wasPlayingBeforeBackground) {
-          _backgroundResumePosition = _position;
-          unawaited(_saveResumePosition(_position));
-        }
+        _backgroundResumePosition = _position;
+        // Save even when paused; leaving the player should never discard the
+        // latest known timestamp.
+        unawaited(_saveResumePosition(_position));
       }
       _cancelHideTimer();
       return;
@@ -16608,6 +17392,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ? SafeArea(
                       top: false,
                       bottom: false,
+                      left: false,
+                      right: false,
                       child: _playerBody(),
                     )
                   : SafeArea(
