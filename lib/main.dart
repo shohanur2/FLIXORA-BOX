@@ -12749,6 +12749,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int episode,
     required bool openPlayer,
   }) async {
+    if (openPlayer) {
+      _bufferingRecoveryTimer?.cancel();
+      _bufferingRecoveryAttempts = 0;
+      _recoveringFromBuffering = false;
+    }
     final detail = _movieBoxDetail;
     if (detail == null || _isDisposed) return;
     if (widget.movie.movieBoxIsSeries && season > 0 && episode > 0) {
