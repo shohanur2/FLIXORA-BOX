@@ -7850,7 +7850,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, index) {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-            return GestureDetector(onTap: () => _openMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onTap: () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
@@ -7863,24 +7863,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<int?> _watchProgressPercent(Movie movie) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id;
+      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id.abs();
       final resumeKey = 'flixora_resume_${movie.mediaType}_$id';
       final recentKey = 'flixora_recent_resume_${movie.mediaType}_$id';
-      var position = prefs.getInt(recentKey) ?? 0;
-      var duration = prefs.getInt('${recentKey}_duration') ?? 0;
+
+      int readMilliseconds(String key) {
+        final precise = prefs.getInt('${key}_ms');
+        return precise ?? ((prefs.getInt(key) ?? 0) * 1000);
+      }
+
+      int readDurationMilliseconds(String key) {
+        final precise = prefs.getInt('${key}_duration_ms');
+        return precise ??
+            ((prefs.getInt('${key}_duration') ?? 0) * 1000);
+      }
+
+      var position = readMilliseconds(recentKey);
+      var duration = readDurationMilliseconds(recentKey);
       if (position <= 0 || duration <= 0) {
-        position = prefs.getInt(resumeKey) ?? 0;
-        duration = prefs.getInt('${resumeKey}_duration') ?? 0;
+        position = readMilliseconds(resumeKey);
+        duration = readDurationMilliseconds(resumeKey);
       }
       if (position <= 0 || duration <= 0) {
         final episodePrefix = 'flixora_resume_${movie.mediaType}_${id}_s';
         var bestProgress = 0;
         for (final key in prefs.getKeys()) {
-          if (!key.startsWith(episodePrefix) || key.endsWith('_duration')) {
+          if (!key.startsWith(episodePrefix) ||
+              key.endsWith('_duration') ||
+              key.endsWith('_ms') ||
+              key.endsWith('_duration_ms')) {
             continue;
           }
-          final episodePosition = prefs.getInt(key) ?? 0;
-          final episodeDuration = prefs.getInt('${key}_duration') ?? 0;
+          final episodePosition = readMilliseconds(key);
+          final episodeDuration = readDurationMilliseconds(key);
           if (episodePosition <= 0 || episodeDuration <= 0) continue;
           final percent = ((episodePosition / episodeDuration) * 100)
               .round()
@@ -9492,7 +9507,7 @@ Entertainment Beyond Boundaries.
               const Spacer(),
               Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _openMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
+            IconButton(onPressed: () => _playMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
@@ -11404,7 +11419,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   List<String> get _resumeKeys {
     final ids = <int>{
       if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
-      if (widget.movie.id > 0) widget.movie.id,
+      if (widget.movie.id != 0) widget.movie.id.abs(),
     };
     final episodeKey = widget.movie.mediaType == 'tv'
         ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
@@ -11420,7 +11435,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (widget.movie.mediaType != 'tv') return const <String>[];
     final ids = <int>{
       if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
-      if (widget.movie.id > 0) widget.movie.id,
+      if (widget.movie.id != 0) widget.movie.id.abs(),
     };
     return ids
         .map((id) => 'flixora_last_episode_tv_$id')
@@ -11536,7 +11551,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _videoController = VideoController(_player);
 
     _attachPlayerListeners();
-    unawaited(_configureVolumeBoost());
     _loadSubtitlePreferences();
     _loadAudioDelayPreference();
     _loadGesturePreferences();
@@ -11778,6 +11792,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       setState(() => _loadingAllEpisodes = true);
     }
     try {
+      if (!widget.movie.isMovieBox && _tvSeasons.isEmpty) {
+        await _movieDetailsFuture;
+        if (!mounted || _isDisposed) return;
+      }
       final allEpisodes = <Map<String, dynamic>>[];
       if (widget.movie.isMovieBox && widget.movie.movieBoxIsSeries) {
         for (final entry in _episodeNavigationEntries()) {
@@ -11909,6 +11927,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
   }
 
+  int get _totalTvEpisodeCount {
+    if (widget.movie.isMovieBox && widget.movie.movieBoxIsSeries) {
+      final actualCount = _episodeNavigationEntries().length;
+      if (actualCount > 0) return actualCount;
+    }
+    final declaredCount = _tvSeasons.fold<int>(
+      0,
+      (total, season) => total + _toInt(season['episode_count']),
+    );
+    if (declaredCount > 0) return declaredCount;
+    if (_allTvEpisodes.isNotEmpty) return _allTvEpisodes.length;
+    return _tvEpisodes.length;
+  }
+
   Widget _tvEpisodeSelector() {
     if (widget.movie.mediaType != 'tv' || widget.localFilePath != null) {
       return const SizedBox.shrink();
@@ -12023,16 +12055,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   },
           ),
           const SizedBox(height: 13),
-          const Text(
-            'Episodes',
-            style: TextStyle(
+          Text(
+            _totalTvEpisodeCount > 0
+                ? 'Episodes ($_totalTvEpisodeCount)'
+                : 'Episodes',
+            style: const TextStyle(
               color: playerWhite,
               fontSize: 12,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 8),
-          if (episodeNumbers.isNotEmpty)
+          if (seasonNumbers.isNotEmpty)
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -12041,7 +12075,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   child: Row(
                     children: [
                       ChoiceChip(
-                        label: const Text('All'),
+                        label: Text(
+                          _totalTvEpisodeCount > 0
+                              ? 'All ($_totalTvEpisodeCount)'
+                              : 'All',
+                        ),
                         selected: _showAllSeasonEpisodes,
                         showCheckmark: false,
                         onSelected: (_loadingTvEpisodes ||
@@ -12103,6 +12141,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ],
                   ),
                 ),
+                if (episodeNumbers.isEmpty &&
+                    !_loadingTvEpisodes &&
+                    !_showAllSeasonEpisodes)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'No episodes available in this season.',
+                      style: TextStyle(
+                        color: Color(0x99FFFFFF),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
                 if (_loadingAllEpisodes)
                   const Padding(
                     padding: EdgeInsets.only(top: 10),
@@ -12991,6 +13042,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _prepareAndInitializePlayer() async {
+    // Apply MPV cache settings before opening a network stream.
+    await _configureVolumeBoost();
+    if (_isDisposed) return;
+
     // A downloaded MovieBox movie/episode must play from local storage without
     // trying to resolve online seasons or CDN streams again.
     if (widget.localFilePath != null) {
@@ -13001,6 +13056,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (widget.movie.isMovieBox) {
       await _prepareMovieBoxPlayback();
       return;
+    }
+
+    if (widget.movie.mediaType == 'tv') {
+      final savedSelection = await _readLastEpisodeSelection();
+      if (savedSelection != null && mounted && !_isDisposed) {
+        _selectedSeasonNumber = savedSelection[0];
+        _selectedEpisodeNumber = savedSelection[1];
+      }
     }
 
     // Start a valid direct source immediately while quality metadata loads.
@@ -13570,17 +13633,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
       final prefs = await SharedPreferences.getInstance();
       final resumeKeys = _resumeKeys;
-      var savedSeconds = 0;
+      var savedMilliseconds = 0;
       String? savedKey;
       for (final key in resumeKeys) {
-        final candidate = prefs.getInt(key) ?? 0;
-        if (candidate > savedSeconds) {
-          savedSeconds = candidate;
+        final legacySeconds = prefs.getInt(key) ?? 0;
+        final candidate = prefs.getInt('${key}_ms') ??
+            (legacySeconds * 1000);
+        if (candidate > savedMilliseconds) {
+          savedMilliseconds = candidate;
           savedKey = key;
         }
       }
-      if (savedSeconds <= 5) return;
-      final savedPosition = Duration(seconds: savedSeconds);
+      if (savedMilliseconds <= 5000) return;
+      final savedPosition = Duration(milliseconds: savedMilliseconds);
 
       // Network streams may expose duration only after MPV has started.
       var mediaDuration = _player.state.duration > Duration.zero
@@ -13600,32 +13665,59 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           savedPosition >= mediaDuration - const Duration(seconds: 15)) {
         for (final key in resumeKeys) {
           await prefs.remove(key);
+          await prefs.remove('${key}_ms');
+          await prefs.remove('${key}_duration');
+          await prefs.remove('${key}_duration_ms');
         }
         return;
       }
 
-      // Seek and verify the native MPV position. Some CDN streams need a
-      // second seek after their range/index metadata becomes available.
-      for (var pass = 0; pass < 2; pass++) {
-        await _player.seek(savedPosition);
-        for (var attempt = 0; attempt < 12; attempt++) {
-          await Future.delayed(const Duration(milliseconds: 250));
-          if (!mounted || _isDisposed) return;
+      // Use frame-accurate seeking for resume restoration. Normal interactive
+      // seeks remain keyframe-optimized to reduce network wait.
+      final nativePlayer = _player.platform;
+      if (nativePlayer is NativePlayer) {
+        try {
+          await nativePlayer.setProperty('hr-seek', 'yes');
+        } catch (_) {}
+      }
+      try {
+        for (var pass = 0; pass < 2; pass++) {
+          await _player.seek(savedPosition);
+          for (var attempt = 0; attempt < 12; attempt++) {
+            await Future.delayed(const Duration(milliseconds: 250));
+            if (!mounted || _isDisposed) return;
+            final actual = _player.state.position;
+            if ((actual - savedPosition).inMilliseconds.abs() <= 1500) break;
+          }
           final actual = _player.state.position;
-          if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+          if ((actual - savedPosition).inMilliseconds.abs() <= 1500) break;
         }
-        final actual = _player.state.position;
-        if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+      } finally {
+        if (nativePlayer is NativePlayer) {
+          try {
+            await nativePlayer.setProperty('hr-seek', 'no');
+          } catch (_) {}
+        }
       }
 
       if (savedKey != null && savedKey != _resumeKey) {
-        await prefs.setInt(_resumeKey, savedSeconds);
+        await prefs.setInt(_resumeKey, (savedMilliseconds / 1000).floor());
+        await prefs.setInt('${_resumeKey}_ms', savedMilliseconds);
+        final savedDurationMs = prefs.getInt('${savedKey}_duration_ms') ??
+            ((prefs.getInt('${savedKey}_duration') ?? 0) * 1000);
+        if (savedDurationMs > 0) {
+          await prefs.setInt('${_resumeKey}_duration_ms', savedDurationMs);
+          await prefs.setInt('${_resumeKey}_duration', (savedDurationMs / 1000).floor());
+        }
       }
       if (mounted && !_isDisposed) {
         final actual = _player.state.position;
-        setState(() => _updatePosition(
-          actual > Duration.zero ? actual : savedPosition,
-        ));
+        final restoredPosition =
+            actual > Duration.zero &&
+                    (actual - savedPosition).inMilliseconds.abs() <= 1500
+                ? actual
+                : savedPosition;
+        setState(() => _updatePosition(restoredPosition));
       }
     } catch (error) {
       debugPrint('FLIXORA resume restoration failed: $error');
@@ -13635,32 +13727,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _saveResumePosition(Duration position) {
-    if (_isDisposed || _duration.inSeconds <= 0) {
+    if (_isDisposed || position.inMilliseconds < 5000) {
       return Future<void>.value();
     }
-    if (position.inSeconds < 5) return Future<void>.value();
 
     // Capture the key immediately. If the user changes episode while a
-    // preference write is pending, the old timestamp must stay with the
-    // episode it came from.
+    // preference write is pending, the old timestamp must stay with its
+    // original movie/season/episode.
     final keys = _resumeKeys;
     final recentKeys = <String>{
       if (widget.movie.tmdbId > 0)
         'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.tmdbId}',
-      if (widget.movie.id > 0)
-        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id}',
+      if (widget.movie.id != 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id.abs()}',
     };
+    final milliseconds = position.inMilliseconds;
     final seconds = position.inSeconds;
+    final durationMilliseconds = _duration.inMilliseconds;
     final durationSeconds = _duration.inSeconds;
     _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
       for (final key in keys) {
         await prefs.setInt(key, seconds);
+        await prefs.setInt('${key}_ms', milliseconds);
         await prefs.setInt('${key}_duration', durationSeconds);
+        await prefs.setInt('${key}_duration_ms', durationMilliseconds);
       }
       for (final recentKey in recentKeys) {
         await prefs.setInt(recentKey, seconds);
+        await prefs.setInt('${recentKey}_ms', milliseconds);
         await prefs.setInt('${recentKey}_duration', durationSeconds);
+        await prefs.setInt('${recentKey}_duration_ms', durationMilliseconds);
       }
     }).catchError((error) {
       debugPrint('Could not persist FLIXORA resume position: $error');
@@ -13673,6 +13770,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final prefs = await SharedPreferences.getInstance();
       for (final key in _resumeKeys) {
         await prefs.remove(key);
+        await prefs.remove('${key}_ms');
+        await prefs.remove('${key}_duration');
+        await prefs.remove('${key}_duration_ms');
       }
     } catch (_) {}
   }
@@ -13903,6 +14003,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
 
     try {
+      await Future.delayed(const Duration(milliseconds: 120));
+      if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
       await _player.seek(target);
     } catch (error) {
       if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
@@ -13966,8 +14068,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '24');
-        await platformPlayer.setProperty('cache-pause-wait', '2.0');
+        await platformPlayer.setProperty('cache-secs', '30');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
@@ -16793,13 +16895,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
       if (!_isBackgrounded) {
         _isBackgrounded = true;
         _wasPlayingBeforeBackground = _isPlaying;
         final nativePosition = _player.state.position;
-        _backgroundResumePosition =
-            nativePosition > Duration.zero ? nativePosition : _position;
+        _backgroundResumePosition = _pendingSeekPosition ??
+            (nativePosition > Duration.zero ? nativePosition : _position);
         // Flush the latest native timestamp before Android can reclaim memory.
         unawaited(_persistResumePositionNow());
       }
@@ -16822,8 +16925,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final state = _player.state;
       if (state.duration > _duration) _duration = state.duration;
       final nativePosition = state.position;
-      final latestPosition =
-          nativePosition > Duration.zero ? nativePosition : _position;
+      final latestPosition = _pendingSeekPosition ??
+          (nativePosition > Duration.zero ? nativePosition : _position);
       if (latestPosition > Duration.zero) _updatePosition(latestPosition);
       await _saveResumePosition(latestPosition);
       await _resumeSaveQueue;
@@ -16885,8 +16988,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Capture MPV's freshest timestamp before disposing the native player.
     final finalNativePosition = _player.state.position;
     if (_player.state.duration > _duration) _duration = _player.state.duration;
-    final finalPosition =
-        finalNativePosition > Duration.zero ? finalNativePosition : _position;
+    final finalPosition = _pendingSeekPosition ??
+        (finalNativePosition > Duration.zero ? finalNativePosition : _position);
     unawaited(_saveResumePosition(finalPosition));
     _isDisposed = true;
     if (identical(_activeMiniPlayerState.value, this)) {
