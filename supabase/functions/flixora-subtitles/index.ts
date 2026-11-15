@@ -23,6 +23,16 @@ Deno.serve(async (request: Request) => {
     const title = String(body.title ?? "").trim().slice(0, 180);
     const year = String(body.year ?? "").trim();
     const mediaType = body.mediaType === "tv" ? "tv" : "movie";
+    const supportedLanguages = new Set([
+      "EN", "BN", "HI", "UR", "AR", "ES", "FR", "DE", "PT", "RU",
+      "JA", "KO", "ZH", "TR", "IT", "NL", "PL", "TH", "ID", "MS", "FA",
+    ]);
+    const requestedLanguages = String(body.languages ?? "EN")
+      .split(",")
+      .map((value) => value.trim().toUpperCase())
+      .filter((value) => supportedLanguages.has(value));
+    const languages = [...new Set(requestedLanguages)];
+    if (languages.length === 0) languages.push("EN");
     const season = Math.max(0, Math.min(99, Number(body.season ?? 0) || 0));
     const episode = Math.max(0, Math.min(999, Number(body.episode ?? 0) || 0));
 
@@ -39,7 +49,7 @@ Deno.serve(async (request: Request) => {
     else url.searchParams.set("film_name", title);
     if (/^\\d{4}$/.test(year)) url.searchParams.set("year", year);
     url.searchParams.set("type", mediaType);
-    url.searchParams.set("languages", "EN");
+    url.searchParams.set("languages", languages.join(","));
     url.searchParams.set("subs_per_page", "30");
     url.searchParams.set("unpack", "1");
     url.searchParams.set("client", "custom_integration");
@@ -62,29 +72,35 @@ Deno.serve(async (request: Request) => {
     for (const subtitle of subtitles) {
       const unpacked = Array.isArray(subtitle.unpack_files) ? subtitle.unpack_files as JsonMap[] : [];
       for (const file of unpacked) {
-        if (String(file.language ?? "").toUpperCase() !== "EN") continue;
+        const language = String(file.language ?? "").toUpperCase();
+        if (!languages.includes(language)) continue;
         if (mediaType === "tv" &&
             (Number(file.season) !== season || Number(file.episode) !== episode)) continue;
-        candidates.push({ ...file, release_name: file.release_name ?? subtitle.release_name ?? "" });
+        candidates.push({ ...file, language, release_name: file.release_name ?? subtitle.release_name ?? "" });
       }
     }
 
-    const selected = candidates.find((item) => item.hi !== true) ?? candidates[0];
-    if (!selected) return json({ error: "No downloadable English subtitle file was found." }, 404);
-
-    const rawPath = String(selected.url ?? "");
-    const downloadUrl = new URL(rawPath, "https://dl.subdl.com");
-    if (downloadUrl.hostname !== "dl.subdl.com" || !downloadUrl.pathname.startsWith("/subtitle/")) {
-      return json({ error: "Subtitle provider returned an invalid download link." }, 502);
+    const unique = new Map<string, JsonMap>();
+    for (const candidate of candidates) {
+      const language = String(candidate.language ?? "").toUpperCase();
+      if (!unique.has(language)) unique.set(language, candidate);
     }
-
-    return json({
-      language: "English",
-      format: String(selected.format ?? "srt").toLowerCase(),
-      fileName: String(selected.name ?? "English.srt").slice(0, 180),
-      releaseName: String(selected.release_name ?? "").slice(0, 180),
-      downloadUrl: downloadUrl.toString(),
+    const results = [...unique.values()].map((selected) => {
+      const rawPath = String(selected.url ?? "");
+      const downloadUrl = new URL(rawPath, "https://dl.subdl.com");
+      if (downloadUrl.hostname !== "dl.subdl.com" || !downloadUrl.pathname.startsWith("/subtitle/")) {
+        throw new Error("Subtitle provider returned an invalid download link.");
+      }
+      return {
+        language: String(selected.language ?? "EN").toLowerCase(),
+        format: String(selected.format ?? "srt").toLowerCase(),
+        fileName: String(selected.name ?? "subtitle.srt").slice(0, 180),
+        releaseName: String(selected.release_name ?? "").slice(0, 180),
+        downloadUrl: downloadUrl.toString(),
+      };
     });
+    if (results.length === 0) return json({ error: "No downloadable subtitles were found for the requested languages." }, 404);
+    return json({ subtitles: results });
   } catch {
     return json({ error: "Automatic English subtitle lookup failed." }, 500);
   }
