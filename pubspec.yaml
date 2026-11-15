@@ -24,7 +24,6 @@ dependencies:
   flutter_cache_manager: ^3.4.1
   google_fonts: ^6.2.1
   share_plus: ^10.1.4
-  google_mobile_ads: ^6.0.0
 
   # Storage and Downloads
   shared_preferences: ^2.3.2
