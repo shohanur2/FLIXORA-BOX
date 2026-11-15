@@ -3911,7 +3911,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           setSheetState(() {
                             selectedSeason = number;
                             episodeNumbers = nextEpisodes;
-                            selectedRangeStart = 0;
                             selectedEpisodes
                               ..clear()
                               ..add(nextEpisodes.first);
