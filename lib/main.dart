@@ -13499,6 +13499,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
+        // Keep libmpv subtitle output enabled for embedded and external tracks.
+        await platformPlayer.setProperty('sub-visibility', 'yes');
       }
     } catch (error) {
       debugPrint('FLIXORA native playback configuration failed: $error');
@@ -13822,6 +13824,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
     try {
       await _player.setSubtitleTrack(track);
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       if (mounted && !_isDisposed) Navigator.of(context).maybePop();
       _startHideTimer();
     } catch (error) {
@@ -13845,8 +13848,48 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       _subtitleOutlineSize = prefs.getDouble('flixora_sub_outline_size') ?? 1.5;
       _subtitleShadowOffset = prefs.getDouble('flixora_sub_shadow_offset') ?? 1;
       if (mounted && !_isDisposed) setState(() {});
+      // Apply the saved subtitle timing offset to libmpv, not just the UI.
+      unawaited(_applySubtitleDelay(_subtitleDelay, showFeedback: false));
     } catch (error) {
       debugPrint('Subtitle preferences load failed: $error');
+    }
+  }
+
+  Future<bool> _applySubtitleDelay(
+    double value, {
+    bool showFeedback = true,
+  }) async {
+    final nextDelay = value.clamp(-10.0, 10.0).toDouble();
+    final platformPlayer = _player.platform;
+    if (platformPlayer is! NativePlayer) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Subtitle sync is not supported by this playback platform.'),
+          ),
+        );
+      }
+      return false;
+    }
+
+    try {
+      // libmpv measures sub-delay in seconds; positive delays subtitles and
+      // negative values bring them forward relative to the dialogue.
+      await platformPlayer.setProperty(
+        'sub-delay',
+        nextDelay.toStringAsFixed(2),
+      );
+      await platformPlayer.setProperty('sub-visibility', 'yes');
+      if (!mounted || _isDisposed) return false;
+      setState(() => _subtitleDelay = nextDelay);
+      return true;
+    } catch (error) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not adjust subtitle sync: $error')),
+        );
+      }
+      return false;
     }
   }
 
@@ -13860,6 +13903,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         .clamp(8.0, screenHeight * 0.85).toDouble();
 
     return SubtitleViewConfiguration(
+      visible: true,
       style: TextStyle(
         fontFamily: 'Arial',
         fontSize: _subtitleFontSize,
@@ -14020,6 +14064,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                             _subtitleOutlineSize = outline;
                             _subtitleShadowOffset = shadow;
                           });
+                          await _applySubtitleDelay(delay, showFeedback: false);
                           await _saveSubtitlePreferences();
                           if (sheetContext.mounted) Navigator.pop(sheetContext);
                           _startHideTimer();
