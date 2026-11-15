@@ -9133,6 +9133,8 @@ Entertainment Beyond Boundaries.
 
         return _homeContent();
 
+      case 1:
+        return _watchHistoryPage();
       case 2:
         return _libraryContent();
       case 3:
@@ -9178,6 +9180,7 @@ Entertainment Beyond Boundaries.
   String _pageTitle() {
     if (_search.isNotEmpty) return 'Search Results';
 
+    if (_tab == 1) return 'Watch History';
     if (_tab == 2) return 'Library';
     if (_tab == 3) return _profileSection ?? 'CineProfile';
     if (_tab == 4) return 'Free Movies';
@@ -9283,6 +9286,7 @@ Entertainment Beyond Boundaries.
             child: Row(
               children: [
                 _bottomNavItem(0, Icons.home_outlined, Icons.home, 'Home'),
+                _bottomNavItem(1, Icons.history_rounded, Icons.history, 'History'),
                 _bottomNavItem(2, Icons.video_library_outlined, Icons.video_library, 'Library'),
                 _bottomNavItem(3, Icons.person_outline, Icons.person, 'Profile'),
               ],
@@ -12611,6 +12615,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _isSeeking = false;
     _seekPreviewPosition = null;
     _pendingSeekPosition = null;
+    // A new media item must not inherit the previous item's duration or time.
+    _duration = Duration.zero;
+    _updatePosition(Duration.zero);
     try {
       if (mounted) {
         setState(() {
@@ -12672,9 +12679,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             play: false,
           );
           if (!mounted || _isDisposed) return;
-          if (!mounted || _isDisposed) return;
-          await _player.play();
-          if (!mounted || _isDisposed) return;
 
           if (!isLocal) _currentVideoUrl = playbackSource;
           setState(() {
@@ -12683,7 +12687,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             _errorMessage = null;
           });
           if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
+
+          // Seek to the persisted timestamp before playback starts. Starting
+          // at zero first can race the restore on slower network streams.
           await _restoreResumePosition();
+          if (!mounted || _isDisposed) return;
+          await _player.play();
+          if (!mounted || _isDisposed) return;
           _startHideTimer();
           return;
         } catch (error) {
@@ -12716,8 +12726,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       final savedPosition = Duration(seconds: savedSeconds);
 
-      if (_duration.inSeconds > 0 &&
-          savedPosition >= _duration - const Duration(seconds: 15)) {
+      // Wait briefly for the newly opened media's duration. Without this,
+      // an old duration (or zero duration) can make the resume seek unreliable.
+      var mediaDuration = _duration;
+      for (var attempt = 0;
+          mediaDuration <= Duration.zero && attempt < 25;
+          attempt++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (!mounted || _isDisposed) return;
+        mediaDuration = _duration;
+      }
+
+      if (mediaDuration > Duration.zero &&
+          savedPosition >= mediaDuration - const Duration(seconds: 15)) {
         await prefs.remove(_resumeKey);
         return;
       }
