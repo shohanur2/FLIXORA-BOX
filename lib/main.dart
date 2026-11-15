@@ -7881,7 +7881,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _watchHistoryPage() {
     if (_watchHistory.isEmpty) return _profileMessagePage(Icons.history, 'No watch history yet', 'Movies you start watching will appear here.');
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 24), itemCount: _watchHistory.length,
+      key: const PageStorageKey<String>('flixora-watch-history-list'),
+      primary: true,
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 104),
+      itemCount: _watchHistory.length,
       separatorBuilder: (_, __) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final movie = _watchHistory[index];
@@ -11341,6 +11348,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleShadowOffset = 1;
 
   double _videoZoom = 1.0;
+  bool _isStretched = false;
   String? _gestureMode;
   String _gestureFeedback = '';
   Offset? _gestureStartPoint;
@@ -12577,12 +12585,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       return;
     }
 
-    // Admin-managed direct MP4/HLS sources are played by the native player.
-    await _loadVideoQualities();
-    if (!mounted || _isDisposed) return;
-
+    // Start a valid direct source immediately while quality metadata loads.
+    // If the movie has no legacy URL, retry once the quality list is ready.
+    final qualitiesFuture = _loadVideoQualities();
     await _initializePlayer();
     if (!mounted || _isDisposed) return;
+    await qualitiesFuture;
+    if (!mounted || _isDisposed) return;
+    if (!_initialized && _validVideoUrl) {
+      await _initializePlayer();
+      if (!mounted || _isDisposed) return;
+    }
 
     if (!_validVideoUrl && widget.localFilePath == null && _errorMessage == null) {
       setState(() {
@@ -13131,7 +13144,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           ? _player.state.duration
           : _duration;
       for (var attempt = 0;
-          mediaDuration <= Duration.zero && attempt < 25;
+          mediaDuration <= Duration.zero && attempt < 8;
           attempt++) {
         await Future.delayed(const Duration(milliseconds: 100));
         if (!mounted || _isDisposed) return;
@@ -13483,6 +13496,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await platformPlayer.setProperty('cache-pause', 'yes');
         await platformPlayer.setProperty('cache-secs', '12');
         await platformPlayer.setProperty('cache-pause-wait', '0.5');
+        // Prefer keyframe seeks for faster response on network streams.
+        // This can land a fraction earlier/later than frame-accurate seeking.
+        await platformPlayer.setProperty('hr-seek', 'no');
       }
     } catch (error) {
       debugPrint('FLIXORA native playback configuration failed: $error');
@@ -13804,10 +13820,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    await _player.setSubtitleTrack(track);
-
-    if (mounted) Navigator.pop(context);
-    _startHideTimer();
+    try {
+      await _player.setSubtitleTrack(track);
+      if (mounted && !_isDisposed) Navigator.of(context).maybePop();
+      _startHideTimer();
+    } catch (error) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not change subtitle track: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _loadSubtitlePreferences() async {
@@ -15469,6 +15492,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGoldLight,
                       onPressed: _toggleMiniPlayer,
                     ),
+                  if (!compact) ...[
+                    compactAction(
+                      tooltip: _isStretched ? 'Fit video' : 'Stretch video',
+                      icon: Icons.aspect_ratio_rounded,
+                      color: _isStretched ? playerGoldLight : playerWhite,
+                      onPressed: () {
+                        setState(() => _isStretched = !_isStretched);
+                        _startHideTimer();
+                      },
+                    ),
+                    compactAction(
+                      tooltip: 'Subtitles',
+                      icon: Icons.subtitles_rounded,
+                      color: playerGoldLight,
+                      onPressed: _showSubtitleTracks,
+                    ),
+                  ],
                   compactAction(
                     tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
                     icon: _isFullscreen
@@ -15834,7 +15874,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 // the camera-cutout side. Outside fullscreen, preserve the
                 // complete frame without cropping.
                 fit: _isFullscreen
-                    ? BoxFit.cover
+                    ? (_isStretched ? BoxFit.fill : BoxFit.cover)
                     : (_videoZoom > 1.01
                         ? BoxFit.cover
                         : BoxFit.contain),
