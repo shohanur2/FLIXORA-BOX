@@ -5048,7 +5048,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
-    await _playMovie(movie, closeCurrentPlayer: true);
+    // Keep the current Player route visible while the next title resolves.
+    // _pushPlayerRoute replaces this route when the new Player is ready,
+    // avoiding a flash back to Home between recommendation selections.
+    await _playMovie(movie);
   }
 
   Future<void> _playMovie(
@@ -16945,17 +16948,45 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             child: Transform.scale(
               alignment: Alignment.center,
               scale: _videoZoom,
-              child: Video(
-                controller: _videoController,
-                // Normal is the default in portrait and fullscreen landscape.
-                // Crop and Full 100% are explicit user-selected modes only.
-                fit: switch (_videoFitMode) {
-                  0 => BoxFit.cover,
-                  1 => BoxFit.fill,
-                  _ => BoxFit.contain,
+              child: StreamBuilder<VideoParams>(
+                stream: _player.stream.videoParams,
+                initialData: _player.state.videoParams,
+                builder: (context, snapshot) {
+                  final params = snapshot.data ?? _player.state.videoParams;
+                  final reportedAspect = params.aspect;
+                  final displayAspect = reportedAspect != null &&
+                          reportedAspect.isFinite &&
+                          reportedAspect > 0
+                      ? reportedAspect
+                      : (params.dw != null &&
+                              params.dh != null &&
+                              params.dw! > 0 &&
+                              params.dh! > 0)
+                          ? params.dw! / params.dh!
+                          : (params.w != null &&
+                                  params.h != null &&
+                                  params.w! > 0 &&
+                                  params.h! > 0)
+                              ? params.w! / params.h!
+                              : null;
+
+                  return Video(
+                    controller: _videoController,
+                    // Use the decoded display aspect ratio so landscape
+                    // playback keeps the complete frame without stretching
+                    // or cutting off characters.
+                    aspectRatio: displayAspect,
+                    // Normal preserves the complete frame. Crop and Full
+                    // 100% remain explicit user-selected modes only.
+                    fit: switch (_videoFitMode) {
+                      0 => BoxFit.cover,
+                      1 => BoxFit.fill,
+                      _ => BoxFit.contain,
+                    },
+                    controls: NoVideoControls,
+                    subtitleViewConfiguration: _subtitleViewConfiguration(),
+                  );
                 },
-                controls: NoVideoControls,
-                subtitleViewConfiguration: _subtitleViewConfiguration(),
               ),
             ),
           ),
