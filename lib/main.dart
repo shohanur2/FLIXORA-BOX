@@ -13192,13 +13192,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       // Wait briefly for the newly opened media's duration. Without this,
       // an old duration (or zero duration) can make the resume seek unreliable.
-      var mediaDuration = _duration;
+      // Read mpv's current state first: the duration event can arrive a
+      // little later than the value exposed by PlayerState. This avoids an
+      // unnecessary wait before resuming on streams whose duration is ready.
+      var mediaDuration = _player.state.duration > Duration.zero
+          ? _player.state.duration
+          : _duration;
       for (var attempt = 0;
           mediaDuration <= Duration.zero && attempt < 25;
           attempt++) {
         await Future.delayed(const Duration(milliseconds: 100));
         if (!mounted || _isDisposed) return;
-        mediaDuration = _duration;
+        mediaDuration = _player.state.duration > Duration.zero
+            ? _player.state.duration
+            : _duration;
       }
 
       if (mediaDuration > Duration.zero &&
