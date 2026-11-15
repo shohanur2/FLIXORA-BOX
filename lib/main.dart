@@ -3860,7 +3860,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ),
                     const SizedBox(height: 13),
                     DropdownButtonFormField<String>(
-                      value: languages.contains(selectedLanguage)
+                      initialValue: languages.contains(selectedLanguage)
                           ? selectedLanguage
                           : (languages.isNotEmpty ? languages.first : null),
                       dropdownColor: panel,
@@ -3894,7 +3894,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     if (isSeries) ...[
                       const SizedBox(height: 10),
                       DropdownButtonFormField<int>(
-                        value: selectedSeason,
+                        initialValue: selectedSeason,
                         dropdownColor: panel,
                         decoration: const InputDecoration(
                           labelText: 'Season',
