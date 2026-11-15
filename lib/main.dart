@@ -12362,6 +12362,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     Object? lastError;
 
     _isOpening = true;
+    _automaticSubtitleRequestToken++;
+    _automaticSubtitleLoading = false;
+    _automaticEnglishTrack = null;
+    _automaticSubtitlePath = null;
+    _automaticSubtitleMessage = null;
+    _subtitleManuallySelected = false;
+    _tracks = Tracks(
+      video: [VideoTrack.auto()],
+      audio: [AudioTrack.auto()],
+      subtitle: [SubtitleTrack.auto()],
+    );
     _currentVideoUrl = '';
     _playbackErrorTimer?.cancel();
     if (mounted) {
@@ -13033,6 +13044,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     _isOpening = true;
+    _automaticSubtitleRequestToken++;
+    _automaticSubtitleLoading = false;
+    _automaticEnglishTrack = null;
+    _automaticSubtitlePath = null;
+    _automaticSubtitleMessage = null;
+    _subtitleManuallySelected = false;
+    _tracks = Tracks(
+      video: [VideoTrack.auto()],
+      audio: [AudioTrack.auto()],
+      subtitle: [SubtitleTrack.auto()],
+    );
     _seekSyncTimer?.cancel();
     _seekRequestToken++;
     _isSeeking = false;
