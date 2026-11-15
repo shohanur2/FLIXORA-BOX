@@ -3763,6 +3763,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     var selectedLanguage = _downloadLanguage(options.first);
     var selectedQuality = _downloadQuality(options.first);
     var loadingSeasonOptions = false;
+    var seasonRequestToken = 0;
+    final optionCache = <String, List<Map<String, String>>>{
+      if (isSeries) '$initialSeason:$initialEpisode': initialOptions,
+    };
     final episodesBySeason = <int, List<int>>{
       for (final season in seasons)
         _toInt(season['se']): ((season['episodes'] as List? ?? const [])
@@ -3785,6 +3789,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context: context,
       backgroundColor: panel,
       isScrollControlled: true,
+      useSafeArea: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -3807,340 +3812,269 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
               return bv.compareTo(av);
             });
-          if (qualities.isNotEmpty && !qualities.contains(selectedQuality)) {
-            selectedQuality = qualities.first;
-          }
           final allEpisodesSelected = episodeNumbers.isNotEmpty &&
               selectedEpisodes.length == episodeNumbers.length;
-          final visibleEpisodes = episodeNumbers;
+          final allQualitiesSelected = qualities.isNotEmpty &&
+              qualities.every(selectedQualities.contains);
 
-          return SafeArea(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                18, 16, 18, 18 + MediaQuery.viewInsetsOf(context).bottom,
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              18, 12, 18, 12 + MediaQuery.viewInsetsOf(context).bottom,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.84,
               ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(context).height * 0.82,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.max,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.max,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Download', style: TextStyle(
+                          color: white, fontSize: 21, fontWeight: FontWeight.w800,
+                        )),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        icon: const Icon(Icons.close, color: ink60),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    movie.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: ink70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      primary: false,
+                      physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                      padding: const EdgeInsets.only(top: 5, bottom: 12),
                       children: [
-                        const Expanded(
-                          child: Text(
-                            'Download',
-                            style: TextStyle(
-                              color: white, fontSize: 21,
-                              fontWeight: FontWeight.w800,
-                            ),
+                        DropdownButtonFormField<String>(
+                          initialValue: languages.contains(selectedLanguage)
+                              ? selectedLanguage
+                              : (languages.isNotEmpty ? languages.first : null),
+                          dropdownColor: panel,
+                          decoration: const InputDecoration(
+                            labelText: 'Audio / Language', filled: true, fillColor: bg,
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(sheetContext),
-                          icon: const Icon(Icons.close, color: ink60),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      movie.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: ink70, fontSize: 13),
-                    ),
-                    const SizedBox(height: 13),
-                    DropdownButtonFormField<String>(
-                      initialValue: languages.contains(selectedLanguage)
-                          ? selectedLanguage
-                          : (languages.isNotEmpty ? languages.first : null),
-                      dropdownColor: panel,
-                      decoration: const InputDecoration(
-                        labelText: 'Audio / Language',
-                        filled: true,
-                        fillColor: bg,
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10,
-                        ),
-                      ),
-                      items: languages.map((language) =>
-                        DropdownMenuItem(value: language, child: Text(language))
-                      ).toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setSheetState(() {
-                          selectedLanguage = value;
-                          final matching = options
-                              .where((item) => _downloadLanguage(item) == value)
-                              .map(_downloadQuality)
-                              .toSet();
-                          selectedQuality = matching.isEmpty ? '' : matching.first;
-                          selectedQualities
-                            ..clear()
-                            ..add(selectedQuality);
-                        });
-                      },
-                    ),
-                    if (isSeries) ...[
-                      const SizedBox(height: 10),
-                      DropdownButtonFormField<int>(
-                        initialValue: selectedSeason,
-                        dropdownColor: panel,
-                        decoration: const InputDecoration(
-                          labelText: 'Season',
-                          filled: true,
-                          fillColor: bg,
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10,
-                          ),
-                        ),
-                        items: seasons.map((season) {
-                          final number = _toInt(season['se']);
-                          return DropdownMenuItem(
-                            value: number,
-                            child: Text('Season ' + number.toString().padLeft(2, '0')),
-                          );
-                        }).toList(),
-                        onChanged: loadingSeasonOptions ? null : (number) async {
-                          if (number == null || number == selectedSeason) return;
-                          final nextEpisodes = episodesBySeason[number] ?? <int>[];
-                          if (nextEpisodes.isEmpty) return;
-                          setSheetState(() {
-                            selectedSeason = number;
-                            episodeNumbers = nextEpisodes;
-                            selectedEpisodes
-                              ..clear()
-                              ..add(nextEpisodes.first);
-                            loadingSeasonOptions = true;
-                          });
-                          try {
-                            final nextOptions = await _movieBoxDirectDownloadOptions(
-                              movie,
-                              season: number,
-                              episode: nextEpisodes.first,
-                            );
-                            if (!sheetContext.mounted) return;
+                          items: languages.map((language) => DropdownMenuItem(
+                            value: language, child: Text(language),
+                          )).toList(),
+                          onChanged: (value) {
+                            if (value == null) return;
                             setSheetState(() {
-                              options = nextOptions;
-                              if (options.isNotEmpty) {
-                                selectedLanguage = _downloadLanguage(options.first);
-                                selectedQuality = _downloadQuality(options.first);
-                                selectedQualities
-                                  ..clear()
-                                  ..add(selectedQuality);
-                              }
-                              loadingSeasonOptions = false;
+                              selectedLanguage = value;
+                              final matching = options
+                                  .where((item) => _downloadLanguage(item) == value)
+                                  .map(_downloadQuality).toSet();
+                              selectedQuality = matching.isEmpty ? '' : matching.first;
+                              selectedQualities
+                                ..clear()
+                                ..addAll(matching);
                             });
-                          } catch (_) {
-                            if (!sheetContext.mounted) return;
-                            setSheetState(() => loadingSeasonOptions = false);
-                          }
-                        },
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    if (isSeries) ...[
-                      const Text(
-                        'Available qualities',
-                        style: TextStyle(
-                          color: white, fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      ...qualities.map((quality) {
-                        final selected = selectedQualities.contains(quality);
-                        final item = languageOptions.firstWhere(
-                          (entry) => _downloadQuality(entry) == quality,
-                        );
-                        return CheckboxListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          activeColor: gold,
-                          checkColor: bg,
-                          value: selected,
-                          title: Text(quality, style: const TextStyle(color: white)),
-                          subtitle: Text(
-                            item['size_label'] ?? 'Size detected during download',
-                            style: const TextStyle(color: ink60, fontSize: 12),
-                          ),
-                          onChanged: (checked) => setSheetState(() {
-                            if (checked == true) {
-                              selectedQualities.add(quality);
-                            } else {
-                              selectedQualities.remove(quality);
-                            }
-                          }),
-                        );
-                      }),
-                      const SizedBox(height: 6),
-                    ],
-                    if (isSeries)
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
-                              'Episodes',
-                              style: TextStyle(
-                                color: white, fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: episodeNumbers.isEmpty ? null : () {
-                              setSheetState(() {
-                                if (allEpisodesSelected) {
-                                  selectedEpisodes.clear();
-                                } else {
-                                  selectedEpisodes
-                                    ..clear()
-                                    ..addAll(episodeNumbers);
-                                }
-                              });
-                            },
-                            child: Text(allEpisodesSelected ? 'Clear all' : 'Select All'),
-                          ),
-                        ],
-                      )
-                    else
-                      const Text(
-                        'Available qualities',
-                        style: TextStyle(
-                          color: white, fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    if (isSeries) ...[
-                      Flexible(
-                        child: ListView.builder(
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: visibleEpisodes.length,
-                          itemBuilder: (context, index) {
-                            final episode = visibleEpisodes[index];
-                            return CheckboxListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              activeColor: gold,
-                              checkColor: bg,
-                              value: selectedEpisodes.contains(episode),
-                              title: Text(
-                                'S' + selectedSeason.toString().padLeft(2, '0') +
-                                ' E' + episode.toString().padLeft(2, '0'),
-                                style: const TextStyle(color: white),
-                              ),
-                              onChanged: (checked) => setSheetState(() {
-                                if (checked == true) {
-                                  selectedEpisodes.add(episode);
-                                } else {
-                                  selectedEpisodes.remove(episode);
-                                }
-                              }),
-                            );
                           },
                         ),
-                      ),
-                    ]
-                    else
-                      Flexible(
-                        child: ListView(
-                          physics: const BouncingScrollPhysics(),
-                          children: qualities.map((quality) {
-                            final selected = selectedQualities.contains(quality);
-                            final item = languageOptions.firstWhere(
-                              (entry) => _downloadQuality(entry) == quality,
-                            );
-                            return CheckboxListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              activeColor: gold,
-                              checkColor: bg,
-                              value: selected,
-                              title: Text(quality, style: const TextStyle(color: white)),
-                              subtitle: Text(
-                                item['size_label'] ?? 'Size detected during download',
-                                style: const TextStyle(color: ink60, fontSize: 12),
-                              ),
-                              onChanged: (checked) => setSheetState(() {
-                                if (checked == true) {
-                                  selectedQualities.add(quality);
+                        if (isSeries) ...[
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<int>(
+                            initialValue: selectedSeason,
+                            dropdownColor: panel,
+                            decoration: const InputDecoration(
+                              labelText: 'Season', filled: true, fillColor: bg,
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            ),
+                            items: seasons.map((season) {
+                              final number = _toInt(season['se']);
+                              return DropdownMenuItem(
+                                value: number,
+                                child: Text('Season ' + number.toString().padLeft(2, '0')),
+                              );
+                            }).toList(),
+                            onChanged: loadingSeasonOptions ? null : (number) async {
+                              if (number == null || number == selectedSeason) return;
+                              final nextEpisodes = episodesBySeason[number] ?? <int>[];
+                              if (nextEpisodes.isEmpty) return;
+                              final nextEpisode = nextEpisodes.first;
+                              final cacheKey = '$number:$nextEpisode';
+                              final cachedOptions = optionCache[cacheKey];
+                              final requestToken = ++seasonRequestToken;
+                              setSheetState(() {
+                                selectedSeason = number;
+                                episodeNumbers = nextEpisodes;
+                                selectedEpisodes
+                                  ..clear()
+                                  ..add(nextEpisode);
+                                if (cachedOptions != null) {
+                                  options = cachedOptions;
+                                  selectedLanguage = _downloadLanguage(options.first);
+                                  selectedQuality = _downloadQuality(options.first);
+                                  selectedQualities
+                                    ..clear()
+                                    ..add(selectedQuality);
+                                  loadingSeasonOptions = false;
                                 } else {
-                                  selectedQualities.remove(quality);
+                                  loadingSeasonOptions = true;
                                 }
-                              }),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    if (loadingSeasonOptions)
-                      const Padding(
-                        padding: EdgeInsets.all(8),
-                        child: Center(child: CircularProgressIndicator(color: gold)),
-                      ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        if (!isSeries)
-                          Expanded(
-                            child: TextButton(
-                              onPressed: qualities.isEmpty ? null : () {
+                              });
+                              if (cachedOptions != null) return;
+                              try {
+                                final nextOptions = await _movieBoxDirectDownloadOptions(
+                                  movie, season: number, episode: nextEpisode,
+                                );
+                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
+                                optionCache[cacheKey] = nextOptions;
                                 setSheetState(() {
-                                  if (selectedQualities.length == qualities.length) {
-                                    selectedQualities.clear();
-                                  } else {
+                                  options = nextOptions;
+                                  if (options.isNotEmpty) {
+                                    selectedLanguage = _downloadLanguage(options.first);
+                                    selectedQuality = _downloadQuality(options.first);
                                     selectedQualities
                                       ..clear()
-                                      ..addAll(qualities);
+                                      ..add(selectedQuality);
+                                  } else {
+                                    selectedQualities.clear();
                                   }
+                                  loadingSeasonOptions = false;
                                 });
-                              },
-                              child: Text(
-                                selectedQualities.length == qualities.length
-                                    ? 'Clear selection'
-                                    : 'Select All',
-                              ),
-                            ),
-                          )
-                        else
-                          Expanded(
-                            child: Text(
-                              selectedEpisodes.length.toString() + ' episode(s) selected',
-                              style: const TextStyle(color: ink70, fontSize: 12),
-                            ),
+                              } catch (error) {
+                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
+                                setSheetState(() => loadingSeasonOptions = false);
+                              }
+                            },
                           ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          flex: 2,
-                          child: FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: gold,
-                              foregroundColor: bg,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
+                        ],
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            const Expanded(child: Text('Available qualities', style: TextStyle(
+                              color: white, fontSize: 15, fontWeight: FontWeight.w700,
+                            ))),
+                            TextButton(
+                              onPressed: qualities.isEmpty ? null : () => setSheetState(() {
+                                if (allQualitiesSelected) {
+                                  selectedQualities.removeAll(qualities);
+                                } else {
+                                  selectedQualities.addAll(qualities);
+                                }
+                              }),
+                              child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
                             ),
-                            onPressed: loadingSeasonOptions ||
-                                    (isSeries
-                                        ? selectedEpisodes.isEmpty
-                                        : selectedQualities.isEmpty)
-                                ? null
-                                : () => Navigator.pop(sheetContext, <String, dynamic>{
-                                    'language': selectedLanguage,
-                                    'qualities': selectedQualities.toList(),
-                                    'season': selectedSeason,
-                                    'episodes': selectedEpisodes.toList()..sort(),
-                                  }),
-                            icon: const Icon(Icons.download_rounded),
-                            label: const Text(
-                              'Download',
-                              style: TextStyle(fontWeight: FontWeight.w800),
-                            ),
-                          ),
+                          ],
                         ),
+                        if (loadingSeasonOptions)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Center(child: CircularProgressIndicator(color: gold)),
+                          ),
+                        if (qualities.isEmpty && !loadingSeasonOptions)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text('No direct MP4 qualities are available for this season.',
+                              style: TextStyle(color: ink60, fontSize: 12)),
+                          ),
+                        ...qualities.map((quality) {
+                          final selected = selectedQualities.contains(quality);
+                          final item = languageOptions.firstWhere(
+                            (entry) => _downloadQuality(entry) == quality,
+                          );
+                          return CheckboxListTile(
+                            dense: true, contentPadding: EdgeInsets.zero,
+                            activeColor: gold, checkColor: bg, value: selected,
+                            title: Text(quality, style: const TextStyle(color: white)),
+                            subtitle: Text(
+                              item['size_label'] ?? 'Size detected during download',
+                              style: const TextStyle(color: ink60, fontSize: 12),
+                            ),
+                            onChanged: loadingSeasonOptions ? null : (checked) => setSheetState(() {
+                              if (checked == true) { selectedQualities.add(quality); }
+                              else { selectedQualities.remove(quality); }
+                            }),
+                          );
+                        }),
+                        if (isSeries) ...[
+                          const SizedBox(height: 10),
+                          const Text('Episodes', style: TextStyle(
+                            color: white, fontSize: 15, fontWeight: FontWeight.w700,
+                          )),
+                          ...episodeNumbers.map((episode) => CheckboxListTile(
+                            dense: true, contentPadding: EdgeInsets.zero,
+                            activeColor: gold, checkColor: bg,
+                            value: selectedEpisodes.contains(episode),
+                            title: Text(
+                              'S' + selectedSeason.toString().padLeft(2, '0') +
+                              ' E' + episode.toString().padLeft(2, '0'),
+                              style: const TextStyle(color: white),
+                            ),
+                            onChanged: (checked) => setSheetState(() {
+                              if (checked == true) selectedEpisodes.add(episode);
+                              else selectedEpisodes.remove(episode);
+                            }),
+                          )),
+                        ],
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      if (isSeries)
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: goldLight, side: const BorderSide(color: gold),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            onPressed: episodeNumbers.isEmpty ? null : () => setSheetState(() {
+                              if (allEpisodesSelected) selectedEpisodes.clear();
+                              else selectedEpisodes.addAll(episodeNumbers);
+                            }),
+                            icon: const Icon(Icons.select_all_rounded, size: 18),
+                            label: Text(allEpisodesSelected ? 'Clear episodes' : 'Select All'),
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: Text(
+                            selectedQualities.length.toString() + ' quality(s) selected',
+                            style: const TextStyle(color: ink70, fontSize: 12),
+                          ),
+                        ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: gold, foregroundColor: bg,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          onPressed: loadingSeasonOptions ||
+                                  (isSeries ? selectedEpisodes.isEmpty : selectedQualities.isEmpty) ||
+                                  selectedQualities.isEmpty
+                              ? null
+                              : () => Navigator.pop(sheetContext, <String, dynamic>{
+                                  'language': selectedLanguage,
+                                  'qualities': selectedQualities.toList(),
+                                  'season': selectedSeason,
+                                  'episodes': selectedEpisodes.toList()..sort(),
+                                }),
+                          icon: const Icon(Icons.download_rounded),
+                          label: const Text('Download', style: TextStyle(fontWeight: FontWeight.w800)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           );
@@ -4148,7 +4082,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
   }
-
   Future<void> _queueSelectedDownload(
     Movie movie,
     Map<String, String> selected, {
