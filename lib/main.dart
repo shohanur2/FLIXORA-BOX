@@ -2292,10 +2292,30 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _pakistaniTrendingDramaTitles() {
-    // Search every TV catalogue already loaded by FLIXORA, not only the
-    // MovieBox banner/trending rows. MovieBox records come first so their
-    // playable source remains canonical when a TMDB duplicate exists.
+    // Use FLIXORA's already-loaded catalogues. MovieBox may omit country
+    // metadata, so retain the Pakistani source section label as provenance.
+    final pakistaniSectionItems = _movieBoxSections
+        .where((section) {
+          final sectionName = section.title.toLowerCase();
+          return sectionName.contains('pakistani') ||
+              sectionName.contains('pakistan');
+        })
+        .expand((section) => section.items)
+        .where((title) => title.mediaType == 'tv')
+        .toList(growable: false);
+
+    final pakistaniSectionIds = pakistaniSectionItems
+        .where((title) => title.tmdbId > 0)
+        .map((title) => title.tmdbId)
+        .toSet();
+    final pakistaniSectionTitles = pakistaniSectionItems
+        .map((title) => _normalizedMovieTitle(title.title))
+        .where((title) => title.isNotEmpty)
+        .toSet();
+
+    // MovieBox records stay first so their playable source remains canonical.
     final candidates = _deduplicateMovies([
+      ...pakistaniSectionItems,
       ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ..._pakistaniTrendingTv,
@@ -2308,8 +2328,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ...indianDramaTv,
     ]);
 
-    // The PK + Drama TMDB discovery feed is authoritative for Pakistani
-    // titles whose MovieBox metadata omits country/genre fields.
     final pakistaniFeedIds = _pakistaniTrendingTv
         .where((title) => title.tmdbId > 0)
         .map((title) => title.tmdbId)
@@ -2328,6 +2346,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           country.contains('PAKISTAN') ||
           countryCodes.contains('PK');
       final normalizedTitle = _normalizedMovieTitle(title.title);
+      final isFromPakistaniSection =
+          (title.tmdbId > 0 && pakistaniSectionIds.contains(title.tmdbId)) ||
+          (normalizedTitle.isNotEmpty &&
+              pakistaniSectionTitles.contains(normalizedTitle));
       final isFromPakistaniFeed =
           (title.tmdbId > 0 && pakistaniFeedIds.contains(title.tmdbId)) ||
           (normalizedTitle.isNotEmpty &&
@@ -2336,11 +2358,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         (genre) => genre.toLowerCase().contains('drama'),
       );
 
-      // MovieBox sometimes omits genre metadata. A Pakistani TV title with
-      // no genre value is retained; an explicit non-drama genre is excluded.
+      // Keep existing Pakistani catalogue entries when MovieBox omits genre
+      // metadata, but never include an explicitly non-drama title.
       final genreAllowsDrama = hasDramaGenre || title.genres.isEmpty;
       return genreAllowsDrama &&
-          (hasPakistaniCountry || isFromPakistaniFeed);
+          (hasPakistaniCountry ||
+              isFromPakistaniSection ||
+              isFromPakistaniFeed);
     }).toList(growable: false);
   }
 
