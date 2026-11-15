@@ -14830,7 +14830,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       widget.movie.tmdbId > 0 ? widget.movie.tmdbId : widget.movie.id;
 
   String _automaticSubtitleCacheKey() {
-    final episode = widget.movie.mediaType == 'tv'
+    final isSeries = widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries;
+    final episode = isSeries
         ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
         : '';
     return 'english_${widget.movie.mediaType}_${_automaticSubtitleMediaId()}$episode';
@@ -14895,8 +14896,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             'tmdbId': widget.movie.tmdbId,
             'title': widget.movie.title,
             'year': widget.movie.year,
-            'mediaType': widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
-            if (widget.movie.mediaType == 'tv') ...{
+            'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+            if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
               'season': _selectedSeasonNumber,
               'episode': _selectedEpisodeNumber,
             },
