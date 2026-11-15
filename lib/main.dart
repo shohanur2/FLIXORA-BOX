@@ -15727,14 +15727,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   String _subtitleLanguageName(String code) {
     const names = <String, String>{
-      'en': 'English', 'bn': 'বাংলা', 'hi': 'Hindi', 'ur': 'Urdu',
-      'ar': 'Arabic', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
-      'pt': 'Portuguese', 'ru': 'Russian', 'ja': 'Japanese', 'ko': 'Korean',
-      'zh': 'Chinese', 'tr': 'Turkish', 'it': 'Italian', 'nl': 'Dutch',
-      'pl': 'Polish', 'th': 'Thai', 'id': 'Indonesian', 'ms': 'Malay',
-      'fa': 'Persian',
+      'en': 'English', 'eng': 'English',
+      'bn': 'বাংলা', 'ben': 'বাংলা',
+      'hi': 'Hindi', 'hin': 'Hindi',
+      'ur': 'Urdu', 'urd': 'Urdu',
+      'ar': 'Arabic', 'ara': 'Arabic',
+      'es': 'Spanish', 'spa': 'Spanish',
+      'fr': 'French', 'fre': 'French', 'fra': 'French',
+      'de': 'German', 'ger': 'German', 'deu': 'German',
+      'pt': 'Portuguese', 'por': 'Portuguese',
+      'ru': 'Russian', 'rus': 'Russian',
+      'ja': 'Japanese', 'jpn': 'Japanese',
+      'ko': 'Korean', 'kor': 'Korean',
+      'zh': 'Chinese', 'chi': 'Chinese', 'zho': 'Chinese',
+      'tr': 'Turkish', 'tur': 'Turkish',
+      'it': 'Italian', 'ita': 'Italian',
+      'nl': 'Dutch', 'nld': 'Dutch',
+      'pl': 'Polish', 'pol': 'Polish',
+      'th': 'Thai', 'tha': 'Thai',
+      'id': 'Indonesian', 'ind': 'Indonesian',
+      'ms': 'Malay', 'may': 'Malay', 'msa': 'Malay',
+      'fa': 'Persian', 'per': 'Persian', 'fas': 'Persian',
     };
-    final key = code.toLowerCase();
+    final key = code.trim().toLowerCase().split(RegExp('[-_]')).first;
     return names[key] ?? (code.isEmpty ? 'Unknown language' : code.toUpperCase());
   }
 
@@ -15948,8 +15963,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+            child: SizedBox(
+              height: MediaQuery.of(context).size.height * 0.75,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
@@ -16014,7 +16032,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGold,
                     ),
                     title: Text(
-                      track.title ?? track.language ?? 'Subtitle',
+                      (track.title?.trim().isNotEmpty ?? false)
+                          ? track.title!
+                          : _subtitleLanguageName(track.language ?? ''),
                       style: const TextStyle(color: playerWhite),
                     ),
                     onTap: () => _selectSubtitleTrack(track),
@@ -16045,6 +16065,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   onTap: _addExternalSubtitle,
                 ),
               ],
+                ),
+              ),
             ),
           ),
         );
