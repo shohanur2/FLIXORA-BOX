@@ -91,7 +91,7 @@ void main() {
       );
     });
 
-    test('classifies South Indian, Bengali and Asian cinema separately', () {
+    test('classifies South Indian, Bengali, Korean and other Asian cinema separately', () {
       for (final language in ['ta', 'te', 'ml', 'kn']) {
         expect(
           TrendingMovieEligibility.category(
@@ -116,6 +116,15 @@ void main() {
         TrendingMovieEligibility.category(
           originalLanguage: 'ko',
           originCountry: 'South Korea',
+          inBollywoodCatalogue: false,
+          inHollywoodCatalogue: false,
+        ),
+        'Korean',
+      );
+      expect(
+        TrendingMovieEligibility.category(
+          originalLanguage: 'ja',
+          originCountry: 'Japan',
           inBollywoodCatalogue: false,
           inHollywoodCatalogue: false,
         ),

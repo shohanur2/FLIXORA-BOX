@@ -749,6 +749,9 @@ class MovieCache {
   static const String trendingKey = 'flixora_trending';
   static const String playableTrendingMoviesKey = 'flixora_playable_trending_movies';
   static const String tmdbTrendingMoviesKey = 'flixora_tmdb_trending_movies';
+  static const String tmdbTrendingTvKey = 'flixora_tmdb_trending_tv_week';
+  static const String pakistaniTrendingTvKey = 'flixora_pakistani_trending_tv';
+  static const String koreanTrendingMoviesKey = 'flixora_korean_trending_movies';
   static const String trendingHindiDubbedKey = 'flixora_trending_hindi_dubbed';
   static const String trendingBollywoodKey = 'flixora_trending_bollywood';
   static const String trendingHollywoodKey = 'flixora_trending_hollywood';
@@ -1742,6 +1745,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _backgroundCatalogueWorkRunning = false;
   bool _backgroundCatalogueWorkPending = false;
   int _secondaryCatalogueNextIndex = 0;
+  final List<List<Movie>> _secondaryCatalogueResults = <List<Movie>>[];
   DateTime? _lastHomeRefreshAt;
   bool _checkingConnection = false;
   bool _isOpeningTitle = false;
@@ -1752,6 +1756,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> trending = [];
   List<Movie> _trendingMovies = [];
   List<Movie> _tmdbTrendingMovies = [];
+  List<Movie> _tmdbTrendingTv = [];
+  List<Movie> _pakistaniTrendingTv = [];
+  List<Movie> _koreanTrendingMovies = [];
   List<Movie> _trendingHindiDubbedMovies = [];
   List<Movie> _trendingBollywoodMovies = [];
   List<Movie> _trendingHollywoodMovies = [];
@@ -2209,13 +2216,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return TrendingMovieEligibility.category(
       originalLanguage: movie.originalLanguage,
       originCountry: movie.originCountry,
-      inBollywoodCatalogue: id > 0 &&
+      inBollywoodCatalogue: movie.mediaType == 'movie' && id > 0 &&
           bollywoodMovies.any((item) => item.tmdbId == id),
-      inHollywoodCatalogue: id > 0 &&
+      inHollywoodCatalogue: movie.mediaType == 'movie' && id > 0 &&
           hollywoodMovies.any((item) => item.tmdbId == id),
-      inSouthIndianCatalogue: id > 0 &&
+      inSouthIndianCatalogue: movie.mediaType == 'movie' && id > 0 &&
           southIndianMovies.any((item) => item.tmdbId == id),
-      inBengaliCatalogue: id > 0 &&
+      inBengaliCatalogue: movie.mediaType == 'movie' && id > 0 &&
           bengaliMovies.any((item) => item.tmdbId == id),
     );
   }
@@ -2265,6 +2272,107 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // look empty when one region dominates the first TMDB results.
       .take(48)
       .toList(growable: false);
+  }
+
+  List<Movie> _trendingHomeCandidates() {
+    final movieBoxTrendingTv = _movieBoxSections
+        .where((section) =>
+            !section.isHotShorts &&
+            (section.isBanner ||
+                section.title.toLowerCase().contains('trending')))
+        .expand((section) => section.items)
+        .where((title) => title.mediaType == 'tv')
+        .toList(growable: false);
+    return _deduplicateMovies([
+      ..._trendingMovieCandidates(),
+      ..._tmdbTrendingTv,
+      ...movieBoxTrendingTv,
+    ]).where((title) =>
+        title.mediaType == 'movie' || title.mediaType == 'tv').toList();
+  }
+
+  List<Movie> _pakistaniTrendingDramaTitles() {
+    // Search every TV catalogue already loaded by FLIXORA, not only the
+    // MovieBox banner/trending rows. MovieBox records come first so their
+    // playable source remains canonical when a TMDB duplicate exists.
+    final candidates = _deduplicateMovies([
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+      ..._pakistaniTrendingTv,
+      ..._tmdbTrendingTv,
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ]);
+
+    // The PK + Drama TMDB discovery feed is authoritative for Pakistani
+    // titles whose MovieBox metadata omits country/genre fields.
+    final pakistaniFeedIds = _pakistaniTrendingTv
+        .where((title) => title.tmdbId > 0)
+        .map((title) => title.tmdbId)
+        .toSet();
+    final pakistaniFeedTitles = _pakistaniTrendingTv
+        .map((title) => _normalizedMovieTitle(title.title))
+        .where((title) => title.isNotEmpty)
+        .toSet();
+
+    return candidates.where((title) {
+      if (title.mediaType != 'tv') return false;
+
+      final country = title.originCountry.toUpperCase();
+      final countryCodes = country.split(RegExp(r'[,\s]+'));
+      final hasPakistaniCountry = country == 'PK' ||
+          country.contains('PAKISTAN') ||
+          countryCodes.contains('PK');
+      final normalizedTitle = _normalizedMovieTitle(title.title);
+      final isFromPakistaniFeed =
+          (title.tmdbId > 0 && pakistaniFeedIds.contains(title.tmdbId)) ||
+          (normalizedTitle.isNotEmpty &&
+              pakistaniFeedTitles.contains(normalizedTitle));
+      final hasDramaGenre = title.genres.any(
+        (genre) => genre.toLowerCase().contains('drama'),
+      );
+
+      // MovieBox sometimes omits genre metadata. A Pakistani TV title with
+      // no genre value is retained; an explicit non-drama genre is excluded.
+      final genreAllowsDrama = hasDramaGenre || title.genres.isEmpty;
+      return genreAllowsDrama &&
+          (hasPakistaniCountry || isFromPakistaniFeed);
+    }).toList(growable: false);
+  }
+
+  Widget _pakistaniDramaBlock() {
+    final dramas = _pakistaniTrendingDramaTitles();
+    if (dramas.isNotEmpty) return _sectionBlock('Pakistani Drama', dramas);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 21, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Pakistani Drama',
+            style: TextStyle(
+              color: white,
+              fontSize: 19,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const SizedBox(
+            height: 44,
+            child: Center(
+              child: Text(
+                'No trending Pakistani dramas right now.',
+                style: TextStyle(color: ink54, fontSize: 12),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<List<String>> _movieBoxPlayableAudioLanguages(Movie movie) async {
@@ -2799,6 +2907,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.getList(MovieCache.trendingHindiDubbedKey),
         MovieCache.getList(MovieCache.trendingBollywoodKey),
         MovieCache.getList(MovieCache.trendingHollywoodKey),
+        MovieCache.getList(MovieCache.tmdbTrendingTvKey),
+        MovieCache.getList(MovieCache.pakistaniTrendingTvKey),
+        MovieCache.getList(MovieCache.koreanTrendingMoviesKey),
       ]);
       if (!mounted) return;
 
@@ -2818,6 +2929,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         if (_trendingHollywoodMovies.isEmpty) {
           _trendingHollywoodMovies = results[9];
+        }
+        if (_tmdbTrendingTv.isEmpty) {
+          _tmdbTrendingTv = results[10];
+        }
+        if (_pakistaniTrendingTv.isEmpty) {
+          _pakistaniTrendingTv = results[11];
+        }
+        if (_koreanTrendingMovies.isEmpty) {
+          _koreanTrendingMovies = results[12];
         }
         if (_trendingMovies.isEmpty) {
           _trendingMovies = _deduplicateMovies([
@@ -3156,13 +3276,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_original_language': 'hi',
           'sort_by': 'popularity.desc',
         }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/tv', extraParams: {
+          'with_origin_country': 'PK',
+          'with_genres': '18',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ko',
+          'with_origin_country': 'KR',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
       ];
 
-      final results = List<List<Movie>>.generate(
-        loaders.length,
-        (_) => <Movie>[],
-        growable: false,
-      );
+      if (_secondaryCatalogueResults.length != loaders.length) {
+        _secondaryCatalogueResults
+          ..clear()
+          ..addAll(List<List<Movie>>.generate(
+            loaders.length,
+            (_) => <Movie>[],
+          ));
+      }
+      final results = _secondaryCatalogueResults;
       var completedAll = true;
       // Keep the background workload small and pause between batches whenever
       // the user starts scrolling, searching, changing tabs or opening a title.
@@ -3187,6 +3321,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
       setState(() {
+        _tmdbTrendingTv = _deduplicateMovies([
+          ...results[0],
+          ...results[9],
+        ]);
+        _pakistaniTrendingTv = _deduplicateMovies(results[27]);
+        _koreanTrendingMovies = _deduplicateMovies(results[28]);
         trendingTv = _deduplicateMovies([
           ...trendingTv,
           ...results[0],
@@ -3275,6 +3415,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.latestKey, latest),
         MovieCache.saveList(MovieCache.topRatedKey, topRated),
         MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
+        MovieCache.saveList(MovieCache.tmdbTrendingTvKey, _tmdbTrendingTv),
+        MovieCache.saveList(MovieCache.pakistaniTrendingTvKey, _pakistaniTrendingTv),
+        MovieCache.saveList(MovieCache.koreanTrendingMoviesKey, _koreanTrendingMovies),
         MovieCache.saveList(MovieCache.popularTvKey, popularTv),
         MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
         MovieCache.saveList(MovieCache.animeKey, anime),
@@ -3286,6 +3429,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.southIndianMoviesKey, southIndianMovies),
         MovieCache.saveList(MovieCache.indianDramaTvKey, indianDramaTv),
       ]);
+      if (completedAll) {
+        _secondaryCatalogueResults
+          ..clear()
+          ..addAll(List<List<Movie>>.generate(
+            loaders.length,
+            (_) => <Movie>[],
+          ));
+      }
       // Visibility refresh and playable-stream verification are coordinated
       // by _runBackgroundCatalogueWork; do not launch duplicate jobs here.
     } catch (error) {
@@ -3442,6 +3593,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         identityHashCode(latest), latest.length,
         identityHashCode(topRated), topRated.length,
         identityHashCode(trendingTv), trendingTv.length,
+        identityHashCode(_tmdbTrendingTv), _tmdbTrendingTv.length,
         identityHashCode(popularTv), popularTv.length,
         identityHashCode(topRatedTv), topRatedTv.length,
         identityHashCode(anime), anime.length,
@@ -3452,6 +3604,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         identityHashCode(hollywoodMovies), hollywoodMovies.length,
         identityHashCode(southIndianMovies), southIndianMovies.length,
         identityHashCode(indianDramaTv), indianDramaTv.length,
+        identityHashCode(_pakistaniTrendingTv), _pakistaniTrendingTv.length,
+        identityHashCode(_koreanTrendingMovies), _koreanTrendingMovies.length,
         Object.hashAll(_unpublishedCatalogKeys),
       ]);
 
@@ -5202,7 +5356,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (section) {
       case 'Trending Movies':
         return const [
-          'All', 'Bollywood', 'Hollywood', 'South Indian',
+          'All', 'Bollywood', 'Hollywood', 'Korean', 'South Indian',
           'Bengali', 'Asian', 'International', 'Hindi Dubbed',
         ];
       case 'Popular Movies':
@@ -5240,37 +5394,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     if (section == 'Trending Movies') {
       switch (filter) {
+        case 'All':
+          return items
+              .where((movie) => movie.mediaType == 'movie')
+              .toList(growable: false);
         case 'Hindi Dubbed':
-          return _trendingHindiDubbedMovies.isNotEmpty
-              ? _trendingHindiDubbedMovies
-              : _rankingMoviePool().where(_hasHindiAudio).toList(growable: false);
+          return _deduplicateMovies([
+            ..._trendingHindiDubbedMovies,
+            ...items.where(_hasHindiAudio),
+          ]);
         case 'Bollywood':
-          return _deduplicateMovies([
-            ...bollywoodMovies,
-            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
-          ]);
         case 'Hollywood':
-          return _deduplicateMovies([
-            ...hollywoodMovies,
-            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
-          ]);
+        case 'Korean':
         case 'South Indian':
-          return _deduplicateMovies([
-            ...southIndianMovies,
-            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
-          ]);
         case 'Bengali':
-          return _deduplicateMovies([
-            ...bengaliMovies,
-            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
-          ]);
         case 'Asian':
         case 'International':
-          return _rankingMoviePool()
-              .where((movie) => _trendingMovieCategory(movie) == filter)
-              .toList(growable: false);
+          // Regional tags combine the weekly-trending rail with the matching
+          // regional catalogue, including current TV/web-series/drama titles.
+          final regionalMovies = filter == 'Korean'
+              ? _koreanTrendingMovies
+              : _rankingRegionalMovies(filter);
+          final regionalTv = _deduplicateMovies([
+            ..._tmdbTrendingTv,
+            ...trendingTv,
+            ...popularTv,
+            ...topRatedTv,
+            ...koreanDrama,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+            ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+          ]).where((title) => _trendingMovieCategory(title) == filter);
+          return _deduplicateMovies([
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+            ...regionalMovies,
+            ...regionalTv,
+          ]);
         default:
-          return items;
+          return items
+              .where((movie) => movie.mediaType == 'movie')
+              .toList(growable: false);
       }
     }
 
@@ -7378,7 +7540,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         children: [
           _homeTopCategories(),
           RepaintBoundary(child: _featuredSlider()),
-          _sectionBlock('Trending Movies', _trendingMovieCandidates()),
+          _sectionBlock('Trending Movies', _trendingHomeCandidates()),
+          _pakistaniDramaBlock(),
           _sectionBlock('Trending TV Series', _deduplicateMovies([
             ..._regularMovieBoxItems
                 .where((title) => title.mediaType == 'tv'),
@@ -11325,6 +11488,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   bool _isPlaying = false;
   bool _isBuffering = false;
+  Timer? _bufferingRecoveryTimer;
+  int _bufferingRecoveryAttempts = 0;
+  bool _recoveringFromBuffering = false;
   bool _showControls = true;
   bool _isLocked = false;
   bool _isFullscreen = false;
@@ -12641,6 +12807,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int episode,
     required bool openPlayer,
   }) async {
+    if (openPlayer) {
+      _bufferingRecoveryTimer?.cancel();
+      _bufferingRecoveryAttempts = 0;
+      _recoveringFromBuffering = false;
+    }
     final detail = _movieBoxDetail;
     if (detail == null || _isDisposed) return;
     if (widget.movie.movieBoxIsSeries && season > 0 && episode > 0) {
@@ -13157,6 +13328,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     if (_isOpening || url == _currentVideoUrl) return;
+    _bufferingRecoveryTimer?.cancel();
+    _bufferingRecoveryAttempts = 0;
+    _recoveringFromBuffering = false;
     final requestToken = _movieBoxPlaybackRequestToken;
     final previousQuality = _selectedQuality;
     final previousUrl = _currentVideoUrl;
@@ -13296,6 +13470,50 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return RustPlaybackCore.playbackError(code);
   }
 
+  Future<void> _recoverFromStalledBuffering() async {
+    if (_isDisposed ||
+        !_playerIsOnline ||
+        !_isBuffering ||
+        !_isPlaying ||
+        _isOpening ||
+        _recoveringFromBuffering ||
+        _bufferingRecoveryAttempts >= 1 ||
+        widget.localFilePath != null ||
+        _currentVideoUrl.isEmpty) {
+      return;
+    }
+
+    final position = _pendingSeekPosition ??
+        (_player.state.position > Duration.zero
+            ? _player.state.position
+            : _position);
+    _bufferingRecoveryAttempts++;
+    _recoveringFromBuffering = true;
+    debugPrint('FLIXORA buffering watchdog: attempting in-place playback recovery.');
+    try {
+      // Keep the active source, headers, audio/subtitle tracks and Player
+      // settings intact; do not reopen the stream or replace its provider.
+      await _saveResumePosition(position);
+      await _player.pause();
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted || _isDisposed) return;
+      await _player.play();
+      if (position > Duration.zero) {
+        await Future.delayed(const Duration(milliseconds: 700));
+        if (!mounted || _isDisposed) return;
+        try {
+          await _player.seek(position);
+        } catch (error) {
+          debugPrint('FLIXORA buffering recovery seek unavailable: $error');
+        }
+      }
+    } catch (error) {
+      debugPrint('FLIXORA buffering recovery failed: $error');
+    } finally {
+      _recoveringFromBuffering = false;
+    }
+  }
+
   void _handlePlayerError(String value) {
     debugPrint('FLIXORA playback event: $value');
     _playbackErrorTimer?.cancel();
@@ -13400,6 +13618,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (!mounted || _isDisposed) return;
       setState(() => _isBuffering = value);
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
+      if (value) {
+        _bufferingRecoveryTimer?.cancel();
+        _bufferingRecoveryTimer = Timer(const Duration(seconds: 18), () {
+          if (!mounted || _isDisposed || !_isBuffering) return;
+          unawaited(_recoverFromStalledBuffering());
+        });
+      } else {
+        _bufferingRecoveryTimer?.cancel();
+        _bufferingRecoveryTimer = null;
+      }
     });
 
     _errorSubscription = _player.stream.error.listen((value) {
@@ -13512,6 +13740,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       subtitle: [SubtitleTrack.auto()],
     );
     _seekSyncTimer?.cancel();
+    _bufferingRecoveryTimer?.cancel();
+    _bufferingRecoveryAttempts = 0;
+    _recoveringFromBuffering = false;
     _seekRequestToken++;
     _isSeeking = false;
     _seekPreviewPosition = null;
@@ -14068,7 +14299,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '30');
+        await platformPlayer.setProperty('demuxer-readahead-secs', '30');
+        await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
+        await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
         await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.

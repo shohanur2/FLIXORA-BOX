@@ -83,7 +83,10 @@ class TrendingMovieEligibility {
         (language == 'en' && isHollywoodCountry)) {
       return 'Hollywood';
     }
-    if (const {'ko', 'zh', 'ja', 'th', 'vi', 'id', 'tl'}.contains(language)) {
+    if (language == 'ko' || country == 'kr' || country.contains('korea')) {
+      return 'Korean';
+    }
+    if (const {'zh', 'ja', 'th', 'vi', 'id', 'tl'}.contains(language)) {
       return 'Asian';
     }
     return 'International';
