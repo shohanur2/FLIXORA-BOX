@@ -47,7 +47,7 @@ Deno.serve(async (request: Request) => {
     url.searchParams.set("api_key", apiKey);
     if (tmdbId > 0) url.searchParams.set("tmdb_id", String(tmdbId));
     else url.searchParams.set("film_name", title);
-    if (/^\\d{4}$/.test(year)) url.searchParams.set("year", year);
+    if (/^\d{4}$/.test(year)) url.searchParams.set("year", year);
     url.searchParams.set("type", mediaType);
     url.searchParams.set("languages", languages.join(","));
     url.searchParams.set("subs_per_page", "30");
