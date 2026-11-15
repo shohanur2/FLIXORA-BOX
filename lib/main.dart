@@ -2159,7 +2159,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((title) => title.mediaType == 'movie').toList(growable: false);
 
     final seriesCatalog = preferMovieBoxRecords([
-      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ..._regularMovieBoxItems.where(isSeries),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ...trendingTv,
       ...popularTv,
@@ -2294,6 +2294,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _pakistaniTrendingDramaTitles() {
     // Use FLIXORA's already-loaded catalogues. MovieBox may omit country
     // metadata, so retain the Pakistani source section label as provenance.
+    bool isSeries(Movie title) =>
+        title.mediaType == 'tv' ||
+        title.movieBoxIsSeries ||
+        const {2, 3, 7}.contains(title.movieBoxSubjectType);
+
     final pakistaniSectionItems = _movieBoxSections
         .where((section) {
           final sectionName = section.title.toLowerCase();
@@ -2301,7 +2306,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               sectionName.contains('pakistan');
         })
         .expand((section) => section.items)
-        .where((title) => title.mediaType == 'tv')
+        .where(isSeries)
         .toList(growable: false);
 
     final pakistaniSectionIds = pakistaniSectionItems
@@ -2338,13 +2343,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .toSet();
 
     return candidates.where((title) {
-      if (title.mediaType != 'tv') return false;
+      if (!isSeries(title)) return false;
 
       final country = title.originCountry.toUpperCase();
       final countryCodes = country.split(RegExp(r'[,\s]+'));
       final hasPakistaniCountry = country == 'PK' ||
           country.contains('PAKISTAN') ||
-          countryCodes.contains('PK');
+          countryCodes.contains('PK') ||
+          title.originalLanguage.toLowerCase() == 'ur';
       final normalizedTitle = _normalizedMovieTitle(title.title);
       final isFromPakistaniSection =
           (title.tmdbId > 0 && pakistaniSectionIds.contains(title.tmdbId)) ||
@@ -3143,6 +3149,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _refreshPakistaniDramaCatalogue({
+    bool forceRefresh = false,
+  }) async {
+    if (!_online) return;
+    try {
+      var titles = await TmdbService.getMovies(
+        'discover/tv',
+        extraParams: {
+          'with_origin_country': 'PK',
+          'with_genres': '18',
+          'sort_by': 'popularity.desc',
+        },
+        pages: 3,
+        forceRefresh: forceRefresh,
+      ).timeout(const Duration(seconds: 35));
+
+      // If the strict genre query returns no rows, broaden only the Pakistani
+      // TV discovery request; the section selector still filters drama genre.
+      if (titles.isEmpty) {
+        titles = await TmdbService.getMovies(
+          'discover/tv',
+          extraParams: {
+            'with_origin_country': 'PK',
+            'sort_by': 'popularity.desc',
+          },
+          pages: 3,
+          forceRefresh: forceRefresh,
+        ).timeout(const Duration(seconds: 35));
+      }
+      if (!mounted || titles.isEmpty) return;
+      setState(() {
+        _pakistaniTrendingTv = _deduplicateMovies([
+          ..._pakistaniTrendingTv,
+          ...titles,
+        ]);
+      });
+      await MovieCache.saveList(
+        MovieCache.pakistaniTrendingTvKey,
+        _pakistaniTrendingTv,
+      );
+    } catch (error) {
+      debugPrint('Pakistani drama catalogue refresh failed: $error');
+    }
+  }
+
   Future<void> _refreshMovieBoxHome({bool forceRefresh = false}) async {
     if (!_online) return;
     try {
@@ -3170,6 +3221,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _movieBoxMatchCache[_movieBoxMatchKey(item)] = item;
       }
       await MovieCache.saveMovieBoxSections(sections);
+      unawaited(_refreshPakistaniDramaCatalogue(forceRefresh: forceRefresh));
       unawaited(_refreshCatalogVisibility(
         candidates: sections.expand((section) => section.items).toList(),
         forceRefresh: true,
