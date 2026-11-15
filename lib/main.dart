@@ -11563,8 +11563,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
-  // 0 = Crop, 1 = Full 100% (stretch), 2 = Normal (preserve full frame).
-  int _videoFitMode = 2;
+  // 0 = default full-display fit; 1 = Small, 2 = Normal, 3 = Large stretch.
+  int _videoFitMode = 0;
+  String? _stretchFeedback;
+  Timer? _stretchFeedbackTimer;
   bool _restoringResumePosition = false;
   String? _gestureMode;
   String _gestureFeedback = '';
@@ -14605,13 +14607,36 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     );
   }
 
+  void _cycleStretchMode() {
+    final nextMode = _videoFitMode == 0 || _videoFitMode == 3
+        ? 1
+        : _videoFitMode + 1;
+    final label = switch (nextMode) {
+      1 => 'SMALL',
+      2 => 'NORMAL',
+      _ => 'LARGE',
+    };
+    _stretchFeedbackTimer?.cancel();
+    setState(() {
+      _videoFitMode = nextMode;
+      _videoZoom = 1.0;
+      _stretchFeedback = label;
+    });
+    _stretchFeedbackTimer = Timer(const Duration(milliseconds: 850), () {
+      if (mounted) setState(() => _stretchFeedback = null);
+    });
+    _startHideTimer();
+  }
+
   Future<void> _toggleFullscreen() async {
     if (!mounted) return;
 
     if (!_isFullscreen) {
       if (_isMiniPlayer) setState(() => _isMiniPlayer = false);
-      // Entering landscape always starts in Normal fit so characters are not cropped.
-      _videoFitMode = 2;
+      // Every new fullscreen session starts in the default full-display fit.
+      _videoFitMode = 0;
+      _stretchFeedbackTimer?.cancel();
+      _stretchFeedback = null;
       _videoZoom = 1.0;
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
@@ -16595,16 +16620,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ),
                   if (!compact) ...[
                     compactAction(
-                      tooltip: 'Video fit: ${_videoFitMode == 0 ? 'Crop' : _videoFitMode == 1 ? 'Full 100%' : 'Normal'}',
+                      tooltip: 'Stretch: ${_videoFitMode == 0 ? 'Default' : _videoFitMode == 1 ? 'Small' : _videoFitMode == 2 ? 'Normal' : 'Large'}',
                       icon: Icons.aspect_ratio_rounded,
-                      color: _videoFitMode == 2 ? playerWhite : playerGoldLight,
-                      onPressed: () {
-                        setState(() {
-                          _videoFitMode = (_videoFitMode + 1) % 3;
-                          _videoZoom = 1.0;
-                        });
-                        _startHideTimer();
-                      },
+                      color: _videoFitMode == 0 ? playerWhite : playerGoldLight,
+                      onPressed: _cycleStretchMode,
                     ),
                     compactAction(
                       tooltip: 'Subtitles',
@@ -17006,19 +17025,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                               ? params.w! / params.h!
                               : null;
 
+                  final screenSize = MediaQuery.sizeOf(context);
+                  final screenAspect = screenSize.width > 0 && screenSize.height > 0
+                      ? screenSize.width / screenSize.height
+                      : (displayAspect ?? 16 / 9);
+                  final targetAspect = switch (_videoFitMode) {
+                    1 => screenAspect * 0.92,
+                    2 => screenAspect,
+                    3 => screenAspect * 1.08,
+                    _ => screenAspect,
+                  };
+
                   return Video(
                     controller: _videoController,
-                    // Use the decoded display aspect ratio so landscape
-                    // playback keeps the complete frame without stretching
-                    // or cutting off characters.
-                    aspectRatio: displayAspect,
-                    // Normal preserves the complete frame. Crop and Full
-                    // 100% remain explicit user-selected modes only.
-                    fit: switch (_videoFitMode) {
-                      0 => BoxFit.cover,
-                      1 => BoxFit.fill,
-                      _ => BoxFit.contain,
-                    },
+                    // Default playback fills the available display. The
+                    // stretch cycle adjusts the target ratio without cropping.
+                    aspectRatio: targetAspect,
+                    fit: BoxFit.fill,
                     controls: NoVideoControls,
                     subtitleViewConfiguration: _subtitleViewConfiguration(),
                   );
@@ -17027,6 +17050,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
           ),
         ),
+        if (_stretchFeedback != null)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.24),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 13,
+                      vertical: 7,
+                    ),
+                    child: Text(
+                      _stretchFeedback!,
+                      style: const TextStyle(
+                        color: Color(0xBFFFFFFF),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         if ((_isBuffering || !_initialized) && _errorMessage == null)
           IgnorePointer(
             child: Center(
@@ -17284,6 +17335,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   @override
   void dispose() {
+    _stretchFeedbackTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     // Capture MPV's freshest timestamp before disposing the native player.
     final finalNativePosition = _player.state.position;
