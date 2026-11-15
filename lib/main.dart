@@ -2292,26 +2292,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   List<Movie> _pakistaniTrendingDramaTitles() {
-    final movieBoxTrendingTv = _movieBoxSections
-        .where((section) =>
-            !section.isHotShorts &&
-            (section.isBanner ||
-                section.title.toLowerCase().contains('trending')))
-        .expand((section) => section.items);
-    return _deduplicateMovies([
-      ..._tmdbTrendingTv,
+    // Search every TV catalogue already loaded by FLIXORA, not only the
+    // MovieBox banner/trending rows. MovieBox records come first so their
+    // playable source remains canonical when a TMDB duplicate exists.
+    final candidates = _deduplicateMovies([
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ..._pakistaniTrendingTv,
-      ...movieBoxTrendingTv,
-    ]).where((title) {
+      ..._tmdbTrendingTv,
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ]);
+
+    // The PK + Drama TMDB discovery feed is authoritative for Pakistani
+    // titles whose MovieBox metadata omits country/genre fields.
+    final pakistaniFeedIds = _pakistaniTrendingTv
+        .where((title) => title.tmdbId > 0)
+        .map((title) => title.tmdbId)
+        .toSet();
+    final pakistaniFeedTitles = _pakistaniTrendingTv
+        .map((title) => _normalizedMovieTitle(title.title))
+        .where((title) => title.isNotEmpty)
+        .toSet();
+
+    return candidates.where((title) {
       if (title.mediaType != 'tv') return false;
+
       final country = title.originCountry.toUpperCase();
-      final isPakistani = country == 'PK' ||
+      final countryCodes = country.split(RegExp(r'[,\s]+'));
+      final hasPakistaniCountry = country == 'PK' ||
           country.contains('PAKISTAN') ||
-          country.split(RegExp(r'[,\s]+')).contains('PK');
-      final isDrama = title.genres.any(
+          countryCodes.contains('PK');
+      final normalizedTitle = _normalizedMovieTitle(title.title);
+      final isFromPakistaniFeed =
+          (title.tmdbId > 0 && pakistaniFeedIds.contains(title.tmdbId)) ||
+          (normalizedTitle.isNotEmpty &&
+              pakistaniFeedTitles.contains(normalizedTitle));
+      final hasDramaGenre = title.genres.any(
         (genre) => genre.toLowerCase().contains('drama'),
       );
-      return isPakistani && isDrama;
+
+      // MovieBox sometimes omits genre metadata. A Pakistani TV title with
+      // no genre value is retained; an explicit non-drama genre is excluded.
+      final genreAllowsDrama = hasDramaGenre || title.genres.isEmpty;
+      return genreAllowsDrama &&
+          (hasPakistaniCountry || isFromPakistaniFeed);
     }).toList(growable: false);
   }
 
@@ -3249,6 +3278,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/tv', extraParams: {
           'with_origin_country': 'PK',
+          'with_genres': '18',
           'sort_by': 'popularity.desc',
         }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
         () => TmdbService.getMovies('discover/movie', extraParams: {
