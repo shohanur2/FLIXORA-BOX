@@ -17050,10 +17050,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
           ),
         ),
-        if (_stretchFeedback != null)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: Center(
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Center(
+              child: AnimatedOpacity(
+                opacity: _stretchFeedback == null ? 0 : 1,
+                duration: const Duration(milliseconds: 260),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.24),
@@ -17065,7 +17067,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       vertical: 7,
                     ),
                     child: Text(
-                      _stretchFeedback!,
+                      _stretchFeedback ?? '',
                       style: const TextStyle(
                         color: Color(0xBFFFFFFF),
                         fontSize: 12,
@@ -17078,6 +17080,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               ),
             ),
           ),
+        ),
         if ((_isBuffering || !_initialized) && _errorMessage == null)
           IgnorePointer(
             child: Center(
