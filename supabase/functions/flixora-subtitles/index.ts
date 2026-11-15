@@ -61,10 +61,10 @@ Deno.serve(async (request: Request) => {
     const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
     if (!response.ok) return json({ error: "Subtitle provider search failed." }, 502);
     const payload = await response.json() as JsonMap;
-    if (payload.status !== true) return json({ error: "No English subtitle was found." }, 404);
+    if (payload.status !== true) return json({ error: "No subtitles were found for the requested languages." }, 404);
 
-    const results = Array.isArray(payload.results) ? payload.results as JsonMap[] : [];
-    if (tmdbId > 0 && !results.some((item) => Number(item.tmdb_id) === tmdbId)) {
+    const titleResults = Array.isArray(payload.results) ? payload.results as JsonMap[] : [];
+    if (tmdbId > 0 && !titleResults.some((item) => Number(item.tmdb_id) === tmdbId)) {
       return json({ error: "No exact TMDB title match was found." }, 404);
     }
     const subtitles = Array.isArray(payload.subtitles) ? payload.subtitles as JsonMap[] : [];
@@ -85,7 +85,7 @@ Deno.serve(async (request: Request) => {
       const language = String(candidate.language ?? "").toUpperCase();
       if (!unique.has(language)) unique.set(language, candidate);
     }
-    const results = [...unique.values()].map((selected) => {
+    const subtitleResults = [...unique.values()].map((selected) => {
       const rawPath = String(selected.url ?? "");
       const downloadUrl = new URL(rawPath, "https://dl.subdl.com");
       if (downloadUrl.hostname !== "dl.subdl.com" || !downloadUrl.pathname.startsWith("/subtitle/")) {
@@ -99,12 +99,12 @@ Deno.serve(async (request: Request) => {
         downloadUrl: downloadUrl.toString(),
       };
     });
-    if (results.length === 0) return json({ error: "No downloadable subtitles were found for the requested languages." }, 404);
+    if (subtitleResults.length === 0) return json({ error: "No downloadable subtitles were found for the requested languages." }, 404);
     // Keep the previous English-only response fields so already-installed
     // FLIXORA builds continue to work while the updated app is being tested.
-    const english = results.find((item) => item.language === "en");
+    const english = subtitleResults.find((item) => item.language === "en");
     return json({
-      subtitles: results,
+      subtitles: subtitleResults,
       ...(english ? {
         language: "English",
         format: english.format,
@@ -114,6 +114,6 @@ Deno.serve(async (request: Request) => {
       } : {}),
     });
   } catch {
-    return json({ error: "Automatic English subtitle lookup failed." }, 500);
+    return json({ error: "Automatic subtitle lookup failed." }, 500);
   }
 });
