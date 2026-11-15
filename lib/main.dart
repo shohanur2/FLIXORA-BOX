@@ -9,6 +9,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11346,6 +11347,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleDelay = 0;
   double _subtitleOutlineSize = 1.5;
   double _subtitleShadowOffset = 1;
+  bool _automaticSubtitleLoading = false;
+  bool _subtitleManuallySelected = false;
+  String? _automaticSubtitlePath;
+  String? _automaticSubtitleMessage;
+  SubtitleTrack? _automaticEnglishTrack;
+  int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
   bool _isStretched = false;
@@ -12419,6 +12426,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
           await _restoreResumePosition();
+          _subtitleManuallySelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           _prewarmNextMovieBoxEpisode();
           return true;
@@ -13105,6 +13117,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (!mounted || _isDisposed) return;
           await _player.play();
           if (!mounted || _isDisposed) return;
+          _subtitleManuallySelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           return;
         } catch (error) {
@@ -13841,6 +13858,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
+    _subtitleManuallySelected = true;
     try {
       await _player.setSubtitleTrack(track);
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
@@ -14777,6 +14795,176 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     ).whenComplete(_startHideTimer);
   }
 
+
+  bool _isEnglishSubtitleTrack(SubtitleTrack track) {
+    final language = (track.language ?? '').toLowerCase();
+    final title = (track.title ?? '').toLowerCase();
+    return language == 'en' || language == 'eng' ||
+        language.contains('english') || title.contains('english') ||
+        title.startsWith('eng ') || title == 'eng';
+  }
+
+  int _automaticSubtitleMediaId() =>
+      widget.movie.tmdbId > 0 ? widget.movie.tmdbId : widget.movie.id;
+
+  String _automaticSubtitleCacheKey() {
+    final episode = widget.movie.mediaType == 'tv'
+        ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+        : '';
+    return 'english_${widget.movie.mediaType}_${_automaticSubtitleMediaId()}$episode';
+  }
+
+  Future<void> _ensureAutomaticEnglishSubtitle() async {
+    if (_isDisposed || widget.localFilePath != null || !_playerIsOnline ||
+        _automaticSubtitleLoading || _subtitleManuallySelected) return;
+    final requestToken = ++_automaticSubtitleRequestToken;
+    final mediaId = _automaticSubtitleMediaId();
+    if (mediaId <= 0) return;
+
+    setState(() {
+      _automaticSubtitleLoading = true;
+      _automaticSubtitleMessage = 'Finding English subtitle…';
+    });
+
+    try {
+      // Prefer a real English track already embedded in the video.
+      for (var attempt = 0; attempt < 8; attempt++) {
+        final embedded = _tracks.subtitle.where(_isEnglishSubtitleTrack);
+        if (embedded.isNotEmpty) {
+          final track = embedded.first;
+          if (requestToken != _automaticSubtitleRequestToken ||
+              _subtitleManuallySelected || _isDisposed) return;
+          await _player.setSubtitleTrack(track);
+          await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+          if (mounted && !_isDisposed) {
+            setState(() {
+              _automaticEnglishTrack = track;
+              _automaticSubtitleMessage = 'Available in this video';
+            });
+          }
+          return;
+        }
+        if (attempt < 7) {
+          await Future.delayed(const Duration(milliseconds: 250));
+        }
+      }
+
+      final support = await getApplicationSupportDirectory();
+      final cacheDir = Directory('${support.path}/flixora_subtitles');
+      if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
+      final cacheBase = _automaticSubtitleCacheKey();
+      File? cachedFile;
+      for (final extension in ['srt', 'ass', 'ssa', 'vtt', 'sub']) {
+        final candidate = File('${cacheDir.path}/$cacheBase.$extension');
+        if (await candidate.exists() && await candidate.length() > 16) {
+          cachedFile = candidate;
+          break;
+        }
+      }
+
+      if (cachedFile == null) {
+        final client = supabaseClient;
+        if (client == null) {
+          throw StateError('Subtitle service is unavailable.');
+        }
+        final response = await client.functions.invoke(
+          'flixora-subtitles',
+          body: {
+            'tmdbId': widget.movie.tmdbId,
+            'title': widget.movie.title,
+            'year': widget.movie.year,
+            'mediaType': widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+            if (widget.movie.mediaType == 'tv') ...{
+              'season': _selectedSeasonNumber,
+              'episode': _selectedEpisodeNumber,
+            },
+          },
+        ).timeout(const Duration(seconds: 18));
+        final payload = response.data;
+        if (payload is! Map) {
+          throw StateError('No English subtitle was found.');
+        }
+        final downloadUrl = (payload['downloadUrl'] ?? '').toString();
+        final uri = Uri.tryParse(downloadUrl);
+        if (uri == null || uri.scheme != 'https' ||
+            uri.host != 'dl.subdl.com' ||
+            !uri.path.startsWith('/subtitle/')) {
+          throw StateError('Subtitle provider returned an invalid file.');
+        }
+        final extension = (payload['format'] ?? 'srt')
+            .toString().toLowerCase().replaceAll('.', '');
+        if (!['srt', 'ass', 'ssa', 'vtt', 'sub'].contains(extension)) {
+          throw StateError('Unsupported English subtitle format.');
+        }
+        final download = await http.get(uri)
+            .timeout(const Duration(seconds: 20));
+        if (download.statusCode != 200 ||
+            download.bodyBytes.length < 16 ||
+            download.bodyBytes.length > 10 * 1024 * 1024) {
+          throw StateError('Could not download the English subtitle.');
+        }
+        // SubDL unpack=1 should return a single text subtitle, never a ZIP.
+        if (download.bodyBytes.length >= 2 &&
+            download.bodyBytes[0] == 0x50 &&
+            download.bodyBytes[1] == 0x4b) {
+          throw StateError('Subtitle provider returned an archive, not a subtitle file.');
+        }
+        cachedFile = File('${cacheDir.path}/$cacheBase.$extension');
+        await cachedFile.writeAsBytes(download.bodyBytes, flush: true);
+      }
+
+      if (requestToken != _automaticSubtitleRequestToken ||
+          _subtitleManuallySelected || _isDisposed) return;
+      final track = SubtitleTrack.uri(
+        cachedFile.path,
+        title: 'English',
+        language: 'en',
+      );
+      await _player.setSubtitleTrack(track);
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _automaticSubtitlePath = cachedFile!.path;
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage = 'Downloaded and ready';
+        });
+      }
+    } catch (error) {
+      debugPrint('FLIXORA automatic English subtitle: $error');
+      if (mounted && !_isDisposed &&
+          requestToken == _automaticSubtitleRequestToken) {
+        setState(() {
+          _automaticSubtitleMessage = error.toString().contains('503') ||
+                  error.toString().contains('not configured')
+              ? 'Subtitle service needs API setup'
+              : 'No English subtitle found';
+        });
+      }
+    } finally {
+      if (mounted && !_isDisposed &&
+          requestToken == _automaticSubtitleRequestToken) {
+        setState(() => _automaticSubtitleLoading = false);
+      }
+    }
+  }
+
+  Future<void> _selectAutomaticEnglishSubtitle() async {
+    if (_automaticEnglishTrack != null) {
+      await _selectSubtitleTrack(_automaticEnglishTrack!);
+      return;
+    }
+    if (_automaticSubtitlePath != null) {
+      await _selectSubtitleTrack(SubtitleTrack.uri(
+        _automaticSubtitlePath!,
+        title: 'English',
+        language: 'en',
+      ));
+      return;
+    }
+    Navigator.of(context).pop();
+    await _ensureAutomaticEnglishSubtitle();
+  }
+
   void _showSubtitleTracks() {
     final subtitleTracks = _tracks.subtitle;
 
@@ -14800,6 +14988,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ),
                 ),
                 const SizedBox(height: 10),
+                ListTile(
+                  leading: Icon(
+                    _automaticSubtitleLoading
+                        ? Icons.downloading_rounded
+                        : Icons.subtitles,
+                    color: playerGold,
+                  ),
+                  title: const Text('English', style: TextStyle(color: playerWhite)),
+                  subtitle: Text(
+                    _automaticSubtitleMessage ??
+                        (_automaticSubtitlePath != null
+                            ? 'Downloaded and cached'
+                            : 'Find and download automatically'),
+                    style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                  ),
+                  trailing: _automaticSubtitleLoading
+                      ? const SizedBox(
+                          width: 18, height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: playerGold),
+                        )
+                      : const Icon(Icons.chevron_right, color: playerGoldLight),
+                  onTap: _selectAutomaticEnglishSubtitle,
+                ),
                 ListTile(
                   leading: const Icon(
                     Icons.subtitles_off,
