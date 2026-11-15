@@ -11372,18 +11372,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     subtitle: [SubtitleTrack.auto()],
   );
 
-  String get _resumeKey {
-    final id = widget.movie.tmdbId > 0
-        ? widget.movie.tmdbId
-        : widget.movie.id;
+  List<String> get _resumeKeys {
+    final ids = <int>{
+      if (widget.movie.tmdbId > 0) widget.movie.tmdbId,
+      if (widget.movie.id > 0) widget.movie.id,
+    };
     final episodeKey = widget.movie.mediaType == 'tv'
         ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
         : '';
-
-    // Every TV episode has its own resume point; never carry the previous
-    // episode's position into a newly selected episode.
-    return 'flixora_resume_${widget.movie.mediaType}_$id$episodeKey';
+    return ids
+        .map((id) => 'flixora_resume_${widget.movie.mediaType}_$id$episodeKey')
+        .toList(growable: false);
   }
+
+  String get _resumeKey => _resumeKeys.first
 
   String _resolveInitialNetworkUrl() {
     // Admin-managed encodes take priority over the legacy single video_url.
@@ -13129,10 +13131,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _restoreResumePosition() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedSeconds = prefs.getInt(_resumeKey) ?? 0;
-
+      final resumeKeys = _resumeKeys;
+      var savedSeconds = 0;
+      String? savedKey;
+      for (final key in resumeKeys) {
+        final candidate = prefs.getInt(key) ?? 0;
+        if (candidate > savedSeconds) {
+          savedSeconds = candidate;
+          savedKey = key;
+        }
+      }
       if (savedSeconds <= 5) return;
-
       final savedPosition = Duration(seconds: savedSeconds);
 
       // Wait briefly for the newly opened media's duration. Without this,
@@ -13155,11 +13164,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       if (mediaDuration > Duration.zero &&
           savedPosition >= mediaDuration - const Duration(seconds: 15)) {
-        await prefs.remove(_resumeKey);
+        for (final key in resumeKeys) {
+          await prefs.remove(key);
+        }
         return;
       }
 
       await _player.seek(savedPosition);
+      if (savedKey != null && savedKey != _resumeKey) {
+        await prefs.setInt(_resumeKey, savedSeconds);
+      }
 
       if (mounted && !_isDisposed) {
         setState(() => _updatePosition(savedPosition));
@@ -13176,22 +13190,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Capture the key immediately. If the user changes episode while a
     // preference write is pending, the old timestamp must stay with the
     // episode it came from.
-    final key = _resumeKey;
+    final keys = _resumeKeys;
+    final recentKeys = <String>{
+      if (widget.movie.tmdbId > 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.tmdbId}',
+      if (widget.movie.id > 0)
+        'flixora_recent_resume_${widget.movie.mediaType}_${widget.movie.id}',
+    };
     final seconds = position.inSeconds;
     final durationSeconds = _duration.inSeconds;
-    final mediaId = widget.movie.tmdbId > 0
-        ? widget.movie.tmdbId
-        : widget.movie.id;
-    final recentKey =
-        'flixora_recent_resume_${widget.movie.mediaType}_$mediaId';
     _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(key, seconds);
-      await prefs.setInt('${key}_duration', durationSeconds);
-      // Keep a latest-progress snapshot for the Watch History list. The
-      // episode-specific resume key above remains unchanged.
-      await prefs.setInt(recentKey, seconds);
-      await prefs.setInt('${recentKey}_duration', durationSeconds);
+      for (final key in keys) {
+        await prefs.setInt(key, seconds);
+        await prefs.setInt('${key}_duration', durationSeconds);
+      }
+      for (final recentKey of recentKeys) {
+        await prefs.setInt(recentKey, seconds);
+        await prefs.setInt('${recentKey}_duration', durationSeconds);
+      }
     }).catchError((error) {
       debugPrint('Could not persist FLIXORA resume position: $error');
     });
@@ -13201,7 +13218,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _clearResumePosition() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_resumeKey);
+      for (final key in _resumeKeys) {
+        await prefs.remove(key);
+      }
     } catch (_) {}
   }
 
@@ -13494,8 +13513,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '12');
-        await platformPlayer.setProperty('cache-pause-wait', '0.5');
+        await platformPlayer.setProperty('cache-secs', '8');
+        await platformPlayer.setProperty('cache-pause-wait', '0.2');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
@@ -17139,6 +17158,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ? SafeArea(
                       top: false,
                       bottom: false,
+                      left: false,
+                      right: false,
                       child: _playerBody(),
                     )
                   : SafeArea(
