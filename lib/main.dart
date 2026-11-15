@@ -4829,6 +4829,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ]);
       if (!mounted) return;
       setState(() {
+        _homeSectionCache.clear();
         bengaliMovies = _deduplicateMovies([...bengaliMovies, ...results[0]]);
         bollywoodMovies = _deduplicateMovies([...bollywoodMovies, ...results[1]]);
         hollywoodMovies = _deduplicateMovies([...hollywoodMovies, ...results[2]]);
@@ -4904,7 +4905,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (section == 'Trending Movies') {
       switch (filter) {
         case 'Hindi Dubbed':
-          return _trendingHindiDubbedMovies;
+          return _trendingHindiDubbedMovies.isNotEmpty
+              ? _trendingHindiDubbedMovies
+              : _rankingMoviePool().where(_hasHindiAudio).toList(growable: false);
         case 'Bollywood':
           return _deduplicateMovies([
             ...bollywoodMovies,
@@ -4927,7 +4930,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ]);
         case 'Asian':
         case 'International':
-          return items
+          return _rankingMoviePool()
               .where((movie) => _trendingMovieCategory(movie) == filter)
               .toList(growable: false);
         default:
@@ -5585,7 +5588,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 final active = selected == value;
                 return InkWell(
                   borderRadius: BorderRadius.circular(8),
-                  onTap: () => setState(() => _sectionFilters[title] = value),
+                  onTap: () {
+                    setState(() => _sectionFilters[title] = value);
+                    if (title == 'Trending Movies' && value != 'All') {
+                      // Ensure regional catalogue data is loaded when a
+                      // visitor selects a regional Trending Movies filter.
+                      unawaited(_ensureRankingMovieCatalogues());
+                    }
+                  },
                   child: Center(
                     child: Text(
                       value,
@@ -7514,6 +7524,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]);
   }
 
+  Future<int?> _watchProgressPercent(Movie movie) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = movie.tmdbId > 0 ? movie.tmdbId : movie.id;
+      final resumeKey = 'flixora_resume_${movie.mediaType}_$id';
+      final recentKey = 'flixora_recent_resume_${movie.mediaType}_$id';
+      final position = prefs.getInt(recentKey) ??
+          prefs.getInt(resumeKey) ??
+          0;
+      final duration = prefs.getInt('${recentKey}_duration') ??
+          prefs.getInt('${resumeKey}_duration') ??
+          0;
+      if (position <= 0 || duration <= 0) return null;
+      return ((position / duration) * 100).round().clamp(0, 100);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget _watchHistoryPage() {
     if (_watchHistory.isEmpty) return _profileMessagePage(Icons.history, 'No watch history yet', 'Movies you start watching will appear here.');
     return ListView.separated(
@@ -7522,29 +7551,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       itemBuilder: (context, index) {
         final movie = _watchHistory[index];
         final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-        return Row(children: [
-          ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
-            FlixoraCachedImage(imageUrl: image, isOnline: _online),
-            Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
-          ]))),
-          const SizedBox(width: 11),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
-            const SizedBox(height: 7),
-            const Text('Recently watched', style: TextStyle(color: ink60, fontSize: 12, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
-          ])),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert, color: ink60), color: panel,
-            onSelected: (value) async {
-              if (value == 'remove') {
-                setState(() => _watchHistory.removeWhere((item) => item.id == movie.id));
-                await MovieCache.saveList(MovieCache.historyKey, _watchHistory);
-              }
-            },
-            itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
-          ),
-          IconButton(tooltip: 'Play', onPressed: () => _openMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
-        ]);
+        return InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: () => _playMovie(movie),
+          child: Row(children: [
+            ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
+              FlixoraCachedImage(imageUrl: image, isOnline: _online),
+              Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
+            ]))),
+            const SizedBox(width: 11),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(movie.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
+              const SizedBox(height: 7),
+              FutureBuilder<int?>(
+                future: _watchProgressPercent(movie),
+                builder: (context, snapshot) {
+                  final progress = snapshot.data;
+                  return Text(
+                    progress == null
+                        ? 'Recently watched'
+                        : 'Recently watched  •  $progress% watched',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: ink60,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  );
+                },
+              ),
+            ])),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, color: ink60), color: panel,
+              onSelected: (value) async {
+                if (value == 'remove') {
+                  setState(() => _watchHistory.removeWhere((item) =>
+                      item.id == movie.id ||
+                      (movie.tmdbId > 0 && item.tmdbId == movie.tmdbId)));
+                  await MovieCache.saveList(MovieCache.historyKey, _watchHistory);
+                }
+              },
+              itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
+            ),
+            IconButton(tooltip: 'Play', onPressed: () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
+          ]),
+        );
       },
     );
   }
@@ -12769,9 +12822,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // episode it came from.
     final key = _resumeKey;
     final seconds = position.inSeconds;
+    final durationSeconds = _duration.inSeconds;
+    final mediaId = widget.movie.tmdbId > 0
+        ? widget.movie.tmdbId
+        : widget.movie.id;
+    final recentKey =
+        'flixora_recent_resume_${widget.movie.mediaType}_$mediaId';
     _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(key, seconds);
+      await prefs.setInt('${key}_duration', durationSeconds);
+      // Keep a latest-progress snapshot for the Watch History list. The
+      // episode-specific resume key above remains unchanged.
+      await prefs.setInt(recentKey, seconds);
+      await prefs.setInt('${recentKey}_duration', durationSeconds);
     }).catchError((error) {
       debugPrint('Could not persist FLIXORA resume position: $error');
     });
