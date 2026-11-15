@@ -2159,7 +2159,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((title) => title.mediaType == 'movie').toList(growable: false);
 
     final seriesCatalog = preferMovieBoxRecords([
-      ..._regularMovieBoxItems.where(isSeries),
+      ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
       ...flixoraMovies.where((title) => title.mediaType == 'tv'),
       ...trendingTv,
       ...popularTv,
