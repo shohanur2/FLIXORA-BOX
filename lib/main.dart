@@ -3772,7 +3772,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ..sort()),
     };
     var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
-    var selectedRangeStart = 0;
     final selectedEpisodes = <int>{
       if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
         initialEpisode,
@@ -3813,14 +3812,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
           final allEpisodesSelected = episodeNumbers.isNotEmpty &&
               selectedEpisodes.length == episodeNumbers.length;
-          final episodeRangeStarts = <int>[
-            for (var start = 0; start < episodeNumbers.length; start += 50)
-              start,
-          ];
-          final visibleEpisodes = episodeNumbers
-              .skip(selectedRangeStart)
-              .take(50)
-              .toList(growable: false);
+          final visibleEpisodes = episodeNumbers;
 
           return SafeArea(
             child: Padding(
@@ -3832,7 +3824,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   maxHeight: MediaQuery.sizeOf(context).height * 0.82,
                 ),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
+                  mainAxisSize: MainAxisSize.max,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
@@ -3967,8 +3959,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         return CheckboxListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
-                          activeColor: const Color(0xFF27DFA0),
-                          checkColor: Colors.black,
+                          activeColor: gold,
+                          checkColor: bg,
                           value: selected,
                           title: Text(quality, style: const TextStyle(color: white)),
                           subtitle: Text(
@@ -4023,47 +4015,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       ),
                     if (isSeries) ...[
-                    if (isSeries && episodeRangeStarts.length > 1)
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: episodeRangeStarts.map((start) {
-                            final end = (start + 50).clamp(0, episodeNumbers.length);
-                            final selectedRange = start == selectedRangeStart;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 7),
-                              child: ChoiceChip(
-                                label: Text(
-                                  '${episodeNumbers[start]}-${episodeNumbers[end - 1]}',
-                                ),
-                                selected: selectedRange,
-                                onSelected: (_) => setSheetState(() {
-                                  selectedRangeStart = start;
-                                }),
-                                selectedColor: const Color(0xFF1B5948),
-                                backgroundColor: bg,
-                                labelStyle: TextStyle(
-                                  color: selectedRange
-                                      ? const Color(0xFF35E9A5)
-                                      : white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
                       Flexible(
                         child: ListView.builder(
-                          shrinkWrap: true,
+                          physics: const BouncingScrollPhysics(),
                           itemCount: visibleEpisodes.length,
                           itemBuilder: (context, index) {
                             final episode = visibleEpisodes[index];
                             return CheckboxListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              activeColor: const Color(0xFF27DFA0),
-                              checkColor: Colors.black,
+                              activeColor: gold,
+                              checkColor: bg,
                               value: selectedEpisodes.contains(episode),
                               title: Text(
                                 'S' + selectedSeason.toString().padLeft(2, '0') +
@@ -4085,7 +4047,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     else
                       Flexible(
                         child: ListView(
-                          shrinkWrap: true,
+                          physics: const BouncingScrollPhysics(),
                           children: qualities.map((quality) {
                             final selected = selectedQualities.contains(quality);
                             final item = languageOptions.firstWhere(
@@ -4094,8 +4056,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             return CheckboxListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              activeColor: const Color(0xFF27DFA0),
-                              checkColor: Colors.black,
+                              activeColor: gold,
+                              checkColor: bg,
                               value: selected,
                               title: Text(quality, style: const TextStyle(color: white)),
                               subtitle: Text(
@@ -4154,8 +4116,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           flex: 2,
                           child: FilledButton.icon(
                             style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF25DFA0),
-                              foregroundColor: Colors.black,
+                              backgroundColor: gold,
+                              foregroundColor: bg,
                               padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
                             onPressed: loadingSeasonOptions ||
@@ -10008,7 +9970,12 @@ class DownloadsScreen extends StatelessWidget {
         ),
         Expanded(
           child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+            key: const PageStorageKey<String>('flixora-downloads-list'),
+            primary: false,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 96),
             itemCount: tasks.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (context, index) {
@@ -10018,9 +9985,9 @@ class DownloadsScreen extends StatelessWidget {
               final paused = task.status == 'Paused';
               final downloading = task.status == 'Downloading';
               final statusColor = completed
-                  ? const Color(0xFF39E69B)
+                  ? gold
                   : failed
-                      ? Colors.redAccent
+                      ? goldLight
                       : paused
                           ? ink70
                           : goldLight;
@@ -10032,9 +9999,7 @@ class DownloadsScreen extends StatelessWidget {
                   color: panel,
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: completed
-                        ? const Color(0x5539E69B)
-                        : ink12,
+                    color: completed ? gold : ink12,
                   ),
                 ),
                 child: Row(
@@ -13578,7 +13543,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
         await platformPlayer.setProperty('cache-secs', '12');
-        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+        await platformPlayer.setProperty('cache-pause-wait', '0.5');
       }
     } catch (error) {
       debugPrint('FLIXORA native playback configuration failed: $error');
