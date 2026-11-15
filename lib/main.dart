@@ -11497,6 +11497,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Timer? _bufferingRecoveryTimer;
   int _bufferingRecoveryAttempts = 0;
   bool _recoveringFromBuffering = false;
+  bool _userPausedPlayback = false;
   bool _showControls = true;
   bool _isLocked = false;
   bool _isFullscreen = false;
@@ -12568,7 +12569,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     );
   }
 
-  Future<void> _prepareMovieBoxPlayback() async {
+  Future<void> _prepareMovieBoxPlayback({
+    Future<void>? playerConfiguration,
+  }) async {
     if (_isDisposed || !_playerIsOnline) {
       if (mounted) {
         setState(() => _errorMessage = 'Connect to the internet to load this MovieBox title.');
@@ -12614,6 +12617,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         season: widget.movie.movieBoxIsSeries ? targetSeason : 0,
         episode: widget.movie.movieBoxIsSeries ? targetEpisode : 0,
         openPlayer: true,
+        playerConfiguration: playerConfiguration,
       );
 
       if (widget.movie.movieBoxIsSeries) {
@@ -12695,6 +12699,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 season: targetSeason,
                 episode: targetEpisode,
                 openPlayer: true,
+                playerConfiguration: playerConfiguration,
               );
             }
           }
@@ -12812,6 +12817,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int season,
     required int episode,
     required bool openPlayer,
+    Future<void>? playerConfiguration,
   }) async {
     if (openPlayer) {
       _bufferingRecoveryTimer?.cancel();
@@ -12945,7 +12951,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         });
 
         if (!openPlayer) return;
-        final opened = await _openMovieBoxEpisode(options.first, requestToken);
+        final opened = await _openMovieBoxEpisode(
+          options.first,
+          requestToken,
+          playerConfiguration: playerConfiguration,
+        );
         if (opened) return;
         if (attempt == 1) {
           throw StateError('Fresh MovieBox links were also unavailable.');
@@ -12972,8 +12982,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<bool> _openMovieBoxEpisode(
     Map<String, String> item,
-    int requestToken,
-  ) async {
+    int requestToken, {
+    Future<void>? playerConfiguration,
+  }) async {
     final candidates = <Map<String, String>>[
       item,
       ..._availableQualities.where(
@@ -12983,6 +12994,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     Object? lastError;
 
     _isOpening = true;
+    _userPausedPlayback = false;
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
@@ -13005,6 +13017,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
     try {
+      // Resolve MovieBox detail/stream metadata while MPV's network options
+      // are being applied. Wait only at the final native-player open boundary.
+      await playerConfiguration;
+      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+        return false;
+      }
       for (final candidate in candidates) {
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
           return false;
@@ -13219,21 +13237,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _prepareAndInitializePlayer() async {
-    // Apply MPV cache settings before opening a network stream.
-    await _configureVolumeBoost();
+    // Start MPV setup immediately, but overlap it with MovieBox's existing
+    // detail/stream lookup. The original resolver and returned source stay intact.
+    final playerConfiguration = _configureVolumeBoost();
     if (_isDisposed) return;
 
     // A downloaded MovieBox movie/episode must play from local storage without
     // trying to resolve online seasons or CDN streams again.
     if (widget.localFilePath != null) {
+      await playerConfiguration;
+      if (_isDisposed) return;
       await _initializePlayer();
       return;
     }
 
     if (widget.movie.isMovieBox) {
-      await _prepareMovieBoxPlayback();
+      await _prepareMovieBoxPlayback(playerConfiguration: playerConfiguration);
       return;
     }
+
+    await playerConfiguration;
+    if (_isDisposed) return;
 
     if (widget.movie.mediaType == 'tv') {
       final savedSelection = await _readLastEpisodeSelection();
@@ -13480,10 +13504,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (_isDisposed ||
         !_playerIsOnline ||
         !_isBuffering ||
-        !_isPlaying ||
+        _userPausedPlayback ||
+        _isBackgrounded ||
         _isOpening ||
         _recoveringFromBuffering ||
-        _bufferingRecoveryAttempts >= 1 ||
+        _bufferingRecoveryAttempts >= 2 ||
         widget.localFilePath != null ||
         _currentVideoUrl.isEmpty) {
       return;
@@ -13500,23 +13525,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       // Keep the active source, headers, audio/subtitle tracks and Player
       // settings intact; do not reopen the stream or replace its provider.
       await _saveResumePosition(position);
-      await _player.pause();
-      await Future.delayed(const Duration(milliseconds: 250));
-      if (!mounted || _isDisposed) return;
+      // Reassert play without pause/reopen/seek: those operations can trigger
+      // another network request and make an existing stall worse.
+      if (!mounted || _isDisposed || _userPausedPlayback) return;
       await _player.play();
-      if (position > Duration.zero) {
-        await Future.delayed(const Duration(milliseconds: 700));
-        if (!mounted || _isDisposed) return;
-        try {
-          await _player.seek(position);
-        } catch (error) {
-          debugPrint('FLIXORA buffering recovery seek unavailable: $error');
-        }
-      }
     } catch (error) {
       debugPrint('FLIXORA buffering recovery failed: $error');
     } finally {
       _recoveringFromBuffering = false;
+      if (mounted &&
+          !_isDisposed &&
+          _isBuffering &&
+          !_userPausedPlayback &&
+          !_isBackgrounded &&
+          _bufferingRecoveryAttempts < 2) {
+        _bufferingRecoveryTimer?.cancel();
+        _bufferingRecoveryTimer = Timer(const Duration(seconds: 8), () {
+          if (!mounted || _isDisposed || !_isBuffering) return;
+          unawaited(_recoverFromStalledBuffering());
+        });
+      }
     }
   }
 
@@ -13626,13 +13654,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       if (value) {
         _bufferingRecoveryTimer?.cancel();
-        _bufferingRecoveryTimer = Timer(const Duration(seconds: 18), () {
+        _bufferingRecoveryTimer = Timer(const Duration(seconds: 10), () {
           if (!mounted || _isDisposed || !_isBuffering) return;
           unawaited(_recoverFromStalledBuffering());
         });
       } else {
         _bufferingRecoveryTimer?.cancel();
         _bufferingRecoveryTimer = null;
+        _bufferingRecoveryAttempts = 0;
       }
     });
 
@@ -13734,6 +13763,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     _isOpening = true;
+    _userPausedPlayback = false;
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
@@ -14046,8 +14076,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (_isDisposed) return;
 
     if (_isPlaying) {
+      _userPausedPlayback = true;
       await _player.pause();
     } else {
+      _userPausedPlayback = false;
       await _player.play();
     }
 
@@ -14305,10 +14337,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('demuxer-readahead-secs', '30');
+        await platformPlayer.setProperty('demuxer-readahead-secs', '45');
+        await platformPlayer.setProperty('cache-secs', '45');
         await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
         await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
-        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+        await platformPlayer.setProperty('cache-pause-wait', '0.75');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
@@ -16875,7 +16908,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Widget _playerBody() {
-    if (widget.movie.isMovieBox && _loadingQualities) {
+    // Once MPV has started the stream, render the video immediately even if
+    // quality/metadata cleanup is still finishing in the background.
+    if (widget.movie.isMovieBox && _loadingQualities && !_initialized) {
       return Container(
         color: Colors.black,
         child: const Center(
@@ -16891,10 +16926,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 ),
               ),
               SizedBox(height: 12),
-              Text(
-                'Preparing stream...',
-                style: TextStyle(color: playerWhite, fontSize: 13),
-              ),
+              // Keep the lightweight progress indicator; do not block video
+              // rendering with a "Preparing stream" label after startup.
             ],
           ),
         ),
