@@ -2260,7 +2260,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ]).where((movie) =>
         movie.mediaType == 'movie' &&
         (movie.posterUrl.isNotEmpty || movie.backdropUrl.isNotEmpty))
-      .take(24)
+      // Keep enough mixed catalogue entries so regional filters do not
+      // look empty when one region dominates the first TMDB results.
+      .take(48)
       .toList(growable: false);
   }
 
