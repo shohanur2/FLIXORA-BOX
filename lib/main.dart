@@ -2305,7 +2305,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final country = title.originCountry.toUpperCase();
       final isPakistani = country == 'PK' ||
           country.contains('PAKISTAN') ||
-          country.split(RegExp(r'[,\\s]+')).contains('PK');
+          country.split(RegExp(r'[,\s]+')).contains('PK');
       final isDrama = title.genres.any(
         (genre) => genre.toLowerCase().contains('drama'),
       );
@@ -13270,6 +13270,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
 
     if (_isOpening || url == _currentVideoUrl) return;
+    _bufferingRecoveryTimer?.cancel();
+    _bufferingRecoveryAttempts = 0;
+    _recoveringFromBuffering = false;
     final requestToken = _movieBoxPlaybackRequestToken;
     final previousQuality = _selectedQuality;
     final previousUrl = _currentVideoUrl;
@@ -13422,28 +13425,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       return;
     }
 
-    final url = _currentVideoUrl;
     final position = _pendingSeekPosition ??
         (_player.state.position > Duration.zero
             ? _player.state.position
             : _position);
-    final quality = _availableQualities.cast<Map<String, String>?>().firstWhere(
-      (item) => item?['video_url'] == url,
-      orElse: () => null,
-    );
-    final headers = quality != null
-        ? _headersForQuality(quality)
-        : (_movieBoxHeadersByUrl[url] ?? const <String, String>{});
-
     _bufferingRecoveryAttempts++;
     _recoveringFromBuffering = true;
-    debugPrint('FLIXORA buffering watchdog: retrying current stream once.');
+    debugPrint('FLIXORA buffering watchdog: attempting in-place playback recovery.');
     try {
+      // Keep the active source, headers, audio/subtitle tracks and Player
+      // settings intact; do not reopen the stream or replace its provider.
       await _saveResumePosition(position);
-      await _player.open(
-        Media(url, httpHeaders: headers),
-        play: false,
-      );
+      await _player.pause();
+      await Future.delayed(const Duration(milliseconds: 250));
       if (!mounted || _isDisposed) return;
       await _player.play();
       if (position > Duration.zero) {
