@@ -11355,7 +11355,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
-  bool _isStretched = false;
+  // 0 = Crop, 1 = Full 100% (stretch), 2 = Normal (preserve full frame).
+  int _videoFitMode = 2;
+  bool _restoringResumePosition = false;
   String? _gestureMode;
   String _gestureFeedback = '';
   Offset? _gestureStartPoint;
@@ -12909,8 +12911,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         setState(() => _errorMessage = null);
       }
 
-      if (_duration.inSeconds > 0) {
-        _saveResumePosition(safePosition);
+      if (!_restoringResumePosition && _duration.inSeconds > 0) {
+        unawaited(_saveResumePosition(safePosition));
       }
     });
 
@@ -13133,11 +13135,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           });
           if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
 
-          // Seek to the persisted timestamp before playback starts. Starting
-          // at zero first can race the restore on slower network streams.
-          await _restoreResumePosition();
-          if (!mounted || _isDisposed) return;
+          // Start MPV first so duration and byte-range seeking are ready.
           await _player.play();
+          if (!mounted || _isDisposed) return;
+          await _restoreResumePosition();
           if (!mounted || _isDisposed) return;
           _subtitleManuallySelected = false;
           _automaticEnglishTrack = null;
@@ -13168,6 +13169,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _restoreResumePosition() async {
+    if (_isDisposed) return;
+    _restoringResumePosition = true;
     try {
       final prefs = await SharedPreferences.getInstance();
       final resumeKeys = _resumeKeys;
@@ -13183,18 +13186,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (savedSeconds <= 5) return;
       final savedPosition = Duration(seconds: savedSeconds);
 
-      // Wait briefly for the newly opened media's duration. Without this,
-      // an old duration (or zero duration) can make the resume seek unreliable.
-      // Read mpv's current state first: the duration event can arrive a
-      // little later than the value exposed by PlayerState. This avoids an
-      // unnecessary wait before resuming on streams whose duration is ready.
+      // Network streams may expose duration only after MPV has started.
       var mediaDuration = _player.state.duration > Duration.zero
           ? _player.state.duration
           : _duration;
       for (var attempt = 0;
-          mediaDuration <= Duration.zero && attempt < 8;
+          mediaDuration <= Duration.zero && attempt < 25;
           attempt++) {
-        await Future.delayed(const Duration(milliseconds: 100));
+        await Future.delayed(const Duration(milliseconds: 200));
         if (!mounted || _isDisposed) return;
         mediaDuration = _player.state.duration > Duration.zero
             ? _player.state.duration
@@ -13209,15 +13208,34 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         return;
       }
 
-      await _player.seek(savedPosition);
+      // Seek and verify the native MPV position. Some CDN streams need a
+      // second seek after their range/index metadata becomes available.
+      for (var pass = 0; pass < 2; pass++) {
+        await _player.seek(savedPosition);
+        for (var attempt = 0; attempt < 12; attempt++) {
+          await Future.delayed(const Duration(milliseconds: 250));
+          if (!mounted || _isDisposed) return;
+          final actual = _player.state.position;
+          if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+        }
+        final actual = _player.state.position;
+        if ((actual - savedPosition).inSeconds.abs() <= 4) break;
+      }
+
       if (savedKey != null && savedKey != _resumeKey) {
         await prefs.setInt(_resumeKey, savedSeconds);
       }
-
       if (mounted && !_isDisposed) {
-        setState(() => _updatePosition(savedPosition));
+        final actual = _player.state.position;
+        setState(() => _updatePosition(
+          actual > Duration.zero ? actual : savedPosition,
+        ));
       }
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('FLIXORA resume restoration failed: $error');
+    } finally {
+      _restoringResumePosition = false;
+    }
   }
 
   Future<void> _saveResumePosition(Duration position) {
@@ -13552,8 +13570,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('cache-secs', '8');
-        await platformPlayer.setProperty('cache-pause-wait', '0.2');
+        await platformPlayer.setProperty('cache-secs', '15');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
@@ -13822,6 +13840,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     if (!_isFullscreen) {
       if (_isMiniPlayer) setState(() => _isMiniPlayer = false);
+      // Entering landscape always starts in Normal fit so characters are not cropped.
+      _videoFitMode = 2;
+      _videoZoom = 1.0;
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
         DeviceOrientation.landscapeRight,
@@ -14938,12 +14959,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
+      final subtitleBytes = await cachedFile.readAsBytes();
+      final subtitleText = utf8.decode(subtitleBytes, allowMalformed: true);
+      if (subtitleText.trim().isEmpty ||
+          (!subtitleText.contains('-->') && !subtitleText.contains('{\\an'))) {
+        throw StateError('Downloaded subtitle file is not valid text subtitles.');
+      }
       final track = SubtitleTrack.uri(
-        cachedFile.path,
+        Uri.file(cachedFile.path).toString(),
         title: 'English',
         language: 'en',
       );
       await _player.setSubtitleTrack(track);
+      final platformPlayer = _player.platform;
+      if (platformPlayer is NativePlayer) {
+        await platformPlayer.setProperty('sub-visibility', 'yes');
+      }
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       if (mounted && !_isDisposed) {
         setState(() {
@@ -15043,9 +15074,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     'Off',
                     style: TextStyle(color: playerWhite),
                   ),
-                  onTap: () => _selectSubtitleTrack(
-                    SubtitleTrack.no(),
-                  ),
+                  onTap: () {
+                    _subtitleManuallySelected = true;
+                    _automaticSubtitleRequestToken++;
+                    _selectSubtitleTrack(SubtitleTrack.no());
+                  },
                 ),
                 ..._movieBoxSubtitles.map((subtitle) {
                   final label = (subtitle['label'] ?? 'External subtitle').toString();
@@ -15792,11 +15825,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ),
                   if (!compact) ...[
                     compactAction(
-                      tooltip: _isStretched ? 'Fit video' : 'Stretch video',
+                      tooltip: 'Video fit: ${_videoFitMode == 0 ? 'Crop' : _videoFitMode == 1 ? 'Full 100%' : 'Normal'}',
                       icon: Icons.aspect_ratio_rounded,
-                      color: _isStretched ? playerGoldLight : playerWhite,
+                      color: _videoFitMode == 2 ? playerWhite : playerGoldLight,
                       onPressed: () {
-                        setState(() => _isStretched = !_isStretched);
+                        setState(() {
+                          _videoFitMode = (_videoFitMode + 1) % 3;
+                          _videoZoom = 1.0;
+                        });
                         _startHideTimer();
                       },
                     ),
@@ -16161,6 +16197,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       fit: StackFit.expand,
       alignment: Alignment.center,
       children: [
+        if (!_initialized && widget.movie.backdropUrl.isNotEmpty)
+          Positioned.fill(
+            child: FlixoraCachedImage(
+              imageUrl: widget.movie.backdropUrl,
+              isOnline: _playerIsOnline,
+              fit: BoxFit.cover,
+            ),
+          ),
+        if (!_initialized)
+          const Positioned.fill(
+            child: ColoredBox(color: Color(0x55000000)),
+          ),
         Positioned.fill(
           child: ClipRect(
             child: Transform.scale(
@@ -16168,14 +16216,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               scale: _videoZoom,
               child: Video(
                 controller: _videoController,
-                // Fullscreen always fills both landscape edges, including
-                // the camera-cutout side. Outside fullscreen, preserve the
-                // complete frame without cropping.
-                fit: _isFullscreen
-                    ? (_isStretched ? BoxFit.fill : BoxFit.cover)
-                    : (_videoZoom > 1.01
-                        ? BoxFit.cover
-                        : BoxFit.contain),
+                // Normal is the default in portrait and fullscreen landscape.
+                // Crop and Full 100% are explicit user-selected modes only.
+                fit: switch (_videoFitMode) {
+                  0 => BoxFit.cover,
+                  1 => BoxFit.fill,
+                  _ => BoxFit.contain,
+                },
                 controls: NoVideoControls,
                 subtitleViewConfiguration: _subtitleViewConfiguration(),
               ),
@@ -16354,10 +16401,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (!_isBackgrounded) {
         _isBackgrounded = true;
         _wasPlayingBeforeBackground = _isPlaying;
-        _backgroundResumePosition = _position;
-        // Save even when paused; leaving the player should never discard the
-        // latest known timestamp.
-        unawaited(_saveResumePosition(_position));
+        final nativePosition = _player.state.position;
+        _backgroundResumePosition =
+            nativePosition > _position ? nativePosition : _position;
+        // Flush the latest native timestamp before Android can reclaim memory.
+        unawaited(_persistResumePositionNow());
       }
       _cancelHideTimer();
       return;
@@ -16369,6 +16417,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _lastBackgroundResumeAt = DateTime.now();
         unawaited(_recoverPlaybackAfterBackground());
       }
+    }
+  }
+
+  Future<void> _persistResumePositionNow() async {
+    if (_isDisposed) return;
+    try {
+      final state = _player.state;
+      if (state.duration > _duration) _duration = state.duration;
+      final nativePosition = state.position;
+      final latestPosition = nativePosition > _position ? nativePosition : _position;
+      if (latestPosition > Duration.zero) _updatePosition(latestPosition);
+      await _saveResumePosition(latestPosition);
+      await _resumeSaveQueue;
+    } catch (error) {
+      debugPrint('FLIXORA background resume save failed: $error');
     }
   }
 
@@ -16422,9 +16485,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Persist the latest playback position even if the position stream has
-    // not emitted its final update yet when the user leaves the player.
-    unawaited(_saveResumePosition(_position));
+    // Capture MPV's freshest timestamp before disposing the native player.
+    final finalNativePosition = _player.state.position;
+    if (_player.state.duration > _duration) _duration = _player.state.duration;
+    final finalPosition = finalNativePosition > _position
+        ? finalNativePosition
+        : _position;
+    unawaited(_saveResumePosition(finalPosition));
     _isDisposed = true;
     if (identical(_activeMiniPlayerState.value, this)) {
       _activeMiniPlayerState.value = null;
