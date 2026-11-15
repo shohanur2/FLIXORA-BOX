@@ -751,6 +751,7 @@ class MovieCache {
   static const String tmdbTrendingMoviesKey = 'flixora_tmdb_trending_movies';
   static const String tmdbTrendingTvKey = 'flixora_tmdb_trending_tv_week';
   static const String pakistaniTrendingTvKey = 'flixora_pakistani_trending_tv';
+  static const String koreanTrendingMoviesKey = 'flixora_korean_trending_movies';
   static const String trendingHindiDubbedKey = 'flixora_trending_hindi_dubbed';
   static const String trendingBollywoodKey = 'flixora_trending_bollywood';
   static const String trendingHollywoodKey = 'flixora_trending_hollywood';
@@ -1757,6 +1758,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _tmdbTrendingMovies = [];
   List<Movie> _tmdbTrendingTv = [];
   List<Movie> _pakistaniTrendingTv = [];
+  List<Movie> _koreanTrendingMovies = [];
   List<Movie> _trendingHindiDubbedMovies = [];
   List<Movie> _trendingBollywoodMovies = [];
   List<Movie> _trendingHollywoodMovies = [];
@@ -2878,6 +2880,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.getList(MovieCache.trendingHollywoodKey),
         MovieCache.getList(MovieCache.tmdbTrendingTvKey),
         MovieCache.getList(MovieCache.pakistaniTrendingTvKey),
+        MovieCache.getList(MovieCache.koreanTrendingMoviesKey),
       ]);
       if (!mounted) return;
 
@@ -2903,6 +2906,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
         if (_pakistaniTrendingTv.isEmpty) {
           _pakistaniTrendingTv = results[11];
+        }
+        if (_koreanTrendingMovies.isEmpty) {
+          _koreanTrendingMovies = results[12];
         }
         if (_trendingMovies.isEmpty) {
           _trendingMovies = _deduplicateMovies([
@@ -3245,6 +3251,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           'with_origin_country': 'PK',
           'sort_by': 'popularity.desc',
         }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
+        () => TmdbService.getMovies('discover/movie', extraParams: {
+          'with_original_language': 'ko',
+          'with_origin_country': 'KR',
+          'sort_by': 'popularity.desc',
+        }, forceRefresh: forceRefresh).catchError((_) => <Movie>[]),
       ];
 
       if (_secondaryCatalogueResults.length != loaders.length) {
@@ -3285,6 +3296,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ...results[9],
         ]);
         _pakistaniTrendingTv = _deduplicateMovies(results[27]);
+        _koreanTrendingMovies = _deduplicateMovies(results[28]);
         trendingTv = _deduplicateMovies([
           ...trendingTv,
           ...results[0],
@@ -3375,6 +3387,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         MovieCache.saveList(MovieCache.trendingTvKey, trendingTv),
         MovieCache.saveList(MovieCache.tmdbTrendingTvKey, _tmdbTrendingTv),
         MovieCache.saveList(MovieCache.pakistaniTrendingTvKey, _pakistaniTrendingTv),
+        MovieCache.saveList(MovieCache.koreanTrendingMoviesKey, _koreanTrendingMovies),
         MovieCache.saveList(MovieCache.popularTvKey, popularTv),
         MovieCache.saveList(MovieCache.topRatedTvKey, topRatedTv),
         MovieCache.saveList(MovieCache.animeKey, anime),
@@ -3562,6 +3575,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         identityHashCode(southIndianMovies), southIndianMovies.length,
         identityHashCode(indianDramaTv), indianDramaTv.length,
         identityHashCode(_pakistaniTrendingTv), _pakistaniTrendingTv.length,
+        identityHashCode(_koreanTrendingMovies), _koreanTrendingMovies.length,
         Object.hashAll(_unpublishedCatalogKeys),
       ]);
 
@@ -5366,11 +5380,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         case 'Bengali':
         case 'Asian':
         case 'International':
-          // Regional tags use the weekly-trending movie + TV feed. This lets
-          // current movies, web series and dramas appear under their region.
-          return items
-              .where((movie) => _trendingMovieCategory(movie) == filter)
-              .toList(growable: false);
+          // Regional tags combine the weekly-trending rail with the matching
+          // regional catalogue, including current TV/web-series/drama titles.
+          final regionalMovies = filter == 'Korean'
+              ? _koreanTrendingMovies
+              : _rankingRegionalMovies(filter);
+          final regionalTv = _deduplicateMovies([
+            ..._tmdbTrendingTv,
+            ...trendingTv,
+            ...popularTv,
+            ...topRatedTv,
+            ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+            ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
+          ]).where((title) => _trendingMovieCategory(title) == filter);
+          return _deduplicateMovies([
+            ...items.where((movie) => _trendingMovieCategory(movie) == filter),
+            ...regionalMovies,
+            ...regionalTv,
+          ]);
         default:
           return items
               .where((movie) => movie.mediaType == 'movie')
