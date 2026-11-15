@@ -10904,6 +10904,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   bool _recoveringFromBackground = false;
   Duration _backgroundResumePosition = Duration.zero;
   DateTime? _lastBackgroundResumeAt;
+  Future<void> _resumeSaveQueue = Future<void>.value();
   bool _initialized = false;
   bool _isOpening = false;
   bool _playerIsOnline = true;
@@ -11146,6 +11147,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         episodeNumber == _selectedEpisodeNumber ||
         _loadingQualities ||
         _isOpening) return;
+    // Persist the currently selected episode before changing the key.
+    unawaited(_saveResumePosition(_position));
     setState(() => _selectedEpisodeNumber = episodeNumber);
     if (widget.movie.isMovieBox) {
       unawaited(_loadMovieBoxStreams(
@@ -11735,6 +11738,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final firstEpisode = episodeNumbers.isNotEmpty ? episodeNumbers.first : 1;
 
     if (!mounted || _isDisposed) return;
+    // Keep the previous episode's timestamp under its original season/episode key.
+    unawaited(_saveResumePosition(_position));
     setState(() {
       _selectedSeasonNumber = seasonNumber;
       _selectedEpisodeNumber = firstEpisode;
@@ -12751,14 +12756,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     } catch (_) {}
   }
 
-  Future<void> _saveResumePosition(Duration position) async {
-    if (_isDisposed || _duration.inSeconds <= 0) return;
-    if (position.inSeconds < 5) return;
+  Future<void> _saveResumePosition(Duration position) {
+    if (_isDisposed || _duration.inSeconds <= 0) {
+      return Future<void>.value();
+    }
+    if (position.inSeconds < 5) return Future<void>.value();
 
-    try {
+    // Capture the key immediately. If the user changes episode while a
+    // preference write is pending, the old timestamp must stay with the
+    // episode it came from.
+    final key = _resumeKey;
+    final seconds = position.inSeconds;
+    _resumeSaveQueue = _resumeSaveQueue.then((_) async {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_resumeKey, position.inSeconds);
-    } catch (_) {}  }
+      await prefs.setInt(key, seconds);
+    }).catchError((error) {
+      debugPrint('Could not persist FLIXORA resume position: $error');
+    });
+    return _resumeSaveQueue;
+  }
 
   Future<void> _clearResumePosition() async {
     try {
@@ -15591,10 +15607,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (!_isBackgrounded) {
         _isBackgrounded = true;
         _wasPlayingBeforeBackground = _isPlaying;
-        if (_wasPlayingBeforeBackground) {
-          _backgroundResumePosition = _position;
-          unawaited(_saveResumePosition(_position));
-        }
+        _backgroundResumePosition = _position;
+        // Save even when paused; leaving the player should never discard the
+        // latest known timestamp.
+        unawaited(_saveResumePosition(_position));
       }
       _cancelHideTimer();
       return;
