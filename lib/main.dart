@@ -5390,6 +5390,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv,
             ...popularTv,
             ...topRatedTv,
+            ...koreanDrama,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
             ..._regularMovieBoxItems.where((title) => title.mediaType == 'tv'),
           ]).where((title) => _trendingMovieCategory(title) == filter);
