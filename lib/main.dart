@@ -14959,12 +14959,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
+      final subtitleBytes = await cachedFile.readAsBytes();
+      final subtitleText = utf8.decode(subtitleBytes, allowMalformed: true);
+      if (subtitleText.trim().isEmpty ||
+          (!subtitleText.contains('-->') && !subtitleText.contains('{\\an'))) {
+        throw StateError('Downloaded subtitle file is not valid text subtitles.');
+      }
       final track = SubtitleTrack.uri(
-        cachedFile.path,
+        Uri.file(cachedFile.path).toString(),
         title: 'English',
         language: 'en',
       );
       await _player.setSubtitleTrack(track);
+      final platformPlayer = _player.platform;
+      if (platformPlayer is NativePlayer) {
+        await platformPlayer.setProperty('sub-visibility', 'yes');
+      }
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       if (mounted && !_isDisposed) {
         setState(() {
@@ -15064,9 +15074,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     'Off',
                     style: TextStyle(color: playerWhite),
                   ),
-                  onTap: () => _selectSubtitleTrack(
-                    SubtitleTrack.no(),
-                  ),
+                  onTap: () {
+                    _subtitleManuallySelected = true;
+                    _automaticSubtitleRequestToken++;
+                    _selectSubtitleTrack(SubtitleTrack.no());
+                  },
                 ),
                 ..._movieBoxSubtitles.map((subtitle) {
                   final label = (subtitle['label'] ?? 'External subtitle').toString();
