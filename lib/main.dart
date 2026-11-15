@@ -10983,7 +10983,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     // Every TV episode has its own resume point; never carry the previous
     // episode's position into a newly selected episode.
-    return 'flixora_resume_$id$episodeKey';
+    return 'flixora_resume_${widget.movie.mediaType}_$id$episodeKey';
   }
 
   String _resolveInitialNetworkUrl() {
