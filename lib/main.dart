@@ -4215,11 +4215,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               selectedQualities
                                 ..clear()
                                 ..addAll(matching);
-                              selectedEpisodes.removeWhere((episode) =>
-                                  !(episodeOptionsByNumber[episode] ??
-                                      const <Map<String, String>>[]).any((item) =>
-                                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                                      selectedQualities.contains(_downloadQuality(item))));
                             });
                           },
                         ),
@@ -4401,7 +4396,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               padding: const EdgeInsets.symmetric(vertical: 13),
                             ),
                             onPressed: availableEpisodeNumbers.isEmpty ||
-                                    loadingEpisodeAvailability || loadingSeasonOptions
+                                    loadingSeasonOptions
                                 ? null
                                 : () => setSheetState(() {
                                     if (allEpisodesSelected) selectedEpisodes.clear();
