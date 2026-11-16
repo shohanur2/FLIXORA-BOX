@@ -15460,7 +15460,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final content = utf8.decode(bytes, allowMalformed: true);
       final ext = picked.extension?.toLowerCase() ?? '';
       final looksLikeSubtitle = content.contains('-->') ||
-          content.contains(r'{\\an') ||
+          content.contains(r'{\an') ||
+          RegExp(r'\{\d+\}\{\d+\}').hasMatch(content) ||
           content.toLowerCase().contains('<tt') ||
           content.toLowerCase().contains('<sami') ||
           ext == 'sub';
@@ -16194,8 +16195,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     final subtitleText = utf8.decode(download.bodyBytes, allowMalformed: true);
     if (subtitleText.trim().isEmpty ||
-        (!subtitleText.contains('-->') && !subtitleText.contains('{\\an') &&
-         !subtitleText.contains('<tt'))) {
+        (!subtitleText.contains('-->') &&
+         !subtitleText.contains(r'{\an') &&
+         !RegExp(r'\{\d+\}\{\d+\}').hasMatch(subtitleText) &&
+         !subtitleText.toLowerCase().contains('<tt') &&
+         !subtitleText.toLowerCase().contains('<sami'))) {
       throw StateError('Downloaded file is not valid text subtitles.');
     }
     await cachedFile.writeAsBytes(download.bodyBytes, flush: true);
