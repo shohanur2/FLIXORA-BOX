@@ -13507,9 +13507,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             });
             if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
-          _subtitleManuallySelected = false;
-          unawaited(_ensureAutomaticEnglishSubtitle());
           await _restoreResumePosition();
+          _subtitleManuallySelected = false;
+          _automaticEmbeddedSubtitleSelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          _automaticSubtitleOptions = [];
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           _prewarmNextMovieBoxEpisode();
           return true;
@@ -14103,8 +14108,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             .toList(growable: false);
         if (embedded.isNotEmpty) {
           final track = embedded.firstWhere(
-            _isEnglishSubtitleTrack,
-            orElse: () => embedded.first,
+            _isBanglaSubtitleTrack,
+            orElse: () => embedded.firstWhere(
+              _isEnglishSubtitleTrack,
+              orElse: () => embedded.first,
+            ),
           );
           unawaited(_selectEmbeddedSubtitleAutomatically(track));
         }
@@ -14289,10 +14297,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           // Start MPV first so duration and byte-range seeking are ready.
           await _player.play();
           if (!mounted || _isDisposed) return;
-          _subtitleManuallySelected = false;
-          unawaited(_ensureAutomaticEnglishSubtitle());
           await _restoreResumePosition();
           if (!mounted || _isDisposed) return;
+          _subtitleManuallySelected = false;
+          _automaticEmbeddedSubtitleSelected = false;
+          _automaticEnglishTrack = null;
+          _automaticSubtitlePath = null;
+          _automaticSubtitleMessage = null;
+          _automaticSubtitleOptions = [];
+          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           return;
         } catch (error) {
@@ -15467,12 +15480,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (length < 8 || length > 10 * 1024 * 1024) {
         throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
       }
-      final bytes = await file.readAsBytes();
-      final content = utf8.decode(bytes, allowMalformed: true);
       final ext = picked.extension?.toLowerCase() ?? '';
-      if (!content.contains('-->') && !content.contains(r'{\\an') &&
-          !content.contains('<tt') && ext != 'sub') {
-        throw StateError('This file does not look like a supported subtitle.');
+      if (!['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'].contains(ext)) {
+        throw StateError('Unsupported subtitle file format.');
       }
       final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
@@ -16091,6 +16101,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
 
+  bool _isBanglaSubtitleTrack(SubtitleTrack track) {
+    final language = (track.language ?? '').toLowerCase();
+    final title = (track.title ?? '').toLowerCase();
+    return language == 'bn' || language == 'ben' ||
+        language.contains('bengali') || title.contains('bengali') ||
+        title.contains('bangla');
+  }
+
   bool _isEnglishSubtitleTrack(SubtitleTrack track) {
     final language = (track.language ?? '').toLowerCase();
     final title = (track.title ?? '').toLowerCase();
@@ -16202,8 +16220,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _ensureAutomaticEnglishSubtitle() async {
     if (_isDisposed || widget.localFilePath != null || !_playerIsOnline ||
-        _automaticSubtitleLoading || _subtitleManuallySelected ||
-        _automaticEmbeddedSubtitleSelected) return;
+        _automaticSubtitleLoading || _subtitleManuallySelected) return;
     final requestToken = ++_automaticSubtitleRequestToken;
     if (_automaticSubtitleMediaId() <= 0 && widget.movie.title.trim().isEmpty) return;
     setState(() {
@@ -16218,7 +16235,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             .toList(growable: false);
         if (embeddedTracks.isNotEmpty) {
           final track = embeddedTracks.firstWhere(
-            _isEnglishSubtitleTrack, orElse: () => embeddedTracks.first);
+            _isBanglaSubtitleTrack,
+            orElse: () => embeddedTracks.firstWhere(
+              _isEnglishSubtitleTrack, orElse: () => embeddedTracks.first));
           if (requestToken != _automaticSubtitleRequestToken ||
               _subtitleManuallySelected || _isDisposed) return;
           _automaticEmbeddedSubtitleSelected = true;
@@ -16233,7 +16252,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
             });
           }
-          return;
+          break;
         }
         if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
       }
@@ -16272,8 +16291,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
       final selected = available.firstWhere(
-        (option) => (option['language'] ?? '').toString().toLowerCase() == 'en',
-        orElse: () => available.first,
+        (option) => (option['language'] ?? '').toString().toLowerCase() == 'bn',
+        orElse: () => available.firstWhere(
+          (option) => (option['language'] ?? '').toString().toLowerCase() == 'en',
+          orElse: () => available.first,
+        ),
       );
       if (mounted && !_isDisposed) {
         setState(() {
@@ -16305,10 +16327,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (mounted && !_isDisposed &&
           requestToken == _automaticSubtitleRequestToken) {
         setState(() {
-          _automaticSubtitleMessage = error.toString().contains('503') ||
-                  error.toString().contains('not configured')
-              ? 'Subtitle service needs API setup'
-              : 'No subtitles found';
+          if (!_automaticEmbeddedSubtitleSelected) {
+            _automaticSubtitleMessage = error.toString().contains('503') ||
+                    error.toString().contains('not configured')
+                ? 'Subtitle service needs API setup'
+                : 'No subtitles found';
+          }
         });
       }
     } finally {
