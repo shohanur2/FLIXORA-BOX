@@ -15127,9 +15127,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       final prefs = await SharedPreferences.getInstance();
       final storedSubtitleFontSize = prefs.getDouble('flixora_sub_font_size') ?? 20;
-      _subtitleFontSize = storedSubtitleFontSize > 36
-          ? 20
-          : storedSubtitleFontSize.clamp(12, 36).toDouble();
+      _subtitleFontSize = storedSubtitleFontSize.clamp(12, 60).toDouble();
       _subtitleTextColor = prefs.getString('flixora_sub_text_color') ?? '#FFFFFF';
       _subtitleBackgroundColor = prefs.getString('flixora_sub_background_color') ?? '#000000';
       _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.24;
@@ -15188,15 +15186,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final backgroundRgb = int.parse(backgroundHex, radix: 16);
     final backgroundAlpha = (_subtitleBackgroundOpacity * 255)
         .round().clamp(0, 255).toInt();
-    final screenHeight = MediaQuery.sizeOf(context).height;
-    final bottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+    final screenSize = MediaQuery.sizeOf(context);
+    final screenHeight = screenSize.height;
+    final requestedBottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
         .clamp(8.0, screenHeight * 0.85).toDouble();
+    // When landscape controls are visible, reserve space above the seek bar.
+    // This only moves the subtitle overlay; it does not alter any controls.
+    final landscapeControlsClearance =
+        (screenHeight * 0.22).clamp(64.0, 112.0).toDouble();
+    final bottomPadding = screenSize.width > screenSize.height &&
+            _showControls &&
+            requestedBottomPadding < landscapeControlsClearance
+        ? landscapeControlsClearance
+        : requestedBottomPadding;
 
     return SubtitleViewConfiguration(
       visible: true,
       style: TextStyle(
         fontFamily: 'Arial',
-        fontSize: _subtitleFontSize.clamp(12, 36).toDouble(),
+        fontSize: _subtitleFontSize.clamp(12, 60).toDouble(),
         color: _subtitleColorFromHex(_subtitleTextColor),
         backgroundColor: Color((backgroundAlpha << 24) | backgroundRgb),
         fontWeight: FontWeight.w600,
@@ -15291,8 +15299,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       const SizedBox(height: 4),
                       const Text('Font: Arial', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
                       sectionLabel('TEXT SIZE'),
-                      sliderRow(label: 'Font size', value: fontSize, min: 12, max: 36,
-                        divisions: 24, display: '${fontSize.round()}',
+                      sliderRow(label: 'Font size', value: fontSize, min: 12, max: 60,
+                        divisions: 48, display: '${fontSize.round()}',
                         onChanged: (v) => updateSheet(() => fontSize = v)),
                       sectionLabel('TEXT COLOUR'),
                       DropdownButtonFormField<String>(
@@ -16396,7 +16404,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
       }
 
-      if (embeddedTrackSelected && !searchProviders) return;
+      // Even when the stream exposes an embedded track, continue the provider
+      // search. The embedded track may be empty or in an unwanted language.
       final client = supabaseClient;
       if (client == null) throw StateError('Subtitle service is unavailable.');
       final response = await client.functions.invoke(
@@ -16450,22 +16459,49 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _automaticSubtitleMessage = '${available.length} language(s) available';
         });
       }
-      if (embeddedTrackSelected || _subtitleManuallySelected) return;
+      if ((embeddedTrackSelected && searchProviders) || _subtitleManuallySelected) return;
 
-      final selected = available.firstWhere(
-        (option) {
-          final code = (option['language'] ?? '').toString().toLowerCase();
-          return code == 'bn' || code == 'ben';
-        },
-        orElse: () => available.firstWhere(
-          (option) {
-            final code = (option['language'] ?? '').toString().toLowerCase();
-            return code == 'en' || code == 'eng';
-          },
-          orElse: () => available.first,
-        ),
-      );
-      final file = await _downloadAutomaticSubtitle(selected);
+      // Prefer Bangla, then English, then other available languages.
+      // Try every candidate for the preferred language so one expired or
+      // rate-limited provider link cannot block another provider's subtitle.
+      final languageOrder = <String>[];
+      for (final preferred in const ['bn', 'en']) {
+        if (available.any((option) =>
+            (option['language'] ?? '').toString().toLowerCase() == preferred)) {
+          languageOrder.add(preferred);
+        }
+      }
+      for (final option in available) {
+        final code = (option['language'] ?? '').toString().toLowerCase();
+        if (code.isNotEmpty && !languageOrder.contains(code)) {
+          languageOrder.add(code);
+        }
+      }
+      final orderedOptions = <Map<String, dynamic>>[
+        for (final language in languageOrder)
+          ...available.where((option) =>
+              (option['language'] ?? '').toString().toLowerCase() == language),
+      ];
+      File? file;
+      Map<String, dynamic>? selected;
+      Object? lastDownloadError;
+      for (final option in orderedOptions) {
+        if (requestToken != _automaticSubtitleRequestToken ||
+            _subtitleManuallySelected || _isDisposed) return;
+        try {
+          file = await _downloadAutomaticSubtitle(option);
+          selected = option;
+          break;
+        } catch (error) {
+          lastDownloadError = error;
+          debugPrint('FLIXORA subtitle candidate failed: $error');
+        }
+      }
+      if (file == null || selected == null) {
+        throw StateError(
+          'All available subtitle downloads failed. ${lastDownloadError ?? 'No usable subtitle file was returned.'}',
+        );
+      }
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
       final code = (selected['language'] ?? 'en').toString().toLowerCase();
