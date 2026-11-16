@@ -4353,12 +4353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           const Text('Episodes', style: TextStyle(
                             color: white, fontSize: 15, fontWeight: FontWeight.w700,
                           )),
-                          if (loadingSeasonOptions)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 10),
-                              child: Center(child: CircularProgressIndicator(color: gold)),
-                            )
-                          else if (availableEpisodeNumbers.isEmpty)
+                          if (availableEpisodeNumbers.isEmpty)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 8),
                               child: Text(
