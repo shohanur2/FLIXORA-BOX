@@ -16254,7 +16254,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (lower.contains('<tt') || lower.contains('<ttml')) return 'ttml';
     if (text.contains('-->')) {
       final hasCueTime = RegExp(
-        r'(?m)^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
+        r'^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
+        multiLine: true,
       ).hasMatch(text);
       if (!hasCueTime) {
         throw StateError('The selected subtitle has no valid SRT/VTT cue timestamps.');
@@ -16262,8 +16263,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       return lower.contains('webvtt') ? 'vtt' : 'srt';
     }
     if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(text) || lower.contains('[subtitle]')) return 'sub';
-    if (RegExp(r'(?m)^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]').hasMatch(text)) return 'lrc';
-    if (RegExp(r'(?m)^\s*\d{2}:\d{2}:\d{2};\d{2}').hasMatch(text) || lower.contains('scenarist_scc')) return 'scc';
+    if (RegExp(r'^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]', multiLine: true).hasMatch(text)) return 'lrc';
+    if (RegExp(r'^\s*\d{2}:\d{2}:\d{2};\d{2}', multiLine: true).hasMatch(text) || lower.contains('scenarist_scc')) return 'scc';
     if (lower.contains('<time') || lower.contains('<window')) return 'rt';
     if (preferred == 'sub' || preferred == 'smi' || preferred == 'ttml' ||
         preferred == 'scc' || preferred == 'lrc' || preferred == 'rt' ||
