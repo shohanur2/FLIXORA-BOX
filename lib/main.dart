@@ -13065,6 +13065,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleMessage = null;
     _automaticSubtitleResults = [];
     _automaticSubtitlePaths.clear();
+    _automaticSubtitleEmbeddedSelected = false;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
       video: [VideoTrack.auto()],
@@ -14916,6 +14917,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
     try {
       // Wait for the media engine to finish publishing embedded subtitle tracks.
+      var embeddedSelected = false;
       for (var attempt = 0; attempt < 20; attempt++) {
         if (_isDisposed || token != _automaticSubtitleRequestToken || _subtitleManuallySelected) return;
         final embedded = _tracks.subtitle.where((track) =>
@@ -14925,11 +14927,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           await _player.setSubtitleTrack(track);
           await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
           _automaticSubtitleEmbeddedSelected = true;
+          embeddedSelected = true;
+          _automaticSubtitleEmbeddedSelected = true;
           if (mounted && !_isDisposed) setState(() {
             _automaticEnglishTrack = _isEnglishSubtitleTrack(track) ? track : null;
             _automaticSubtitleMessage = 'Embedded ${_subtitleLanguageName(_subtitleTrackLanguage(track))} selected';
           });
-          return;
+          break;
         }
         if (attempt < 19) await Future.delayed(const Duration(milliseconds: 250));
       }
@@ -14958,6 +14962,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (unique.isEmpty) throw StateError('No downloadable subtitles were found.');
       if (_isDisposed || token != _automaticSubtitleRequestToken || _subtitleManuallySelected) return;
       _automaticSubtitleResults = unique.values.toList();
+      // Keep the embedded track active, but still expose every API language
+      // in the picker so the viewer can switch when desired.
+      if (embeddedSelected) return;
       final preferred = unique['en'] ?? _automaticSubtitleResults.first;
       final code = preferred['language'].toString().toLowerCase();
       final path = await _downloadAutomaticSubtitle(preferred);
