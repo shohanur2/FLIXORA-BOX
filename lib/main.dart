@@ -4242,7 +4242,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               if (number == null || number == selectedSeason) return;
                               final nextEpisodes = episodesBySeason[number] ?? <int>[];
                               if (nextEpisodes.isEmpty) return;
-                              final nextEpisode = nextEpisodes.first;
                               final requestToken = ++seasonRequestToken;
                               setSheetState(() {
                                 selectedSeason = number;
