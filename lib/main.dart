@@ -12148,9 +12148,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _player = Player(
       configuration: PlayerConfiguration(
         title: 'FLIXORA',
-        // A modestly larger network buffer helps absorb short bandwidth dips.
+        // Keep text subtitles on the Flutter SubtitleView overlay. Native libass
+        // rendering disables that overlay and needs an Android font asset.
         bufferSize: 64 * 1024 * 1024,
-        libass: true,
+        libass: false,
       ),
     );
     _videoController = VideoController(_player);
