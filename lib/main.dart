@@ -11349,6 +11349,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleShadowOffset = 1;
   bool _automaticSubtitleLoading = false;
   bool _subtitleManuallySelected = false;
+  bool _automaticSubtitleEmbeddedSelected = false;
   String? _automaticSubtitlePath;
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
@@ -12371,6 +12372,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleMessage = null;
     _automaticSubtitleResults = [];
     _automaticSubtitlePaths.clear();
+    _automaticSubtitleEmbeddedSelected = false;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
       video: [VideoTrack.auto()],
@@ -12964,7 +12966,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _selectedAudioTrackIndex = 0;
         }
       });
-      if (!_subtitleManuallySelected && !_automaticSubtitleLoading && _automaticSubtitlePath == null) {
+      if (!_subtitleManuallySelected && !_automaticSubtitleEmbeddedSelected && !_automaticSubtitleLoading && _automaticSubtitlePath == null) {
         final embedded = value.subtitle.where((track) =>
           _subtitleTrackLanguage(track).isNotEmpty && track.id != 'auto' && track.id != 'no').toList();
         if (embedded.isNotEmpty) {
@@ -14922,6 +14924,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           final track = embedded.firstWhere(_isEnglishSubtitleTrack, orElse: () => embedded.first);
           await _player.setSubtitleTrack(track);
           await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+          _automaticSubtitleEmbeddedSelected = true;
           if (mounted && !_isDisposed) setState(() {
             _automaticEnglishTrack = _isEnglishSubtitleTrack(track) ? track : null;
             _automaticSubtitleMessage = 'Embedded ${_subtitleLanguageName(_subtitleTrackLanguage(track))} selected';
@@ -14986,6 +14989,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       await _player.setSubtitleTrack(track);
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      _automaticSubtitleEmbeddedSelected = true;
       if (mounted && !_isDisposed && !_subtitleManuallySelected) setState(() {
         _automaticEnglishTrack = _isEnglishSubtitleTrack(track) ? track : null;
         _automaticSubtitleMessage = 'Embedded ${_subtitleLanguageName(_subtitleTrackLanguage(track))} selected';
@@ -15100,7 +15104,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       color: playerGold,
                     ),
                     title: Text(
-                      track.title ?? track.language ?? 'Subtitle',
+                      _subtitleLanguageName(_subtitleTrackLanguage(track)).isNotEmpty ? _subtitleLanguageName(_subtitleTrackLanguage(track)) : (track.title ?? track.language ?? 'Subtitle'),
                       style: const TextStyle(color: playerWhite),
                     ),
                     onTap: () => _selectSubtitleTrack(track),
