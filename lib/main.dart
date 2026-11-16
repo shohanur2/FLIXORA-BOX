@@ -15459,14 +15459,35 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final bytes = await file.readAsBytes();
       final content = utf8.decode(bytes, allowMalformed: true);
       final ext = picked.extension?.toLowerCase() ?? '';
-      if (!content.contains('-->') && !content.contains(r'{\\an') &&
-          !content.contains('<tt') && ext != 'sub') {
+      final looksLikeSubtitle = content.contains('-->') ||
+          content.contains(r'{\\an') ||
+          content.toLowerCase().contains('<tt') ||
+          content.toLowerCase().contains('<sami') ||
+          ext == 'sub';
+      if (!looksLikeSubtitle) {
         throw StateError('This file does not look like a supported subtitle.');
       }
+
+      // Keep imported subtitles in app-private storage. File-picker paths can
+      // be temporary content-provider paths on Android and may expire later.
+      final support = await getApplicationSupportDirectory();
+      final importDir = Directory('${support.path}/flixora_subtitles/imported');
+      if (!await importDir.exists()) {
+        await importDir.create(recursive: true);
+      }
+      final safeName = picked.name.replaceAll(
+        RegExp(r'[^A-Za-z0-9._-]'),
+        '_',
+      );
+      final storedFile = File(
+        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_$safeName',
+      );
+      await file.copy(storedFile.path);
+
       final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
       final language = match?.group(1)?.toLowerCase() ?? 'external';
-      final track = SubtitleTrack.uri(Uri.file(file.path).toString(),
+      final track = SubtitleTrack.uri(Uri.file(storedFile.path).toString(),
           title: picked.name, language: language);
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
@@ -16080,6 +16101,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
 
+  bool _isBanglaSubtitleTrack(SubtitleTrack track) {
+    final language = (track.language ?? '').toLowerCase();
+    final title = (track.title ?? '').toLowerCase();
+    return language == 'bn' || language == 'ben' ||
+        language.contains('bangla') || language.contains('bengali') ||
+        title.contains('বাংলা');
+  }
+
   bool _isEnglishSubtitleTrack(SubtitleTrack track) {
     final language = (track.language ?? '').toLowerCase();
     final title = (track.title ?? '').toLowerCase();
@@ -16132,8 +16161,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final languageCode = (option['language'] ?? 'en').toString().toLowerCase();
     final downloadUrl = (option['downloadUrl'] ?? '').toString();
     final uri = Uri.tryParse(downloadUrl);
-    if (uri == null || uri.scheme != 'https' ||
-        uri.host != 'dl.subdl.com' || !uri.path.startsWith('/subtitle/')) {
+    final isSubDl = uri?.host == 'dl.subdl.com';
+    final isOpenSubtitles = uri != null &&
+        (uri.host == 'opensubtitles.com' ||
+            uri.host.endsWith('.opensubtitles.com'));
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        !(isSubDl || isOpenSubtitles) ||
+        (isSubDl && !uri.path.startsWith('/subtitle/'))) {
       throw StateError('Subtitle provider returned an invalid file.');
     }
     final extension = (option['format'] ?? 'srt')
@@ -16184,7 +16219,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             .toList(growable: false);
         if (embeddedTracks.isNotEmpty) {
           final track = embeddedTracks.firstWhere(
-            _isEnglishSubtitleTrack, orElse: () => embeddedTracks.first);
+            _isBanglaSubtitleTrack,
+            orElse: () => embeddedTracks.firstWhere(
+              _isEnglishSubtitleTrack,
+              orElse: () => embeddedTracks.first,
+            ),
+          );
           if (requestToken != _automaticSubtitleRequestToken ||
               _subtitleManuallySelected || _isDisposed) return;
           await _player.setSubtitleTrack(track);
@@ -16232,13 +16272,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         final code = (option['language'] ?? '').toString().toLowerCase();
         if (code.isNotEmpty) unique.putIfAbsent(code, () => option);
       }
-      final available = unique.values.toList(growable: false);
+      final available = unique.values.toList()
+        ..sort((a, b) {
+          int priority(Map<String, dynamic> option) {
+            final code = (option['language'] ?? '').toString().toLowerCase();
+            if (code == 'bn' || code == 'ben') return 0;
+            if (code == 'en' || code == 'eng') return 1;
+            return 2;
+          }
+          return priority(a).compareTo(priority(b));
+        });
       if (available.isEmpty) throw StateError('No subtitles were found for this title.');
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
       final selected = available.firstWhere(
-        (option) => (option['language'] ?? '').toString().toLowerCase() == 'en',
-        orElse: () => available.first,
+        (option) {
+          final code = (option['language'] ?? '').toString().toLowerCase();
+          return code == 'bn' || code == 'ben';
+        },
+        orElse: () => available.firstWhere(
+          (option) {
+            final code = (option['language'] ?? '').toString().toLowerCase();
+            return code == 'en' || code == 'eng';
+          },
+          orElse: () => available.first,
+        ),
       );
       if (mounted && !_isDisposed) {
         setState(() {
@@ -16333,7 +16391,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: playerPanel,
+      backgroundColor: playerBg,
+      barrierColor: Colors.black.withValues(alpha: 0.72),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        side: BorderSide(color: Color(0x44D6AD45), width: 1),
+      ),
       builder: (context) {
         return SafeArea(
           child: Padding(
