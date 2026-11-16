@@ -16186,10 +16186,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final isSubDL = uri != null && uri.host == 'dl.subdl.com' &&
         uri.path.startsWith('/subtitle/');
     final isOpenSubtitles = uri != null &&
-        (uri.host == 'www.opensubtitles.com' ||
-         uri.host == 'opensubtitles.com' ||
-         uri.host == 'dl.opensubtitles.com') &&
-        uri.path.startsWith('/download/');
+        (uri.host == 'opensubtitles.com' ||
+         uri.host.endsWith('.opensubtitles.com'));
     if (uri == null || uri.scheme != 'https' || (!isSubDL && !isOpenSubtitles)) {
       throw StateError('Subtitle provider returned an invalid file.');
     }
