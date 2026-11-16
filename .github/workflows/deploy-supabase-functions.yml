@@ -47,3 +47,4 @@ jobs:
 
           supabase functions deploy external-catalog --project-ref "$SUPABASE_PROJECT_REF"
           supabase functions deploy catalog-visibility --project-ref "$SUPABASE_PROJECT_REF"
+          supabase functions deploy flixora-notifications --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
