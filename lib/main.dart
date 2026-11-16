@@ -15481,7 +15481,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       // Keep a private app copy. Android document-picker paths can be temporary
       // content/cache locations and should not be relied on for the active track.
-      final Uint8List? selectedBytes = picked.bytes ??
+      final selectedBytes = picked.bytes ??
           (picked.path != null && picked.path!.isNotEmpty
               ? await File(picked.path!).readAsBytes()
               : null);
@@ -15502,7 +15502,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await importDirectory.create(recursive: true);
       }
       final safeName = picked.name
-          .split(RegExp(r'[/\\\\]'))
+          .split('/')
           .last
           .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final fileName = '${DateTime.now().microsecondsSinceEpoch}_${safeName.isEmpty ? 'subtitle.$extension' : safeName}';
