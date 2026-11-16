@@ -1759,6 +1759,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   List<Movie> _tmdbTrendingMovies = [];
   List<Movie> _tmdbTrendingTv = [];
   List<Movie> _pakistaniTrendingTv = [];
+  List<Movie> _chineseTrendingTv = [];
   List<Movie> _koreanTrendingMovies = [];
   List<Movie> _trendingHindiDubbedMovies = [];
   List<Movie> _trendingBollywoodMovies = [];
@@ -2373,6 +2374,107 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               isFromPakistaniSection ||
               isFromPakistaniFeed);
     }).toList(growable: false);
+  }
+
+  List<Movie> _chineseDramaTitles() {
+    bool isSeries(Movie title) =>
+        title.mediaType == 'tv' ||
+        title.movieBoxIsSeries ||
+        const {2, 3, 7}.contains(title.movieBoxSubjectType);
+
+    final chineseSectionItems = _movieBoxSections
+        .where((section) {
+          final name = section.title.toLowerCase();
+          return name.contains('chinese') ||
+              name.contains('china') ||
+              name.contains('c-drama') ||
+              name.contains('cdrama');
+        })
+        .expand((section) => section.items)
+        .where(isSeries)
+        .toList(growable: false);
+
+    final candidates = _deduplicateMovies([
+      ...chineseSectionItems,
+      ..._regularMovieBoxItems.where(isSeries),
+      ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+      ..._chineseTrendingTv,
+      ..._tmdbTrendingTv,
+      ...trendingTv,
+      ...popularTv,
+      ...topRatedTv,
+      ...koreanDrama,
+      ...bengaliTv,
+      ...indianDramaTv,
+    ]);
+
+    final sectionIds = chineseSectionItems
+        .where((title) => title.tmdbId > 0)
+        .map((title) => title.tmdbId)
+        .toSet();
+    final sectionTitles = chineseSectionItems
+        .map((title) => _normalizedMovieTitle(title.title))
+        .where((title) => title.isNotEmpty)
+        .toSet();
+
+    return candidates.where((title) {
+      if (!isSeries(title)) return false;
+      final country = title.originCountry.toUpperCase();
+      final countryCodes = country.split(RegExp(r'[,\\s]+'));
+      final isChinese = country == 'CN' ||
+          country.contains('CHINA') ||
+          countryCodes.contains('CN') ||
+          countryCodes.contains('CHN') ||
+          title.originalLanguage.toLowerCase().startsWith('zh');
+      final normalizedTitle = _normalizedMovieTitle(title.title);
+      final fromChineseSection =
+          (title.tmdbId > 0 && sectionIds.contains(title.tmdbId)) ||
+          (normalizedTitle.isNotEmpty && sectionTitles.contains(normalizedTitle));
+      final hasDramaGenre = title.genres.any(
+        (genre) => genre.toLowerCase().contains('drama'),
+      );
+      final genreAllowsDrama = hasDramaGenre || title.genres.isEmpty;
+      return genreAllowsDrama && (isChinese || fromChineseSection);
+    }).toList(growable: false);
+  }
+
+  Future<void> _refreshChineseDramaCatalogue({
+    bool forceRefresh = false,
+  }) async {
+    if (!_online) return;
+    try {
+      var titles = await TmdbService.getMovies(
+        'discover/tv',
+        extraParams: {
+          'with_origin_country': 'CN',
+          'with_genres': '18',
+          'sort_by': 'popularity.desc',
+        },
+        pages: 5,
+        forceRefresh: forceRefresh,
+      ).timeout(const Duration(seconds: 40));
+
+      if (titles.isEmpty) {
+        titles = await TmdbService.getMovies(
+          'discover/tv',
+          extraParams: {
+            'with_origin_country': 'CN',
+            'sort_by': 'popularity.desc',
+          },
+          pages: 5,
+          forceRefresh: forceRefresh,
+        ).timeout(const Duration(seconds: 40));
+      }
+      if (!mounted || titles.isEmpty) return;
+      setState(() {
+        _chineseTrendingTv = _deduplicateMovies([
+          ..._chineseTrendingTv,
+          ...titles,
+        ]);
+      });
+    } catch (error) {
+      debugPrint('Chinese drama catalogue refresh failed: $error');
+    }
   }
 
   Widget _pakistaniDramaBlock() {
@@ -3553,6 +3655,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // MovieBox sections can render independently while TMDB is loading.
       unawaited(_refreshMovieBoxHome(forceRefresh: forceRefresh));
       unawaited(_refreshPakistaniDramaCatalogue(forceRefresh: forceRefresh));
+      unawaited(_refreshChineseDramaCatalogue(forceRefresh: forceRefresh));
 
       var completedRequests = 0;
       const primaryRequestCount = 5;
@@ -3682,6 +3785,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         identityHashCode(southIndianMovies), southIndianMovies.length,
         identityHashCode(indianDramaTv), indianDramaTv.length,
         identityHashCode(_pakistaniTrendingTv), _pakistaniTrendingTv.length,
+        identityHashCode(_chineseTrendingTv), _chineseTrendingTv.length,
         identityHashCode(_koreanTrendingMovies), _koreanTrendingMovies.length,
         Object.hashAll(_unpublishedCatalogKeys),
       ]);
@@ -7754,6 +7858,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ...trendingTv,
             ...flixoraMovies.where((title) => title.mediaType == 'tv'),
           ])),
+          _sectionBlock('Chinese Drama', _chineseDramaTitles()),
           ...movieBoxSectionWidgets,
           _homeCategoryCards(),
           _sectionBlock('Gems for you', _gemsForYou()),
@@ -9776,6 +9881,8 @@ Entertainment Beyond Boundaries.
           return _deduplicateMovies(koreanDrama);
         case 'Indian Drama':
           return _deduplicateMovies(indianDramaTv);
+        case 'Pakistani Drama':
+          return _pakistaniTrendingDramaTitles();
         default:
           return _deduplicateMovies([
             ...trendingTv, ...popularTv, ...topRatedTv, ...anime,
@@ -9808,7 +9915,7 @@ Entertainment Beyond Boundaries.
   Widget _rankingContent() {
     const movieCategories = [
       'Cinema', 'TOP Movies', 'New Bengali', 'Bollywood',
-      'Hollywood', 'South Indian', 'New Release',
+      'Hollywood', 'South Indian', 'New Release', 'Pakistani Drama',
     ];
     const tvCategories = [
       'All Series', 'Top Series', 'New Bengali',
