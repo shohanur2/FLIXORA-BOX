@@ -11987,6 +11987,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleShadowOffset = 1;
   bool _automaticSubtitleLoading = false;
   bool _subtitleManuallySelected = false;
+  bool _automaticEmbeddedSubtitleSelected = false;
   String? _automaticSubtitlePath;
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
@@ -13428,6 +13429,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
+    _automaticEmbeddedSubtitleSelected = false;
     _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
@@ -14096,6 +14098,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Auto-select embedded subtitles when a stream publishes its tracks late.
+      if (_initialized && !_subtitleManuallySelected &&
+          !_automaticEmbeddedSubtitleSelected) {
+        final embedded = value.subtitle
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .toList(growable: false);
+        if (embedded.isNotEmpty) {
+          final track = embedded.firstWhere(
+            _isEnglishSubtitleTrack,
+            orElse: () => embedded.first,
+          );
+          unawaited(_selectEmbeddedSubtitleAutomatically(track));
+        }
+      }
       // Re-apply the user's audio sync preference when a new media exposes
       // its tracks. This only changes the active Player's audio-delay property.
       if (_audioDelay.abs() >= 0.01) {
@@ -14183,6 +14199,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
+    _automaticEmbeddedSubtitleSelected = false;
     _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
@@ -16088,6 +16105,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         title.startsWith('eng ') || title == 'eng';
   }
 
+  Future<void> _selectEmbeddedSubtitleAutomatically(SubtitleTrack track) async {
+    if (_isDisposed || _subtitleManuallySelected ||
+        _automaticEmbeddedSubtitleSelected) return;
+    _automaticEmbeddedSubtitleSelected = true;
+    try {
+      await _player.setSubtitleTrack(track);
+      final native = _player.platform;
+      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
+      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      if (mounted && !_isDisposed && !_subtitleManuallySelected) {
+        setState(() {
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage =
+              'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
+        });
+      }
+    } catch (error) {
+      _automaticEmbeddedSubtitleSelected = false;
+      debugPrint('FLIXORA embedded subtitle auto-select failed: $error');
+    }
+  }
+
   int _automaticSubtitleMediaId() =>
       widget.movie.tmdbId > 0 ? widget.movie.tmdbId : widget.movie.id;
 
@@ -16169,7 +16208,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _ensureAutomaticEnglishSubtitle() async {
     if (_isDisposed || widget.localFilePath != null || !_playerIsOnline ||
-        _automaticSubtitleLoading || _subtitleManuallySelected) return;
+        _automaticSubtitleLoading || _subtitleManuallySelected ||
+        _automaticEmbeddedSubtitleSelected) return;
     final requestToken = ++_automaticSubtitleRequestToken;
     if (_automaticSubtitleMediaId() <= 0 && widget.movie.title.trim().isEmpty) return;
     setState(() {
@@ -16187,6 +16227,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             _isEnglishSubtitleTrack, orElse: () => embeddedTracks.first);
           if (requestToken != _automaticSubtitleRequestToken ||
               _subtitleManuallySelected || _isDisposed) return;
+          _automaticEmbeddedSubtitleSelected = true;
           await _player.setSubtitleTrack(track);
           final native = _player.platform;
           if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
@@ -16246,6 +16287,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _automaticSubtitleMessage = '${available.length} language(s) available';
         });
       }
+      if (_automaticEmbeddedSubtitleSelected) return;
       final file = await _downloadAutomaticSubtitle(selected);
       if (requestToken != _automaticSubtitleRequestToken ||
           _subtitleManuallySelected || _isDisposed) return;
