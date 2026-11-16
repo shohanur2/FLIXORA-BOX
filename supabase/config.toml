@@ -3,3 +3,6 @@ verify_jwt = true
 
 [functions.catalog-visibility]
 verify_jwt = true
+
+[functions.flixora-notifications]
+verify_jwt = false
