@@ -1382,9 +1382,11 @@ class DownloadTask {
   final int downloadId;
   final String title;
   final String poster;
-  final String videoUrl;
+  String videoUrl;
   final String quality;
-  final Map<String, String> headers;
+  Map<String, String> headers;
+  final List<Map<String, String>> sourceCandidates;
+  int sourceIndex;
   final int? seasonNumber;
   final int? episodeNumber;
   double progress;
@@ -1402,6 +1404,8 @@ class DownloadTask {
     this.videoUrl = '',
     this.quality = 'Original',
     this.headers = const <String, String>{},
+    this.sourceCandidates = const <Map<String, String>>[],
+    this.sourceIndex = 0,
     this.seasonNumber,
     this.episodeNumber,
     this.progress = 0,
@@ -1427,6 +1431,8 @@ class DownloadTask {
         'videoUrl': videoUrl,
         'quality': quality,
         'headers': headers,
+        'sourceCandidates': sourceCandidates,
+        'sourceIndex': sourceIndex,
         'seasonNumber': seasonNumber,
         'episodeNumber': episodeNumber,
         'progress': progress,
@@ -1453,6 +1459,14 @@ class DownloadTask {
                 ),
               )
             : const <String, String>{},
+        sourceCandidates: (json['sourceCandidates'] as List? ?? const [])
+            .whereType<Map>()
+            .map((item) => Map<String, String>.from(
+                  item.map((key, value) =>
+                      MapEntry(key.toString(), value.toString())),
+                ))
+            .toList(growable: false),
+        sourceIndex: _toInt(json['sourceIndex']),
         seasonNumber: _toInt(json['seasonNumber']) > 0
             ? _toInt(json['seasonNumber'])
             : null,
@@ -4038,10 +4052,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required int season,
     required int episode,
   }) async {
-    final rawItem = movie.toMovieBoxMap();
-    // The player resolves streams from this same catalogue payload; avoid an
-    // extra rich-details request on the download button's critical path.
-    final detail = await MovieBoxService.playDetail(rawItem);
+    final detail = await MovieBoxService.playDetail(movie.toMovieBoxMap());
     final response = await MovieBoxService.streams(
       detail,
       season: season,
@@ -4049,26 +4060,72 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       isSeries: movie.movieBoxIsSeries,
     );
     final links = response['links'] as List? ?? const [];
-    return links.whereType<Map>().map((link) {
-      final url = (link['url'] ?? '').toString();
-      final kind = (link['kind'] ?? '').toString().toLowerCase();
-      final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
-      final isDirectMp4 = kind == 'mp4' || path.endsWith('.mp4');
-      if (!isDirectMp4) return <String, String>{};
+    final options = <Map<String, String>>[];
+    for (final rawLink in links.whereType<Map>()) {
+      final link = Map<String, dynamic>.from(rawLink);
+      final url = (link['url'] ?? '').toString().trim();
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https') ||
+          uri.host.isEmpty) continue;
+      final kind = (link['kind'] ?? link['type'] ?? link['format'] ?? '')
+          .toString().toLowerCase().replaceAll('video/', '').trim();
+      final path = uri.path.toLowerCase();
+      final streamKind = RustPlaybackCore.detectStreamKind(url);
+      final adaptive = streamKind == 1 || streamKind == 2 ||
+          path.endsWith('.m3u8') || path.endsWith('.mpd') ||
+          kind == 'hls' || kind == 'dash' || kind == 'm3u8' || kind == 'mpd';
+      if (adaptive) continue;
+      final directFile = <int>{3, 4, 5, 6, 7, 8}.contains(streamKind) ||
+          <String>{'mp4', 'mkv', 'webm', 'mov', 'avi', 'm4v'}.contains(kind) ||
+          RegExp(r'\.(mp4|mkv|webm|mov|avi|m4v)$', caseSensitive: false).hasMatch(path);
+      if (!directFile) continue;
       final rawHeaders = link['headers'];
       final headers = rawHeaders is Map
-          ? Map<String, String>.from(
-              rawHeaders.map(
-                (key, value) => MapEntry(key.toString(), value.toString()),
-              ),
-            )
+          ? Map<String, String>.from(rawHeaders.map(
+              (key, value) => MapEntry(key.toString(), value.toString())))
           : const <String, String>{};
-      return <String, String>{
-        'quality': (link['label'] ?? 'Original MP4').toString(),
+      final label = (link['quality'] ?? link['label'] ?? 'Original').toString();
+      final languageMatch = RegExp(r'\[([^\]]+)\]\s*$').firstMatch(label);
+      final language = (link['language'] ?? link['audioLanguage'] ??
+              languageMatch?.group(1) ?? movie.originalLanguage)
+          .toString().trim();
+      options.add(<String, String>{
+        'quality': label,
+        'language': language.isEmpty ? 'Original' : language,
         'video_url': url,
         'headers': jsonEncode(headers),
-      };
-    }).where((item) => item['video_url']?.isNotEmpty == true).toList();
+      });
+    }
+    return options;
+  }
+
+  Future<void> _prefetchSeasonDownloadOptions(
+    Movie movie, {
+    required int season,
+    required List<int> episodes,
+    required Map<int, List<Map<String, String>>> seed,
+    required void Function(Map<int, List<Map<String, String>>>) onBatch,
+  }) async {
+    final results = <int, List<Map<String, String>>>{...seed};
+    final pending = episodes.where((episode) => !results.containsKey(episode)).toList();
+    for (var offset = 0; offset < pending.length; offset += 3) {
+      final batch = pending.skip(offset).take(3).toList(growable: false);
+      final loaded = await Future.wait(batch.map((episode) async {
+        try {
+          return MapEntry(episode, await _movieBoxDirectDownloadOptions(
+            movie, season: season, episode: episode));
+        } catch (error) {
+          debugPrint('Download options unavailable for S$season E$episode: $error');
+          return MapEntry(episode, <Map<String, String>>[]);
+        }
+      }));
+      for (final entry in loaded) {
+        results[entry.key] = entry.value;
+      }
+      onBatch(Map<int, List<Map<String, String>>>.from(results));
+    }
+    if (pending.isEmpty) onBatch(Map<int, List<Map<String, String>>>.from(results));
   }
 
   String _downloadLanguage(Map<String, String> option) {
@@ -4096,12 +4153,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }) async {
     var options = initialOptions;
     var selectedSeason = initialSeason;
-    var selectedLanguage = _downloadLanguage(options.first);
-    var selectedQuality = _downloadQuality(options.first);
-    var loadingSeasonOptions = false;
+    var selectedLanguage = options.isNotEmpty
+        ? _downloadLanguage(options.first)
+        : (movie.originalLanguage.isNotEmpty ? movie.originalLanguage : 'Original');
+    var selectedQuality = options.isNotEmpty ? _downloadQuality(options.first) : '';
     var seasonRequestToken = 0;
-    final optionCache = <String, List<Map<String, String>>>{
-      if (isSeries) '$initialSeason:$initialEpisode': initialOptions,
+    final prefetchStartedForSeason = <int>{};
+    final episodeOptionsBySeason =
+        <int, Map<int, List<Map<String, String>>>>{
+      if (initialSeason > 0)
+        initialSeason: {
+          if (initialEpisode > 0) initialEpisode: initialOptions,
+        },
     };
     final episodesBySeason = <int, List<int>>{
       for (final season in seasons)
@@ -4119,57 +4182,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (isSeries && selectedEpisodes.isEmpty && episodeNumbers.isNotEmpty) {
       selectedEpisodes.add(episodeNumbers.first);
     }
-    final selectedQualities = <String>{selectedQuality};
-    final episodeOptionsByNumber = <int, List<Map<String, String>>>{
-      if (isSeries && initialEpisode > 0) initialEpisode: initialOptions,
-    };
-    var loadingEpisodeAvailability = isSeries;
-    var initialAvailabilityStarted = false;
-
-    Future<Map<int, List<Map<String, String>>>> loadSeasonEpisodeOptions(
-      int seasonNumber,
-      List<int> numbers,
-    ) async {
-      final loaded = <int, List<Map<String, String>>>{};
-      const batchSize = 3;
-      for (var start = 0; start < numbers.length; start += batchSize) {
-        final batch = numbers.skip(start).take(batchSize).toList();
-        final results = await Future.wait(batch.map((episode) async {
-          final key = '$seasonNumber:$episode';
-          final cached = optionCache[key];
-          if (cached != null) return MapEntry(episode, cached);
-          try {
-            final found = await _movieBoxDirectDownloadOptions(
-              movie, season: seasonNumber, episode: episode,
-            );
-            optionCache[key] = found;
-            return MapEntry(episode, found);
-          } catch (error) {
-            debugPrint('Download availability lookup failed for S$seasonNumber E$episode: $error');
-            optionCache[key] = <Map<String, String>>[];
-            return MapEntry(episode, <Map<String, String>>[]);
-          }
-        }));
-        for (final result in results) {
-          loaded[result.key] = result.value;
-        }
-      }
-      return loaded;
-    }
-
-    List<Map<String, String>> combineEpisodeOptions(
-      Map<int, List<Map<String, String>>> byEpisode,
-    ) {
-      final unique = <String, Map<String, String>>{};
-      for (final episodeOptions in byEpisode.values) {
-        for (final option in episodeOptions) {
-          final key = _downloadLanguage(option).toLowerCase() +
-              '|' + _downloadQuality(option).toLowerCase();
-          unique.putIfAbsent(key, () => option);
-        }
-      }
-      return unique.values.toList(growable: false);
-    }
+    final selectedQualities = <String>{if (selectedQuality.isNotEmpty) selectedQuality};
 
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -4181,49 +4194,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) {
-          if (isSeries && !initialAvailabilityStarted) {
-            initialAvailabilityStarted = true;
-            Future.microtask(() async {
-              final loaded = await loadSeasonEpisodeOptions(
-                selectedSeason, episodeNumbers,
-              );
-              if (!sheetContext.mounted) return;
-              setSheetState(() {
-                episodeOptionsByNumber
-                  ..clear()
-                  ..addAll(loaded);
-                options = combineEpisodeOptions(loaded);
-                if (options.isNotEmpty) {
-                  final languagesFound = options.map(_downloadLanguage).toSet().toList()..sort();
-                  if (!languagesFound.contains(selectedLanguage)) {
-                    selectedLanguage = languagesFound.first;
+          if (isSeries && prefetchStartedForSeason.add(selectedSeason)) {
+            final season = selectedSeason;
+            final token = ++seasonRequestToken;
+            final seed = Map<int, List<Map<String, String>>>.from(
+              episodeOptionsBySeason[season] ?? const {},
+            );
+            unawaited(_prefetchSeasonDownloadOptions(
+              movie,
+              season: season,
+              episodes: episodeNumbers,
+              seed: seed,
+              onBatch: (loaded) {
+                if (!sheetContext.mounted ||
+                    token != seasonRequestToken ||
+                    selectedSeason != season) return;
+                setSheetState(() {
+                  episodeOptionsBySeason[season] = loaded;
+                  options = loaded.values.expand((items) => items).toList();
+                  final loadedLanguages =
+                      options.map(_downloadLanguage).toSet().toList()..sort();
+                  if (loadedLanguages.isNotEmpty &&
+                      !loadedLanguages.contains(selectedLanguage)) {
+                    selectedLanguage = loadedLanguages.first;
                   }
-                  final matching = options
+                  final loadedQualities = options
                       .where((item) => _downloadLanguage(item) == selectedLanguage)
                       .map(_downloadQuality)
+                      .where((item) => item.isNotEmpty)
                       .toSet()
-                      .toList();
-                  selectedQuality = matching.isNotEmpty ? matching.first : '';
-                  selectedQualities
-                    ..clear()
-                    ..addAll(matching.isNotEmpty ? [selectedQuality] : <String>[]);
-                } else {
-                  selectedQualities.clear();
-                }
-                loadingEpisodeAvailability = false;
-                final available = episodeNumbers.where((episode) =>
-                    (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
-                        .any((item) =>
-                            _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                            selectedQualities.contains(_downloadQuality(item))))
-                    .toList();
-                selectedEpisodes
-                  ..clear()
-                  ..addAll(available.isNotEmpty ? [available.first] : <int>[]);
-              });
-            });
+                      .toList()
+                    ..sort((a, b) {
+                      final av = int.tryParse(RegExp(r'\d+').firstMatch(a)?.group(0) ?? '') ?? 0;
+                      final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
+                      return bv.compareTo(av);
+                    });
+                  if (selectedQuality.isEmpty || !loadedQualities.contains(selectedQuality)) {
+                    selectedQuality = loadedQualities.isNotEmpty ? loadedQualities.first : '';
+                    selectedQualities
+                      ..clear()
+                      ..addAll(selectedQuality.isEmpty ? <String>[] : <String>[selectedQuality]);
+                  }
+                });
+              },
+            ));
           }
           final languages = options.map(_downloadLanguage).toSet().toList()..sort();
+          if (languages.isEmpty) languages.add(selectedLanguage);
           if (!languages.contains(selectedLanguage) && languages.isNotEmpty) {
             selectedLanguage = languages.first;
           }
@@ -4240,18 +4257,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
               return bv.compareTo(av);
             });
-          bool episodeMatchesSelection(int episode) =>
-              (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
-                  .any((item) =>
-                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                      selectedQualities.contains(_downloadQuality(item)));
           final availableEpisodeNumbers = isSeries
-              ? episodeNumbers.where(episodeMatchesSelection).toList(growable: false)
+              ? episodeNumbers
               : <int>[];
           final allEpisodesSelected = availableEpisodeNumbers.isNotEmpty &&
               availableEpisodeNumbers.every(selectedEpisodes.contains);
-          final allQualitiesSelected = qualities.isNotEmpty &&
-              qualities.every(selectedQualities.contains);
 
           return Padding(
             padding: EdgeInsets.fromLTRB(
@@ -4317,11 +4327,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               selectedQualities
                                 ..clear()
                                 ..addAll(matching);
-                              selectedEpisodes.removeWhere((episode) =>
-                                  !(episodeOptionsByNumber[episode] ??
-                                      const <Map<String, String>>[]).any((item) =>
-                                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                                      selectedQualities.contains(_downloadQuality(item))));
                             });
                           },
                         ),
@@ -4342,125 +4347,107 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 child: Text('Season ' + number.toString().padLeft(2, '0')),
                               );
                             }).toList(),
-                            onChanged: loadingSeasonOptions ? null : (number) async {
+                            onChanged: (number) {
                               if (number == null || number == selectedSeason) return;
                               final nextEpisodes = episodesBySeason[number] ?? <int>[];
                               if (nextEpisodes.isEmpty) return;
-                              final requestToken = ++seasonRequestToken;
+                              seasonRequestToken++;
+                              final cached = episodeOptionsBySeason[number] ?? const {};
+                              final cachedOptions =
+                                  cached.values.expand((items) => items).toList();
                               setSheetState(() {
                                 selectedSeason = number;
                                 episodeNumbers = nextEpisodes;
-                                selectedEpisodes.clear();
-                                episodeOptionsByNumber.clear();
-                                loadingSeasonOptions = true;
-                                loadingEpisodeAvailability = true;
+                                selectedEpisodes
+                                  ..clear()
+                                  ..add(nextEpisodes.first);
+                                options = cachedOptions;
+                                selectedLanguage = options.isNotEmpty
+                                    ? _downloadLanguage(options.first)
+                                    : (movie.originalLanguage.isNotEmpty
+                                        ? movie.originalLanguage : 'Original');
+                                selectedQuality = options.isNotEmpty
+                                    ? _downloadQuality(options.first) : '';
+                                selectedQualities
+                                  ..clear()
+                                  ..addAll(selectedQuality.isEmpty
+                                      ? <String>[] : <String>[selectedQuality]);
                               });
-                              try {
-                                final loaded = await loadSeasonEpisodeOptions(
-                                  number, nextEpisodes,
-                                );
-                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
-                                setSheetState(() {
-                                  episodeOptionsByNumber
-                                    ..clear()
-                                    ..addAll(loaded);
-                                  options = combineEpisodeOptions(loaded);
-                                  if (options.isNotEmpty) {
-                                    selectedLanguage = _downloadLanguage(options.first);
-                                    selectedQuality = _downloadQuality(options.first);
-                                    selectedQualities
-                                      ..clear()
-                                      ..add(selectedQuality);
-                                  } else {
-                                    selectedQualities.clear();
-                                  }
-                                  loadingSeasonOptions = false;
-                                  loadingEpisodeAvailability = false;
-                                  final available = episodeNumbers.where((episode) =>
-                                      (episodeOptionsByNumber[episode] ??
-                                          const <Map<String, String>>[]).any((item) =>
-                                          _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                                          selectedQualities.contains(_downloadQuality(item))))
-                                      .toList();
-                                  if (available.isNotEmpty) {
-                                    selectedEpisodes.add(available.first);
-                                  }
-                                });
-                              } catch (error) {
-                                if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
-                                setSheetState(() {
-                                  loadingSeasonOptions = false;
-                                  loadingEpisodeAvailability = false;
-                                });
-                              }
                             },
                           ),
                         ],
                         const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('Available qualities', style: TextStyle(
-                              color: white, fontSize: 15, fontWeight: FontWeight.w700,
-                            ))),
-                            TextButton(
-                              onPressed: qualities.isEmpty ? null : () => setSheetState(() {
-                                if (allQualitiesSelected) {
-                                  selectedQualities.removeAll(qualities);
-                                } else {
-                                  selectedQualities.addAll(qualities);
-                                }
-                                selectedEpisodes.removeWhere(
-                                  (episode) => !episodeMatchesSelection(episode),
-                                );
-                              }),
-                              child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
-                            ),
-                          ],
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B1B20),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: gold.withValues(alpha: 0.18)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Text('Resources', style: TextStyle(
+                                    color: white, fontSize: 17,
+                                    fontWeight: FontWeight.w800,
+                                  )),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      selectedLanguage,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: ink60, fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              if (qualities.isEmpty)
+                                const Text(
+                                  'Checking available download qualities...',
+                                  style: TextStyle(color: ink60, fontSize: 12),
+                                )
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: qualities.map((quality) {
+                                    final selected = selectedQualities.contains(quality);
+                                    return ChoiceChip(
+                                      label: Text(quality),
+                                      selected: selected,
+                                      showCheckmark: false,
+                                      selectedColor: gold,
+                                      backgroundColor: const Color(0xFF29292F),
+                                      labelStyle: TextStyle(
+                                        color: selected ? bg : white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      onSelected: (_) {
+                                        setSheetState(() {
+                                          selectedQuality = quality;
+                                          selectedQualities
+                                            ..clear()
+                                            ..add(quality);
+
+                                        });
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
+                            ],
+                          ),
                         ),
-                        if (loadingSeasonOptions)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Center(child: CircularProgressIndicator(color: gold)),
-                          ),
-                        if (qualities.isEmpty && !loadingSeasonOptions)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('No direct MP4 qualities are available for this season.',
-                              style: TextStyle(color: ink60, fontSize: 12)),
-                          ),
-                        ...qualities.map((quality) {
-                          final selected = selectedQualities.contains(quality);
-                          final item = languageOptions.firstWhere(
-                            (entry) => _downloadQuality(entry) == quality,
-                          );
-                          return CheckboxListTile(
-                            dense: true, contentPadding: EdgeInsets.zero,
-                            activeColor: gold, checkColor: bg, value: selected,
-                            title: Text(quality, style: const TextStyle(color: white)),
-                            subtitle: Text(
-                              item['size_label'] ?? 'Size detected during download',
-                              style: const TextStyle(color: ink60, fontSize: 12),
-                            ),
-                            onChanged: loadingSeasonOptions ? null : (checked) => setSheetState(() {
-                              if (checked == true) { selectedQualities.add(quality); }
-                              else { selectedQualities.remove(quality); }
-                              selectedEpisodes.removeWhere(
-                                (episode) => !episodeMatchesSelection(episode),
-                              );
-                            }),
-                          );
-                        }),
                         if (isSeries) ...[
                           const SizedBox(height: 10),
                           const Text('Episodes', style: TextStyle(
                             color: white, fontSize: 15, fontWeight: FontWeight.w700,
                           )),
-                          if (loadingEpisodeAvailability || loadingSeasonOptions)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 10),
-                              child: Center(child: CircularProgressIndicator(color: gold)),
-                            )
-                          else if (availableEpisodeNumbers.isEmpty)
+                          if (availableEpisodeNumbers.isEmpty)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 8),
                               child: Text(
@@ -4497,8 +4484,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               foregroundColor: goldLight, side: const BorderSide(color: gold),
                               padding: const EdgeInsets.symmetric(vertical: 13),
                             ),
-                            onPressed: availableEpisodeNumbers.isEmpty ||
-                                    loadingEpisodeAvailability || loadingSeasonOptions
+                            onPressed: availableEpisodeNumbers.isEmpty
                                 ? null
                                 : () => setSheetState(() {
                                     if (allEpisodesSelected) selectedEpisodes.clear();
@@ -4523,7 +4509,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             backgroundColor: gold, foregroundColor: bg,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
-                          onPressed: loadingSeasonOptions ||
+                          onPressed:
                                   (isSeries ? selectedEpisodes.isEmpty : selectedQualities.isEmpty) ||
                                   selectedQualities.isEmpty
                               ? null
@@ -4532,6 +4518,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   'qualities': selectedQualities.toList(),
                                   'season': selectedSeason,
                                   'episodes': selectedEpisodes.toList()..sort(),
+                                  'episodeOptionsByNumber': <String, List<Map<String, String>>>{
+                                    for (final entry in (episodeOptionsBySeason[selectedSeason] ??
+                                        const <int, List<Map<String, String>>>{}).entries)
+                                      entry.key.toString(): entry.value,
+                                  },
                                 }),
                           icon: const Icon(Icons.download_rounded),
                           label: const Text('Download', style: TextStyle(fontWeight: FontWeight.w800)),
@@ -4552,6 +4543,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     Map<String, String> selected, {
     int? seasonNumber,
     int? episodeNumber,
+    List<Map<String, String>>? fallbackOptions,
   }) async {
     final quality = _downloadQuality(selected);
     final existing = _downloads.where((item) =>
@@ -4575,18 +4567,31 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final downloadId = DateTime.now().microsecondsSinceEpoch;
+    final candidates = <Map<String, String>>[];
+    final seenCandidates = <String>{};
+    for (final option in fallbackOptions ?? <Map<String, String>>[selected]) {
+      final url = (option['video_url'] ?? '').trim();
+      if (url.isEmpty) continue;
+      final headers = option['headers'] ?? '{}';
+      if (!seenCandidates.add('$url|$headers')) continue;
+      candidates.add(<String, String>{'video_url': url, 'headers': headers});
+    }
+    if (candidates.isEmpty) return;
+
+    final first = candidates.first;
     final task = DownloadTask(
       movieId: movie.id,
-      downloadId: downloadId,
+      downloadId: DateTime.now().microsecondsSinceEpoch,
       title: movie.title,
       poster: movie.posterUrl,
-      videoUrl: selected['video_url'] ?? '',
+      videoUrl: first['video_url'] ?? '',
       quality: quality,
-      headers: _decodeDownloadHeaders(selected['headers']),
+      headers: _decodeDownloadHeaders(first['headers']),
+      sourceCandidates: candidates,
+      sourceIndex: 0,
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
-      totalBytes: int.tryParse(selected['size_bytes'] ?? '') ?? 0,
+      totalBytes: 0,
       status: 'Waiting',
     );
     if (task.videoUrl.isEmpty) return;
@@ -4681,10 +4686,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       rawOptions = <Map<String, String>>[];
     }
     if (!mounted) return;
-    if (rawOptions.isEmpty) {
+    if (rawOptions.isEmpty && !isSeries) {
       _showMessage(
         movie.isMovieBox
-            ? 'A direct MP4 download source is not available for this title or episode.'
+            ? 'A direct downloadable video source is not available for this title.'
             : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
       );
       return;
@@ -4726,44 +4731,57 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (isSeries) {
       final selectedSeason = _toInt(selection['season']);
       final episodes = (selection['episodes'] as List? ?? const [])
-          .map(_toInt)
-          .where((number) => number > 0)
-          .toList();
+          .map(_toInt).where((number) => number > 0).toList();
+      final cachedRaw = selection['episodeOptionsByNumber'];
+      final cachedOptions = <int, List<Map<String, String>>>{};
+      if (cachedRaw is Map) {
+        for (final entry in cachedRaw.entries) {
+          final episode = int.tryParse(entry.key.toString()) ?? 0;
+          if (episode <= 0 || entry.value is! List) continue;
+          cachedOptions[episode] = (entry.value as List)
+              .whereType<Map>()
+              .map((item) => Map<String, String>.from(item.map(
+                    (key, value) => MapEntry(key.toString(), value.toString()))))
+              .toList(growable: false);
+        }
+      }
+      final allEpisodeOptions = <int, List<Map<String, String>>>{};
+      await _prefetchSeasonDownloadOptions(
+        movie,
+        season: selectedSeason,
+        episodes: episodes,
+        seed: cachedOptions,
+        onBatch: (loaded) => allEpisodeOptions
+          ..clear()
+          ..addAll(loaded),
+      );
       var queued = 0;
       var unavailable = 0;
       for (final episode in episodes) {
-        List<Map<String, String>> episodeOptions;
-        try {
-          episodeOptions = await _movieBoxDirectDownloadOptions(
-            movie,
-            season: selectedSeason,
-            episode: episode,
-          );
-        } catch (error) {
-          debugPrint('Download options unavailable for S' + selectedSeason.toString() + ' E' + episode.toString() + ': ' + error.toString());
-          unavailable++;
-          continue;
-        }
-        final match = episodeOptions.firstWhere(
-          (item) =>
+        final episodeOptions = allEpisodeOptions[episode] ?? const [];
+        for (final quality in qualities) {
+          final matches = episodeOptions.where((item) =>
               _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
-              qualities.contains(_downloadQuality(item)),
-          orElse: () => <String, String>{},
-        );
-        if (match.isEmpty) {
-          unavailable++;
-          continue;
+              _downloadQuality(item).toLowerCase() == quality.toLowerCase()).toList();
+          if (matches.isEmpty) {
+            unavailable++;
+            continue;
+          }
+          await _queueSelectedDownload(
+            movie,
+            matches.first,
+            fallbackOptions: matches,
+            seasonNumber: selectedSeason,
+            episodeNumber: episode,
+          );
+          queued++;
         }
-        await _queueSelectedDownload(
-          movie,
-          match,
-          seasonNumber: selectedSeason,
-          episodeNumber: episode,
-        );
-        queued++;
       }
       if (unavailable > 0) {
-        _showMessage(queued.toString() + ' episode(s) queued; ' + unavailable.toString() + ' had no matching direct MP4 source.');
+        _showMessage(
+          queued.toString() + ' episode download(s) queued; ' +
+          unavailable.toString() + ' selected-quality source(s) unavailable.',
+        );
       } else if (queued > 0) {
         _showMessage(queued.toString() + ' episode(s) added to downloads.');
       }
@@ -4773,11 +4791,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final selectedOptions = options.where((item) =>
         _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
         qualities.contains(_downloadQuality(item))).toList();
+    final groupedOptions = <String, List<Map<String, String>>>{};
     for (final option in selectedOptions) {
-      await _queueSelectedDownload(movie, option);
+      (groupedOptions[_downloadQuality(option)] ??= <Map<String, String>>[])
+          .add(option);
     }
-    if (selectedOptions.isNotEmpty) {
-      _showMessage(selectedOptions.length.toString() + ' download option(s) added to queue.');
+    for (final group in groupedOptions.values) {
+      await _queueSelectedDownload(movie, group.first, fallbackOptions: group);
+    }
+    if (groupedOptions.isNotEmpty) {
+      _showMessage(groupedOptions.length.toString() + ' download quality(ies) added to queue.');
     }
   }
 
@@ -4786,90 +4809,154 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     bool resume = false,
   }) async {
     final downloadId = task.downloadId > 0 ? task.downloadId : task.movieId;
-    var lastUiBytes = -1;
+    final candidates = task.sourceCandidates.isEmpty
+        ? <Map<String, String>>[
+            <String, String>{
+              'video_url': task.videoUrl,
+              'headers': jsonEncode(task.headers),
+            },
+          ]
+        : task.sourceCandidates;
+    if (candidates.isEmpty) {
+      if (mounted) setState(() {
+        task
+          ..status = 'Failed'
+          ..errorMessage = 'No downloadable source is available.';
+      });
+      return;
+    }
 
-    await DownloadManager.download(
-      url: task.videoUrl,
-      fileName: '${task.displayTitle}_${task.quality}',
-      uniqueId: downloadId,
-      headers: task.headers,
-      existingPartialPath: resume ? task.filePath : null,
-      onQueued: (path, offset) {
-        if (!mounted) return;
-        setState(() {
-          task
-            ..filePath = path
-            ..bytesReceived = offset
-            ..status = 'Waiting'
-            ..errorMessage = null;
-        });
-        unawaited(MovieCache.saveDownloads(_downloads));
-      },
-      onStarted: (path, offset) {
-        if (!mounted) return;
-        setState(() {
-          task
-            ..filePath = path
-            ..bytesReceived = offset
-            ..status = 'Downloading'
-            ..errorMessage = null;
-        });
-        unawaited(MovieCache.saveDownloads(_downloads));
-      },
-      onProgress: (received, total) {
-        if (!mounted) return;
-        if (lastUiBytes >= 0 && received - lastUiBytes < 256 * 1024) return;
-        lastUiBytes = received;
-        setState(() {
-          task.bytesReceived = received;
-          if (total > 0) task.totalBytes = total;
-          if (task.totalBytes > 0) {
-            task.progress = (received / task.totalBytes).clamp(0.0, 1.0);
-          }
-        });
-      },
-      onPaused: (path, received, total) {
-        if (!mounted) return;
-        setState(() {
-          task
-            ..filePath = path
-            ..bytesReceived = received
-            ..totalBytes = total > 0 ? total : task.totalBytes
-            ..progress = task.totalBytes > 0
-                ? (received / task.totalBytes).clamp(0.0, 1.0)
-                : task.progress
-            ..status = 'Paused'
-            ..errorMessage = null;
-        });
-        unawaited(MovieCache.saveDownloads(_downloads));
-        _showMessage('Download paused. You can resume it any time.');
-      },
-      onComplete: (path) async {
-        final fileSize = await File(path).length();
-        if (!mounted) return;
-        setState(() {
-          task
-            ..progress = 1
-            ..bytesReceived = fileSize
-            ..totalBytes = fileSize
-            ..status = 'Completed'
-            ..filePath = path
-            ..errorMessage = null;
-        });
+    final firstIndex = task.sourceIndex.clamp(0, candidates.length - 1).toInt();
+    for (var index = firstIndex; index < candidates.length; index++) {
+      final candidate = candidates[index];
+      final url = (candidate['video_url'] ?? '').trim();
+      if (url.isEmpty) continue;
+      final headers = _decodeDownloadHeaders(candidate['headers']);
+      task
+        ..sourceIndex = index
+        ..videoUrl = url
+        ..headers = headers;
+      var lastUiBytes = -1;
+      var failureMessage = '';
+      var completed = false;
+      var paused = false;
+      final shouldResume = resume && index == firstIndex;
+
+      await DownloadManager.download(
+        url: url,
+        fileName: '${task.displayTitle}_${task.quality}',
+        uniqueId: downloadId,
+        headers: headers,
+        existingPartialPath: shouldResume ? task.filePath : null,
+        onQueued: (path, offset) {
+          if (!mounted) return;
+          setState(() {
+            task
+              ..filePath = path
+              ..bytesReceived = offset
+              ..status = 'Waiting'
+              ..errorMessage = null;
+          });
+          unawaited(MovieCache.saveDownloads(_downloads));
+        },
+        onStarted: (path, offset) {
+          if (!mounted) return;
+          setState(() {
+            task
+              ..filePath = path
+              ..bytesReceived = offset
+              ..status = 'Downloading'
+              ..errorMessage = null;
+          });
+          unawaited(MovieCache.saveDownloads(_downloads));
+        },
+        onProgress: (received, total) {
+          if (!mounted) return;
+          if (lastUiBytes >= 0 && received - lastUiBytes < 256 * 1024) return;
+          lastUiBytes = received;
+          setState(() {
+            task.bytesReceived = received;
+            if (total > 0) task.totalBytes = total;
+            if (task.totalBytes > 0) {
+              task.progress = (received / task.totalBytes).clamp(0.0, 1.0);
+            }
+          });
+        },
+        onPaused: (path, received, total) {
+          paused = true;
+          if (!mounted) return;
+          setState(() {
+            task
+              ..filePath = path
+              ..bytesReceived = received
+              ..totalBytes = total > 0 ? total : task.totalBytes
+              ..progress = task.totalBytes > 0
+                  ? (received / task.totalBytes).clamp(0.0, 1.0)
+                  : task.progress
+              ..status = 'Paused'
+              ..errorMessage = null;
+          });
+          unawaited(MovieCache.saveDownloads(_downloads));
+          _showMessage('Download paused. You can resume it any time.');
+        },
+        onComplete: (path) async {
+          completed = true;
+          final fileSize = await File(path).length();
+          if (!mounted) return;
+          setState(() {
+            task
+              ..progress = 1
+              ..bytesReceived = fileSize
+              ..totalBytes = fileSize
+              ..status = 'Completed'
+              ..filePath = path
+              ..errorMessage = null;
+          });
+          await MovieCache.saveDownloads(_downloads);
+          _showMessage('Successfully downloaded ${task.displayTitle}.');
+        },
+        onError: (message) {
+          failureMessage = message;
+        },
+      );
+
+      if (completed || paused) return;
+      if (failureMessage.isEmpty) {
+        failureMessage = 'Download failed. Please try another available source.';
+      }
+      final canFallback = index + 1 < candidates.length &&
+          failureMessage.toLowerCase() != 'download cancelled.';
+      if (canFallback) {
+        final partialPath = task.filePath;
+        if (partialPath != null) {
+          try {
+            final partialFile = File(partialPath);
+            if (await partialFile.exists()) await partialFile.delete();
+          } catch (_) {}
+        }
+        task
+          ..filePath = null
+          ..bytesReceived = 0
+          ..totalBytes = 0
+          ..progress = 0
+          ..status = 'Waiting'
+          ..errorMessage = null
+          ..sourceIndex = index + 1;
+        resume = false;
         await MovieCache.saveDownloads(_downloads);
-        _showMessage('Successfully downloaded ${task.displayTitle}.');
-      },
-      onError: (message) {
-        if (!mounted) return;
-        setState(() {
-          task
-            ..status = 'Failed'
-            ..errorMessage = message;
-        });
-        unawaited(MovieCache.saveDownloads(_downloads));
-        _showMessage(message);
-      },
-    );
+        continue;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        task
+          ..status = 'Failed'
+          ..errorMessage = failureMessage;
+      });
+      await MovieCache.saveDownloads(_downloads);
+      _showMessage(failureMessage);
+      return;
+    }
   }
 
   Future<void> _pauseResumeDownload(DownloadTask task) async {
