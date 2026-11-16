@@ -4100,6 +4100,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     var selectedQuality = _downloadQuality(options.first);
     var loadingSeasonOptions = false;
     var seasonRequestToken = 0;
+    final episodesBySeason = <int, List<int>>{
+      for (final season in seasons)
+        _toInt(season['se']): ((season['episodes'] as List? ?? const [])
+            .map(_toInt)
+            .where((number) => number > 0)
+            .toList()
+          ..sort()),
+    };
     var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
     final selectedEpisodes = <int>{
       if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
@@ -4109,7 +4117,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       selectedEpisodes.add(episodeNumbers.first);
     }
     final selectedQualities = <String>{selectedQuality};
-    var loadingEpisodeAvailability = false;
 
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -4143,8 +4150,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               : <int>[];
           final allEpisodesSelected = availableEpisodeNumbers.isNotEmpty &&
               availableEpisodeNumbers.every(selectedEpisodes.contains);
-          final allQualitiesSelected = qualities.isNotEmpty &&
-              qualities.every(selectedQualities.contains);
 
           return Padding(
             padding: EdgeInsets.fromLTRB(
