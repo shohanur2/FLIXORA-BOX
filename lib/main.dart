@@ -13507,12 +13507,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             });
             if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
           }
-          await _restoreResumePosition();
           _subtitleManuallySelected = false;
-          _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
-          _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
+          await _restoreResumePosition();
           _startHideTimer();
           _prewarmNextMovieBoxEpisode();
           return true;
@@ -14292,13 +14289,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           // Start MPV first so duration and byte-range seeking are ready.
           await _player.play();
           if (!mounted || _isDisposed) return;
+          _subtitleManuallySelected = false;
+          unawaited(_ensureAutomaticEnglishSubtitle());
           await _restoreResumePosition();
           if (!mounted || _isDisposed) return;
-          _subtitleManuallySelected = false;
-          _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
-          _automaticSubtitleMessage = null;
-          unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
           return;
         } catch (error) {
