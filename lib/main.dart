@@ -16756,7 +16756,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                   color: playerGoldLight,
                                 ),
                                 Text(
-                                  '\${_subtitleDelay >= 0 ? '+' : ''}\${_subtitleDelay.toStringAsFixed(1)}s',
+                                  '${_subtitleDelay >= 0 ? '+' : ''}${_subtitleDelay.toStringAsFixed(1)}s',
                                   style: const TextStyle(color: playerGoldLight,
                                     fontSize: 12, fontWeight: FontWeight.w800),
                                 ),
