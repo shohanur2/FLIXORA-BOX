@@ -9994,6 +9994,8 @@ Entertainment Beyond Boundaries.
         return _rankingRegionalMovies('South Indian');
       case 'New Release':
         return _deduplicateMovies(_withoutFlixoraDuplicates(latest));
+      case 'Pakistani Drama':
+        return _pakistaniTrendingDramaTitles();
       default:
         return _rankingMoviePool();
     }
