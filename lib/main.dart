@@ -16025,16 +16025,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     onTap: () => _selectMovieBoxSubtitle(subtitle),
                   );
                 }),
-                ...subtitleTracks.map((track) {
+                ...subtitleTracks.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final track = entry.value;
+                  final title = track.title?.trim() ?? '';
+                  final language = track.language?.trim() ?? '';
+                  final label = title.isNotEmpty
+                      ? title
+                      : language.isNotEmpty
+                          ? _subtitleLanguageName(language)
+                          : 'Subtitle track ${index + 1}';
                   return ListTile(
                     leading: const Icon(
                       Icons.subtitles,
                       color: playerGold,
                     ),
                     title: Text(
-                      (track.title?.trim().isNotEmpty ?? false)
-                          ? track.title!
-                          : _subtitleLanguageName(track.language ?? ''),
+                      label,
                       style: const TextStyle(color: playerWhite),
                     ),
                     onTap: () => _selectSubtitleTrack(track),
