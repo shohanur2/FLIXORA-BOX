@@ -11989,7 +11989,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   bool _subtitleVisibilityEnabled = true;
   String _selectedSubtitleLanguageCode = '';
   bool _subtitleManuallySelected = false;
-  String? _automaticSubtitlePath;
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
   List<Map<String, dynamic>> _automaticSubtitleOptions = [];
@@ -13430,7 +13429,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
-    _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
@@ -13510,7 +13508,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           await _restoreResumePosition();
           _subtitleManuallySelected = false;
           _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
@@ -14185,7 +14182,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
-    _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
@@ -14281,7 +14277,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (!mounted || _isDisposed) return;
           _subtitleManuallySelected = false;
           _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
@@ -16391,7 +16386,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         setState(() {
           _selectedSubtitleLanguageCode = code;
           _subtitleVisibilityEnabled = true;
-          _automaticSubtitlePath = file.path;
           _automaticEnglishTrack = track;
           _automaticSubtitleMessage = '${_subtitleLanguageName(code)} downloaded and ready';
         });
@@ -16431,7 +16425,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         setState(() {
           _selectedSubtitleLanguageCode = code;
           _subtitleVisibilityEnabled = true;
-          _automaticSubtitlePath = file.path;
           _automaticEnglishTrack = track;
           _automaticSubtitleMessage = '${_subtitleLanguageName(code)} selected';
         });
