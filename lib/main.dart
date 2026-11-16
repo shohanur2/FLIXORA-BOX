@@ -4131,7 +4131,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       List<int> numbers,
     ) async {
       final loaded = <int, List<Map<String, String>>>{};
-      const batchSize = 3;
+      // Resolve the season's episode sources concurrently so the list is ready sooner.
+      const batchSize = 8;
       for (var start = 0; start < numbers.length; start += batchSize) {
         final batch = numbers.skip(start).take(batchSize).toList();
         final results = await Future.wait(batch.map((episode) async {
@@ -4397,59 +4398,81 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ),
                         ],
                         const SizedBox(height: 14),
-                        Row(
-                          children: [
-                            const Expanded(child: Text('Available qualities', style: TextStyle(
-                              color: white, fontSize: 15, fontWeight: FontWeight.w700,
-                            ))),
-                            TextButton(
-                              onPressed: qualities.isEmpty ? null : () => setSheetState(() {
-                                if (allQualitiesSelected) {
-                                  selectedQualities.removeAll(qualities);
-                                } else {
-                                  selectedQualities.addAll(qualities);
-                                }
-                                selectedEpisodes.removeWhere(
-                                  (episode) => !episodeMatchesSelection(episode),
-                                );
-                              }),
-                              child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
-                            ),
-                          ],
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1B1B20),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: gold.withValues(alpha: 0.18)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Text('Resources', style: TextStyle(
+                                    color: white, fontSize: 17,
+                                    fontWeight: FontWeight.w800,
+                                  )),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      selectedLanguage,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: ink60, fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              if (loadingSeasonOptions)
+                                const Center(child: CircularProgressIndicator(color: gold))
+                              else if (qualities.isEmpty)
+                                const Text(
+                                  'No direct MP4 qualities are available for this season.',
+                                  style: TextStyle(color: ink60, fontSize: 12),
+                                )
+                              else
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: qualities.map((quality) {
+                                    final selected = selectedQualities.contains(quality);
+                                    return ChoiceChip(
+                                      label: Text(quality),
+                                      selected: selected,
+                                      showCheckmark: false,
+                                      selectedColor: gold,
+                                      backgroundColor: const Color(0xFF29292F),
+                                      labelStyle: TextStyle(
+                                        color: selected ? bg : white,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      onSelected: loadingSeasonOptions ? null : (_) {
+                                        setSheetState(() {
+                                          selectedQuality = quality;
+                                          selectedQualities
+                                            ..clear()
+                                            ..add(quality);
+                                          selectedEpisodes.removeWhere(
+                                            (episode) => !episodeMatchesSelection(episode),
+                                          );
+                                          final available = episodeNumbers
+                                              .where(episodeMatchesSelection)
+                                              .toList(growable: false);
+                                          if (selectedEpisodes.isEmpty && available.isNotEmpty) {
+                                            selectedEpisodes.add(available.first);
+                                          }
+                                        });
+                                      },
+                                    );
+                                  }).toList(),
+                                ),
+                            ],
+                          ),
                         ),
-                        if (loadingSeasonOptions)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Center(child: CircularProgressIndicator(color: gold)),
-                          ),
-                        if (qualities.isEmpty && !loadingSeasonOptions)
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('No direct MP4 qualities are available for this season.',
-                              style: TextStyle(color: ink60, fontSize: 12)),
-                          ),
-                        ...qualities.map((quality) {
-                          final selected = selectedQualities.contains(quality);
-                          final item = languageOptions.firstWhere(
-                            (entry) => _downloadQuality(entry) == quality,
-                          );
-                          return CheckboxListTile(
-                            dense: true, contentPadding: EdgeInsets.zero,
-                            activeColor: gold, checkColor: bg, value: selected,
-                            title: Text(quality, style: const TextStyle(color: white)),
-                            subtitle: Text(
-                              item['size_label'] ?? 'Size detected during download',
-                              style: const TextStyle(color: ink60, fontSize: 12),
-                            ),
-                            onChanged: loadingSeasonOptions ? null : (checked) => setSheetState(() {
-                              if (checked == true) { selectedQualities.add(quality); }
-                              else { selectedQualities.remove(quality); }
-                              selectedEpisodes.removeWhere(
-                                (episode) => !episodeMatchesSelection(episode),
-                              );
-                            }),
-                          );
-                        }),
                         if (isSeries) ...[
                           const SizedBox(height: 10),
                           const Text('Episodes', style: TextStyle(
