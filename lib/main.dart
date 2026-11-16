@@ -17,6 +17,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'services/notification_service.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'video_quality_service.dart';
@@ -46,6 +47,12 @@ const String authRedirectUrl =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+
+  try {
+    await FlixoraNotificationService.initialize();
+  } catch (error) {
+    debugPrint('FLIXORA notification initialization failed: $error');
+  }
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
@@ -2930,6 +2937,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _saveBoolSetting(String key, bool value, void Function(bool) update) async {
+    if (key == 'flixora_notifications') {
+      var enabled = value;
+      if (value) {
+        enabled = await FlixoraNotificationService.enable();
+        if (!enabled && mounted) {
+          _showMessage('Allow notifications in Android Settings to receive FLIXORA updates.');
+        }
+      } else {
+        await FlixoraNotificationService.disable();
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(key, enabled);
+      if (mounted) setState(() => update(enabled));
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(key, value);
     if (mounted) setState(() => update(value));
