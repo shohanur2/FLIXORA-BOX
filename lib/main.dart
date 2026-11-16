@@ -4136,17 +4136,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
               return bv.compareTo(av);
             });
+          bool episodeMatchesSelection(int episode) =>
+              (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
+                  .any((item) =>
+                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
+                      selectedQualities.contains(_downloadQuality(item)));
           final availableEpisodeNumbers = isSeries
-              ? episodeNumbers.where((episode) =>
-                  (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
-                      .any((item) =>
-                          _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                          selectedQualities.contains(_downloadQuality(item))))
-                  .toList(growable: false)
+              ? episodeNumbers.where(episodeMatchesSelection).toList(growable: false)
               : <int>[];
-          selectedEpisodes.removeWhere(
-            (episode) => !availableEpisodeNumbers.contains(episode),
-          );
           final allEpisodesSelected = availableEpisodeNumbers.isNotEmpty &&
               availableEpisodeNumbers.every(selectedEpisodes.contains);
           final allQualitiesSelected = qualities.isNotEmpty &&
@@ -4310,7 +4307,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                   selectedQualities.addAll(qualities);
                                 }
                                 selectedEpisodes.removeWhere(
-                                  (episode) => !availableEpisodeNumbers.contains(episode),
+                                  (episode) => !episodeMatchesSelection(episode),
                                 );
                               }),
                               child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
@@ -4345,7 +4342,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               if (checked == true) { selectedQualities.add(quality); }
                               else { selectedQualities.remove(quality); }
                               selectedEpisodes.removeWhere(
-                                (episode) => !availableEpisodeNumbers.contains(episode),
+                                (episode) => !episodeMatchesSelection(episode),
                               );
                             }),
                           );
