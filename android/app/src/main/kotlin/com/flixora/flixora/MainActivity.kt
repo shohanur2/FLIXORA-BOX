@@ -44,9 +44,7 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "stop" -> {
-                    val serviceIntent = Intent(this, DownloadForegroundService::class.java)
-                        .setAction(DownloadForegroundService.ACTION_STOP)
-                    startService(serviceIntent)
+                    stopService(Intent(this, DownloadForegroundService::class.java))
                     result.success(true)
                 }
                 else -> result.notImplemented()
