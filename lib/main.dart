@@ -16253,7 +16253,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (lower.contains('<tt') || lower.contains('<ttml')) return 'ttml';
     if (text.contains('-->')) {
       final hasCueTime = RegExp(
-        r'(?m)^\\s*(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}\\s+-->\\s+(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}',
+        r'(?m)^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
       ).hasMatch(text);
       if (!hasCueTime) {
         throw StateError('The selected subtitle has no valid SRT/VTT cue timestamps.');
