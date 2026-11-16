@@ -4100,17 +4100,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     var selectedQuality = _downloadQuality(options.first);
     var loadingSeasonOptions = false;
     var seasonRequestToken = 0;
-    final optionCache = <String, List<Map<String, String>>>{
-      if (isSeries) '$initialSeason:$initialEpisode': initialOptions,
-    };
-    final episodesBySeason = <int, List<int>>{
-      for (final season in seasons)
-        _toInt(season['se']): ((season['episodes'] as List? ?? const [])
-            .map(_toInt)
-            .where((number) => number > 0)
-            .toList()
-          ..sort()),
-    };
     var episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
     final selectedEpisodes = <int>{
       if (initialEpisode > 0 && episodeNumbers.contains(initialEpisode))
@@ -4120,57 +4109,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       selectedEpisodes.add(episodeNumbers.first);
     }
     final selectedQualities = <String>{selectedQuality};
-    final episodeOptionsByNumber = <int, List<Map<String, String>>>{
-      if (isSeries && initialEpisode > 0) initialEpisode: initialOptions,
-    };
-    var loadingEpisodeAvailability = isSeries;
-    var initialAvailabilityStarted = false;
-
-    Future<Map<int, List<Map<String, String>>>> loadSeasonEpisodeOptions(
-      int seasonNumber,
-      List<int> numbers,
-    ) async {
-      final loaded = <int, List<Map<String, String>>>{};
-      // Resolve the season's episode sources concurrently so the list is ready sooner.
-      const batchSize = 8;
-      for (var start = 0; start < numbers.length; start += batchSize) {
-        final batch = numbers.skip(start).take(batchSize).toList();
-        final results = await Future.wait(batch.map((episode) async {
-          final key = '$seasonNumber:$episode';
-          final cached = optionCache[key];
-          if (cached != null) return MapEntry(episode, cached);
-          try {
-            final found = await _movieBoxDirectDownloadOptions(
-              movie, season: seasonNumber, episode: episode,
-            );
-            optionCache[key] = found;
-            return MapEntry(episode, found);
-          } catch (error) {
-            debugPrint('Download availability lookup failed for S$seasonNumber E$episode: $error');
-            optionCache[key] = <Map<String, String>>[];
-            return MapEntry(episode, <Map<String, String>>[]);
-          }
-        }));
-        for (final result in results) {
-          loaded[result.key] = result.value;
-        }
-      }
-      return loaded;
-    }
-
-    List<Map<String, String>> combineEpisodeOptions(
-      Map<int, List<Map<String, String>>> byEpisode,
-    ) {
-      final unique = <String, Map<String, String>>{};
-      for (final episodeOptions in byEpisode.values) {
-        for (final option in episodeOptions) {
-          final key = _downloadLanguage(option).toLowerCase() +
-              '|' + _downloadQuality(option).toLowerCase();
-          unique.putIfAbsent(key, () => option);
-        }
-      }
-      return unique.values.toList(growable: false);
-    }
+    var loadingEpisodeAvailability = false;
 
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -4182,48 +4121,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) {
-          if (isSeries && !initialAvailabilityStarted) {
-            initialAvailabilityStarted = true;
-            Future.microtask(() async {
-              final loaded = await loadSeasonEpisodeOptions(
-                selectedSeason, episodeNumbers,
-              );
-              if (!sheetContext.mounted) return;
-              setSheetState(() {
-                episodeOptionsByNumber
-                  ..clear()
-                  ..addAll(loaded);
-                options = combineEpisodeOptions(loaded);
-                if (options.isNotEmpty) {
-                  final languagesFound = options.map(_downloadLanguage).toSet().toList()..sort();
-                  if (!languagesFound.contains(selectedLanguage)) {
-                    selectedLanguage = languagesFound.first;
-                  }
-                  final matching = options
-                      .where((item) => _downloadLanguage(item) == selectedLanguage)
-                      .map(_downloadQuality)
-                      .toSet()
-                      .toList();
-                  selectedQuality = matching.isNotEmpty ? matching.first : '';
-                  selectedQualities
-                    ..clear()
-                    ..addAll(matching.isNotEmpty ? [selectedQuality] : <String>[]);
-                } else {
-                  selectedQualities.clear();
-                }
-                loadingEpisodeAvailability = false;
-                final available = episodeNumbers.where((episode) =>
-                    (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
-                        .any((item) =>
-                            _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                            selectedQualities.contains(_downloadQuality(item))))
-                    .toList();
-                selectedEpisodes
-                  ..clear()
-                  ..addAll(available.isNotEmpty ? [available.first] : <int>[]);
-              });
-            });
-          }
           final languages = options.map(_downloadLanguage).toSet().toList()..sort();
           if (!languages.contains(selectedLanguage) && languages.isNotEmpty) {
             selectedLanguage = languages.first;
@@ -4241,13 +4138,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
               return bv.compareTo(av);
             });
-          bool episodeMatchesSelection(int episode) =>
-              (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
-                  .any((item) =>
-                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                      selectedQualities.contains(_downloadQuality(item)));
           final availableEpisodeNumbers = isSeries
-              ? episodeNumbers.where(episodeMatchesSelection).toList(growable: false)
+              ? episodeNumbers
               : <int>[];
           final allEpisodesSelected = availableEpisodeNumbers.isNotEmpty &&
               availableEpisodeNumbers.every(selectedEpisodes.contains);
@@ -4351,21 +4243,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               setSheetState(() {
                                 selectedSeason = number;
                                 episodeNumbers = nextEpisodes;
-                                selectedEpisodes.clear();
-                                episodeOptionsByNumber.clear();
+                                selectedEpisodes
+                                  ..clear()
+                                  ..add(nextEpisodes.first);
                                 loadingSeasonOptions = true;
-                                loadingEpisodeAvailability = true;
                               });
                               try {
-                                final loaded = await loadSeasonEpisodeOptions(
-                                  number, nextEpisodes,
+                                final firstOptions = await _movieBoxDirectDownloadOptions(
+                                  movie,
+                                  season: number,
+                                  episode: nextEpisodes.first,
                                 );
                                 if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
                                 setSheetState(() {
-                                  episodeOptionsByNumber
-                                    ..clear()
-                                    ..addAll(loaded);
-                                  options = combineEpisodeOptions(loaded);
+                                  options = firstOptions;
                                   if (options.isNotEmpty) {
                                     selectedLanguage = _downloadLanguage(options.first);
                                     selectedQuality = _downloadQuality(options.first);
@@ -4376,22 +4267,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     selectedQualities.clear();
                                   }
                                   loadingSeasonOptions = false;
-                                  loadingEpisodeAvailability = false;
-                                  final available = episodeNumbers.where((episode) =>
-                                      (episodeOptionsByNumber[episode] ??
-                                          const <Map<String, String>>[]).any((item) =>
-                                          _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
-                                          selectedQualities.contains(_downloadQuality(item))))
-                                      .toList();
-                                  if (available.isNotEmpty) {
-                                    selectedEpisodes.add(available.first);
-                                  }
                                 });
                               } catch (error) {
                                 if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
+                                debugPrint('Download quality lookup failed for season $number: $error');
                                 setSheetState(() {
+                                  options = <Map<String, String>>[];
+                                  selectedQualities.clear();
                                   loadingSeasonOptions = false;
-                                  loadingEpisodeAvailability = false;
                                 });
                               }
                             },
@@ -4456,15 +4339,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                           selectedQualities
                                             ..clear()
                                             ..add(quality);
-                                          selectedEpisodes.removeWhere(
-                                            (episode) => !episodeMatchesSelection(episode),
-                                          );
-                                          final available = episodeNumbers
-                                              .where(episodeMatchesSelection)
-                                              .toList(growable: false);
-                                          if (selectedEpisodes.isEmpty && available.isNotEmpty) {
-                                            selectedEpisodes.add(available.first);
-                                          }
+
                                         });
                                       },
                                     );
@@ -4478,7 +4353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           const Text('Episodes', style: TextStyle(
                             color: white, fontSize: 15, fontWeight: FontWeight.w700,
                           )),
-                          if (loadingEpisodeAvailability || loadingSeasonOptions)
+                          if (loadingSeasonOptions)
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 10),
                               child: Center(child: CircularProgressIndicator(color: gold)),
