@@ -16384,20 +16384,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _selectAutomaticEnglishSubtitle() async {
-    if (_automaticEnglishTrack != null) {
-      await _selectSubtitleTrack(_automaticEnglishTrack!);
-      return;
-    }
-    if (_automaticSubtitlePath != null) {
-      await _selectSubtitleTrack(SubtitleTrack.uri(
-        _automaticSubtitlePath!, title: 'Subtitle', language: 'en'));
-      return;
-    }
-    Navigator.of(context).pop();
-    await _ensureAutomaticEnglishSubtitle();
-  }
-
   Future<void> _setSubtitleVisibility(bool enabled) async {
     try {
       final native = _player.platform;
@@ -16542,7 +16528,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                               ),
                               Switch.adaptive(
                                 value: _subtitleVisibilityEnabled,
-                                activeColor: Colors.black,
+                                activeThumbColor: Colors.black,
                                 activeTrackColor: playerGold,
                                 inactiveThumbColor: Colors.white70,
                                 inactiveTrackColor: const Color(0xFF454545),
