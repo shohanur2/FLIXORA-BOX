@@ -15481,8 +15481,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         RegExp(r'[^A-Za-z0-9._-]'),
         '_',
       );
+      final baseName = safeName.contains('.')
+          ? safeName.substring(0, safeName.lastIndexOf('.'))
+          : safeName;
       final storedFile = File(
-        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_$safeName',
+        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
       );
       await file.copy(storedFile.path);
 
@@ -16225,10 +16228,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     final preferredExtension = _subtitleExtensionForOption(option);
     final support = await getApplicationSupportDirectory();
-    final cacheDir = Directory('${{support.path}/flixora_subtitles');
+    final cacheDir = Directory('${support.path}/flixora_subtitles');
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
     final cacheBase = _automaticSubtitleCacheKey(languageCode);
-    final preferredCache = File('${{cacheDir.path}/${{cacheBase}.$preferredExtension');
+    final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
     if (await preferredCache.exists() && await preferredCache.length() > 16) return preferredCache;
 
     final download = await http.get(uri, headers: const {
@@ -16237,7 +16240,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }).timeout(const Duration(seconds: 25));
     if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
         download.bodyBytes.length > 10 * 1024 * 1024) {
-      throw StateError('Could not download the selected subtitle (HTTP ${{download.statusCode}).');
+      throw StateError('Could not download the selected subtitle (HTTP ${download.statusCode}).');
     }
     final bytes = download.bodyBytes;
     if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) {
@@ -16254,7 +16257,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (actualExtension == 'sup' && !isPgs) {
       throw StateError('The PGS subtitle data is incomplete or invalid.');
     }
-    final cachedFile = File('${{cacheDir.path}/${{cacheBase}.$actualExtension');
+    final cachedFile = File('${cacheDir.path}/${cacheBase}.$actualExtension');
     if (await cachedFile.exists() && await cachedFile.length() > 16) return cachedFile;
     await cachedFile.writeAsBytes(bytes, flush: true);
     return cachedFile;
@@ -16299,7 +16302,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 _automaticEnglishTrack = track;
                 _subtitleVisibilityEnabled = true;
                 _automaticSubtitleMessage =
-                    'Available in this video · ${{_subtitleLanguageName(track.language ?? '')}';
+                    'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
               });
             }
           } catch (error) {
@@ -16355,7 +16358,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (mounted && !_isDisposed) {
         setState(() {
           _automaticSubtitleOptions = available;
-          _automaticSubtitleMessage = '${{available.length} language(s) available';
+          _automaticSubtitleMessage = '${available.length} language(s) available';
         });
       }
       if (embeddedTrackSelected || _subtitleManuallySelected) return;
@@ -16390,7 +16393,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _subtitleVisibilityEnabled = true;
           _automaticSubtitlePath = file.path;
           _automaticEnglishTrack = track;
-          _automaticSubtitleMessage = '${{_subtitleLanguageName(code)} downloaded and ready';
+          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} downloaded and ready';
         });
       }
     } catch (error) {
