@@ -1809,6 +1809,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final Set<int> _saved = {};
   final List<Movie> _watchHistory = [];
   final List<DownloadTask> _downloads = [];
+  static const MethodChannel _downloadBackgroundChannel =
+      MethodChannel('com.flixora.flixora/download_background');
+  int _activeBackgroundDownloadTasks = 0;
+
+  Future<bool> _beginBackgroundDownloadTask() async {
+    if (!_downloadInBackground) return false;
+    _activeBackgroundDownloadTasks++;
+    if (_activeBackgroundDownloadTasks == 1) {
+      try {
+        await _downloadBackgroundChannel.invokeMethod<void>('start');
+      } catch (error) {
+        debugPrint('Could not start Android download foreground service: $error');
+      }
+    }
+    return true;
+  }
+
+  Future<void> _endBackgroundDownloadTask(bool started) async {
+    if (!started) return;
+    if (_activeBackgroundDownloadTasks > 0) {
+      _activeBackgroundDownloadTasks--;
+    }
+    if (_activeBackgroundDownloadTasks == 0) {
+      try {
+        await _downloadBackgroundChannel.invokeMethod<void>('stop');
+      } catch (error) {
+        debugPrint('Could not stop Android download foreground service: $error');
+      }
+    }
+  }
   String? _profileSection;
   final TextEditingController _communityPostController = TextEditingController();
   Future<bool>? _communityProfileFuture;
@@ -2891,7 +2921,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _notificationsEnabled = prefs.getBool('flixora_notifications') ?? true;
         _familyMode = prefs.getBool('flixora_family_mode') ?? false;
-        _downloadInBackground = prefs.getBool('flixora_download_background') ?? false;
+        _downloadInBackground = prefs.getBool('flixora_download_background') ?? true;
         _autoMiniPlayer = prefs.getBool('flixora_auto_miniplayer') ?? true;
         _appLanguage = prefs.getString('flixora_language') ?? 'English';
         _preferredQuality = prefs.getString('flixora_preferred_quality') ?? 'Auto';
@@ -4826,7 +4856,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final firstIndex = task.sourceIndex.clamp(0, candidates.length - 1).toInt();
+    final backgroundSession = await _beginBackgroundDownloadTask();
+    try {
+      final firstIndex = task.sourceIndex.clamp(0, candidates.length - 1).toInt();
     for (var index = firstIndex; index < candidates.length; index++) {
       final candidate = candidates[index];
       final url = (candidate['video_url'] ?? '').trim();
@@ -4956,6 +4988,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       await MovieCache.saveDownloads(_downloads);
       _showMessage(failureMessage);
       return;
+      }
+    } finally {
+      await _endBackgroundDownloadTask(backgroundSession);
     }
   }
 

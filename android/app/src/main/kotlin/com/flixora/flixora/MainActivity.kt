@@ -1,6 +1,7 @@
 package com.flixora.flixora
 
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
@@ -21,6 +22,29 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "setEnabled" -> {
                     pipEnabled = call.argument<Boolean>("enabled") ?: false
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.flixora.flixora/download_background"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    val serviceIntent = Intent(this, DownloadForegroundService::class.java)
+                        .setAction(DownloadForegroundService.ACTION_START)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    result.success(true)
+                }
+                "stop" -> {
+                    stopService(Intent(this, DownloadForegroundService::class.java))
                     result.success(true)
                 }
                 else -> result.notImplemented()
