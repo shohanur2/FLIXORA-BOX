@@ -4182,7 +4182,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (isSeries && selectedEpisodes.isEmpty && episodeNumbers.isNotEmpty) {
       selectedEpisodes.add(episodeNumbers.first);
     }
-    final selectedQualities = <String>{selectedQuality};
+    final selectedQualities = <String>{if (selectedQuality.isNotEmpty) selectedQuality};
 
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -4826,7 +4826,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return;
     }
 
-    final firstIndex = task.sourceIndex.clamp(0, candidates.length - 1);
+    final firstIndex = task.sourceIndex.clamp(0, candidates.length - 1).toInt();
     for (var index = firstIndex; index < candidates.length; index++) {
       final candidate = candidates[index];
       final url = (candidate['video_url'] ?? '').trim();
