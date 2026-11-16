@@ -11352,7 +11352,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   bool _automaticSubtitleEmbeddedSelected = false;
   String? _automaticSubtitlePath;
   String? _automaticSubtitleMessage;
-  SubtitleTrack? _automaticEnglishTrack;
   List<Map<String, dynamic>> _automaticSubtitleResults = [];
   final Map<String, String> _automaticSubtitlePaths = {};
   int _automaticSubtitleRequestToken = 0;
@@ -12367,7 +12366,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _isOpening = true;
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
-    _automaticEnglishTrack = null;
     _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _automaticSubtitleResults = [];
@@ -12444,7 +12442,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           }
           await _restoreResumePosition();
           _subtitleManuallySelected = false;
-          _automaticEnglishTrack = null;
           _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
@@ -13060,7 +13057,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _isOpening = true;
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
-    _automaticEnglishTrack = null;
     _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _automaticSubtitleResults = [];
@@ -13157,7 +13153,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           await _player.play();
           if (!mounted || _isDisposed) return;
           _subtitleManuallySelected = false;
-          _automaticEnglishTrack = null;
           _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
@@ -14930,7 +14925,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           embeddedSelected = true;
           _automaticSubtitleEmbeddedSelected = true;
           if (mounted && !_isDisposed) setState(() {
-            _automaticEnglishTrack = _isEnglishSubtitleTrack(track) ? track : null;
             _automaticSubtitleMessage = 'Embedded ${_subtitleLanguageName(_subtitleTrackLanguage(track))} selected';
           });
           break;
@@ -14975,7 +14969,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (mounted && !_isDisposed) setState(() {
         _automaticSubtitlePaths[code] = path;
         _automaticSubtitlePath = path;
-        _automaticEnglishTrack = code == 'en' ? track : null;
         _automaticSubtitleMessage = '${_subtitleLanguageName(code)} downloaded and ready';
       });
     } catch (error) {
@@ -14998,7 +14991,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       _automaticSubtitleEmbeddedSelected = true;
       if (mounted && !_isDisposed && !_subtitleManuallySelected) setState(() {
-        _automaticEnglishTrack = _isEnglishSubtitleTrack(track) ? track : null;
         _automaticSubtitleMessage = 'Embedded ${_subtitleLanguageName(_subtitleTrackLanguage(track))} selected';
       });
     } catch (error) {
@@ -15016,7 +15008,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (mounted && !_isDisposed) setState(() {
         _automaticSubtitlePaths[code] = path;
         _automaticSubtitlePath = path;
-        _automaticEnglishTrack = code == 'en' ? track : null;
         _automaticSubtitleMessage = '${_subtitleLanguageName(code)} selected';
       });
     } catch (error) {
@@ -15026,15 +15017,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _selectAutomaticEnglishSubtitle() async {
-    final english = _automaticSubtitleResults.where((item) => item['language'] == 'en');
-    if (english.isNotEmpty) {
-      await _selectAutomaticLanguageSubtitle(english.first);
-    } else {
-      Navigator.of(context).pop();
-      await _ensureAutomaticEnglishSubtitle();
-    }
-  }
+
 
   void _showSubtitleTracks() {
     final subtitleTracks = _tracks.subtitle;
