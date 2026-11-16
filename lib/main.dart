@@ -4016,6 +4016,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       selectedEpisodes.add(episodeNumbers.first);
     }
     final selectedQualities = <String>{selectedQuality};
+    final episodeOptionsByNumber = <int, List<Map<String, String>>>{
+      if (isSeries && initialEpisode > 0) initialEpisode: initialOptions,
+    };
+    var loadingEpisodeAvailability = isSeries;
+    var initialAvailabilityStarted = false;
+
+    Future<Map<int, List<Map<String, String>>>> loadSeasonEpisodeOptions(
+      int seasonNumber,
+      List<int> numbers,
+    ) async {
+      final loaded = <int, List<Map<String, String>>>{};
+      const batchSize = 3;
+      for (var start = 0; start < numbers.length; start += batchSize) {
+        final batch = numbers.skip(start).take(batchSize).toList();
+        final results = await Future.wait(batch.map((episode) async {
+          final key = '$seasonNumber:$episode';
+          final cached = optionCache[key];
+          if (cached != null) return MapEntry(episode, cached);
+          try {
+            final found = await _movieBoxDirectDownloadOptions(
+              movie, season: seasonNumber, episode: episode,
+            );
+            optionCache[key] = found;
+            return MapEntry(episode, found);
+          } catch (error) {
+            debugPrint('Download availability lookup failed for S$seasonNumber E$episode: $error');
+            optionCache[key] = <Map<String, String>>[];
+            return MapEntry(episode, <Map<String, String>>[]);
+          }
+        }));
+        for (final result in results) {
+          loaded[result.key] = result.value;
+        }
+      }
+      return loaded;
+    }
+
+    List<Map<String, String>> combineEpisodeOptions(
+      Map<int, List<Map<String, String>>> byEpisode,
+    ) {
+      final unique = <String, Map<String, String>>{};
+      for (final episodeOptions in byEpisode.values) {
+        for (final option in episodeOptions) {
+          final key = _downloadLanguage(option).toLowerCase() +
+              '|' + _downloadQuality(option).toLowerCase();
+          unique.putIfAbsent(key, () => option);
+        }
+      }
+      return unique.values.toList(growable: false);
+    }
 
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -4027,6 +4077,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) {
+          if (isSeries && !initialAvailabilityStarted) {
+            initialAvailabilityStarted = true;
+            Future.microtask(() async {
+              final loaded = await loadSeasonEpisodeOptions(
+                selectedSeason, episodeNumbers,
+              );
+              if (!sheetContext.mounted) return;
+              setSheetState(() {
+                episodeOptionsByNumber
+                  ..clear()
+                  ..addAll(loaded);
+                options = combineEpisodeOptions(loaded);
+                if (options.isNotEmpty) {
+                  final languagesFound = options.map(_downloadLanguage).toSet().toList()..sort();
+                  if (!languagesFound.contains(selectedLanguage)) {
+                    selectedLanguage = languagesFound.first;
+                  }
+                  final matching = options
+                      .where((item) => _downloadLanguage(item) == selectedLanguage)
+                      .map(_downloadQuality)
+                      .toSet()
+                      .toList();
+                  selectedQuality = matching.isNotEmpty ? matching.first : '';
+                  selectedQualities
+                    ..clear()
+                    ..addAll(matching.isNotEmpty ? [selectedQuality] : <String>[]);
+                } else {
+                  selectedQualities.clear();
+                }
+                loadingEpisodeAvailability = false;
+                final available = episodeNumbers.where((episode) =>
+                    (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
+                        .any((item) =>
+                            _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
+                            selectedQualities.contains(_downloadQuality(item))))
+                    .toList();
+                selectedEpisodes
+                  ..clear()
+                  ..addAll(available.isNotEmpty ? [available.first] : <int>[]);
+              });
+            });
+          }
           final languages = options.map(_downloadLanguage).toSet().toList()..sort();
           if (!languages.contains(selectedLanguage) && languages.isNotEmpty) {
             selectedLanguage = languages.first;
@@ -4044,8 +4136,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final bv = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '') ?? 0;
               return bv.compareTo(av);
             });
-          final allEpisodesSelected = episodeNumbers.isNotEmpty &&
-              selectedEpisodes.length == episodeNumbers.length;
+          final availableEpisodeNumbers = isSeries
+              ? episodeNumbers.where((episode) =>
+                  (episodeOptionsByNumber[episode] ?? const <Map<String, String>>[])
+                      .any((item) =>
+                          _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
+                          selectedQualities.contains(_downloadQuality(item))))
+                  .toList(growable: false)
+              : <int>[];
+          selectedEpisodes.removeWhere(
+            (episode) => !availableEpisodeNumbers.contains(episode),
+          );
+          final allEpisodesSelected = availableEpisodeNumbers.isNotEmpty &&
+              availableEpisodeNumbers.every(selectedEpisodes.contains);
           final allQualitiesSelected = qualities.isNotEmpty &&
               qualities.every(selectedQualities.contains);
 
@@ -4113,6 +4216,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               selectedQualities
                                 ..clear()
                                 ..addAll(matching);
+                              selectedEpisodes.removeWhere((episode) =>
+                                  !(episodeOptionsByNumber[episode] ??
+                                      const <Map<String, String>>[]).any((item) =>
+                                      _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
+                                      selectedQualities.contains(_downloadQuality(item))));
                             });
                           },
                         ),
@@ -4138,36 +4246,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               final nextEpisodes = episodesBySeason[number] ?? <int>[];
                               if (nextEpisodes.isEmpty) return;
                               final nextEpisode = nextEpisodes.first;
-                              final cacheKey = '$number:$nextEpisode';
-                              final cachedOptions = optionCache[cacheKey];
                               final requestToken = ++seasonRequestToken;
                               setSheetState(() {
                                 selectedSeason = number;
                                 episodeNumbers = nextEpisodes;
-                                selectedEpisodes
-                                  ..clear()
-                                  ..add(nextEpisode);
-                                if (cachedOptions != null) {
-                                  options = cachedOptions;
-                                  selectedLanguage = _downloadLanguage(options.first);
-                                  selectedQuality = _downloadQuality(options.first);
-                                  selectedQualities
-                                    ..clear()
-                                    ..add(selectedQuality);
-                                  loadingSeasonOptions = false;
-                                } else {
-                                  loadingSeasonOptions = true;
-                                }
+                                selectedEpisodes.clear();
+                                episodeOptionsByNumber.clear();
+                                loadingSeasonOptions = true;
+                                loadingEpisodeAvailability = true;
                               });
-                              if (cachedOptions != null) return;
                               try {
-                                final nextOptions = await _movieBoxDirectDownloadOptions(
-                                  movie, season: number, episode: nextEpisode,
+                                final loaded = await loadSeasonEpisodeOptions(
+                                  number, nextEpisodes,
                                 );
                                 if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
-                                optionCache[cacheKey] = nextOptions;
                                 setSheetState(() {
-                                  options = nextOptions;
+                                  episodeOptionsByNumber
+                                    ..clear()
+                                    ..addAll(loaded);
+                                  options = combineEpisodeOptions(loaded);
                                   if (options.isNotEmpty) {
                                     selectedLanguage = _downloadLanguage(options.first);
                                     selectedQuality = _downloadQuality(options.first);
@@ -4178,10 +4275,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                     selectedQualities.clear();
                                   }
                                   loadingSeasonOptions = false;
+                                  loadingEpisodeAvailability = false;
+                                  final available = episodeNumbers.where((episode) =>
+                                      (episodeOptionsByNumber[episode] ??
+                                          const <Map<String, String>>[]).any((item) =>
+                                          _downloadLanguage(item).toLowerCase() == selectedLanguage.toLowerCase() &&
+                                          selectedQualities.contains(_downloadQuality(item))))
+                                      .toList();
+                                  if (available.isNotEmpty) {
+                                    selectedEpisodes.add(available.first);
+                                  }
                                 });
                               } catch (error) {
                                 if (!sheetContext.mounted || requestToken != seasonRequestToken) return;
-                                setSheetState(() => loadingSeasonOptions = false);
+                                setSheetState(() {
+                                  loadingSeasonOptions = false;
+                                  loadingEpisodeAvailability = false;
+                                });
                               }
                             },
                           ),
@@ -4199,6 +4309,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 } else {
                                   selectedQualities.addAll(qualities);
                                 }
+                                selectedEpisodes.removeWhere(
+                                  (episode) => !availableEpisodeNumbers.contains(episode),
+                                );
                               }),
                               child: Text(allQualitiesSelected ? 'Clear qualities' : 'Select all qualities'),
                             ),
@@ -4231,6 +4344,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             onChanged: loadingSeasonOptions ? null : (checked) => setSheetState(() {
                               if (checked == true) { selectedQualities.add(quality); }
                               else { selectedQualities.remove(quality); }
+                              selectedEpisodes.removeWhere(
+                                (episode) => !availableEpisodeNumbers.contains(episode),
+                              );
                             }),
                           );
                         }),
@@ -4239,20 +4355,34 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           const Text('Episodes', style: TextStyle(
                             color: white, fontSize: 15, fontWeight: FontWeight.w700,
                           )),
-                          ...episodeNumbers.map((episode) => CheckboxListTile(
-                            dense: true, contentPadding: EdgeInsets.zero,
-                            activeColor: gold, checkColor: bg,
-                            value: selectedEpisodes.contains(episode),
-                            title: Text(
-                              'S' + selectedSeason.toString().padLeft(2, '0') +
-                              ' E' + episode.toString().padLeft(2, '0'),
-                              style: const TextStyle(color: white),
-                            ),
-                            onChanged: (checked) => setSheetState(() {
-                              if (checked == true) selectedEpisodes.add(episode);
-                              else selectedEpisodes.remove(episode);
-                            }),
-                          )),
+                          if (loadingEpisodeAvailability || loadingSeasonOptions)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 10),
+                              child: Center(child: CircularProgressIndicator(color: gold)),
+                            )
+                          else if (availableEpisodeNumbers.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                'No episodes are available in the selected quality.',
+                                style: TextStyle(color: ink60, fontSize: 12),
+                              ),
+                            )
+                          else
+                            ...availableEpisodeNumbers.map((episode) => CheckboxListTile(
+                              dense: true, contentPadding: EdgeInsets.zero,
+                              activeColor: gold, checkColor: bg,
+                              value: selectedEpisodes.contains(episode),
+                              title: Text(
+                                'S' + selectedSeason.toString().padLeft(2, '0') +
+                                ' E' + episode.toString().padLeft(2, '0'),
+                                style: const TextStyle(color: white),
+                              ),
+                              onChanged: (checked) => setSheetState(() {
+                                if (checked == true) selectedEpisodes.add(episode);
+                                else selectedEpisodes.remove(episode);
+                              }),
+                            )),
                         ],
                       ],
                     ),
@@ -4267,10 +4397,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               foregroundColor: goldLight, side: const BorderSide(color: gold),
                               padding: const EdgeInsets.symmetric(vertical: 13),
                             ),
-                            onPressed: episodeNumbers.isEmpty ? null : () => setSheetState(() {
-                              if (allEpisodesSelected) selectedEpisodes.clear();
-                              else selectedEpisodes.addAll(episodeNumbers);
-                            }),
+                            onPressed: availableEpisodeNumbers.isEmpty ||
+                                    loadingEpisodeAvailability || loadingSeasonOptions
+                                ? null
+                                : () => setSheetState(() {
+                                    if (allEpisodesSelected) selectedEpisodes.clear();
+                                    else selectedEpisodes.addAll(availableEpisodeNumbers);
+                                  }),
                             icon: const Icon(Icons.select_all_rounded, size: 18),
                             label: Text(allEpisodesSelected ? 'Clear episodes' : 'Select All'),
                           ),
