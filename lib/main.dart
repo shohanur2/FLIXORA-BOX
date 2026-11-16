@@ -12640,7 +12640,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     );
   }
 
-  Future<void> _prepareMovieBoxPlayback() async {
+  Future<void> _prepareMovieBoxPlayback({
+    Future<void>? playerConfiguration,
+  }) async {
     if (_isDisposed || !_playerIsOnline) {
       if (mounted) {
         setState(() => _errorMessage = 'Connect to the internet to load this MovieBox title.');
@@ -12686,6 +12688,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         season: widget.movie.movieBoxIsSeries ? targetSeason : 0,
         episode: widget.movie.movieBoxIsSeries ? targetEpisode : 0,
         openPlayer: true,
+        playerConfiguration: playerConfiguration,
       );
 
       if (widget.movie.movieBoxIsSeries) {
@@ -12767,6 +12770,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 season: targetSeason,
                 episode: targetEpisode,
                 openPlayer: true,
+                playerConfiguration: playerConfiguration,
               );
             }
           }
@@ -12884,6 +12888,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int season,
     required int episode,
     required bool openPlayer,
+    Future<void>? playerConfiguration,
   }) async {
     if (openPlayer) {
       _bufferingRecoveryTimer?.cancel();
@@ -13017,7 +13022,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         });
 
         if (!openPlayer) return;
-        final opened = await _openMovieBoxEpisode(options.first, requestToken);
+        final opened = await _openMovieBoxEpisode(
+          options.first,
+          requestToken,
+          playerConfiguration: playerConfiguration,
+        );
         if (opened) return;
         if (attempt == 1) {
           throw StateError('Fresh MovieBox links were also unavailable.');
@@ -13044,8 +13053,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<bool> _openMovieBoxEpisode(
     Map<String, String> item,
-    int requestToken,
-  ) async {
+    int requestToken, {
+    Future<void>? playerConfiguration,
+  }) async {
     final candidates = <Map<String, String>>[
       item,
       ..._availableQualities.where(
@@ -13077,6 +13087,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
     try {
+      // Resolve MovieBox stream metadata while MPV network settings are
+      // applied. Wait only immediately before opening the native stream.
+      if (playerConfiguration != null) await playerConfiguration;
+      if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
+        return false;
+      }
       for (final candidate in candidates) {
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
           return false;
@@ -13291,19 +13307,24 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _prepareAndInitializePlayer() async {
-    // Apply MPV cache settings before opening a network stream.
-    await _configureVolumeBoost();
+    // Start MPV network configuration immediately and overlap it with source
+    // and quality resolution. It is awaited only before the native player opens.
+    final playerConfiguration = _configureVolumeBoost();
     if (_isDisposed) return;
 
     // A downloaded MovieBox movie/episode must play from local storage without
     // trying to resolve online seasons or CDN streams again.
     if (widget.localFilePath != null) {
+      await playerConfiguration;
+      if (_isDisposed) return;
       await _initializePlayer();
       return;
     }
 
     if (widget.movie.isMovieBox) {
-      await _prepareMovieBoxPlayback();
+      await _prepareMovieBoxPlayback(
+        playerConfiguration: playerConfiguration,
+      );
       return;
     }
 
@@ -13318,6 +13339,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     // Start a valid direct source immediately while quality metadata loads.
     // If the movie has no legacy URL, retry once the quality list is ready.
     final qualitiesFuture = _loadVideoQualities();
+    await playerConfiguration;
+    if (_isDisposed) return;
     await _initializePlayer();
     if (!mounted || _isDisposed) return;
     await qualitiesFuture;
@@ -13572,19 +13595,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       // Keep the active source, headers, audio/subtitle tracks and Player
       // settings intact; do not reopen the stream or replace its provider.
       await _saveResumePosition(position);
-      await _player.pause();
-      await Future.delayed(const Duration(milliseconds: 250));
+      // Reassert playback in place. Pause/reopen/seek cycles can issue another
+      // network request and make an existing stream stall worse.
       if (!mounted || _isDisposed) return;
       await _player.play();
-      if (position > Duration.zero) {
-        await Future.delayed(const Duration(milliseconds: 700));
-        if (!mounted || _isDisposed) return;
-        try {
-          await _player.seek(position);
-        } catch (error) {
-          debugPrint('FLIXORA buffering recovery seek unavailable: $error');
-        }
-      }
     } catch (error) {
       debugPrint('FLIXORA buffering recovery failed: $error');
     } finally {
@@ -13698,7 +13712,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       if (value) {
         _bufferingRecoveryTimer?.cancel();
-        _bufferingRecoveryTimer = Timer(const Duration(seconds: 18), () {
+        _bufferingRecoveryTimer = Timer(const Duration(seconds: 10), () {
           if (!mounted || _isDisposed || !_isBuffering) return;
           unawaited(_recoverFromStalledBuffering());
         });
@@ -14377,10 +14391,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('demuxer-readahead-secs', '30');
+        await platformPlayer.setProperty('demuxer-readahead-secs', '45');
+        await platformPlayer.setProperty('cache-secs', '45');
         await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
         await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
-        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+        await platformPlayer.setProperty('cache-pause-wait', '0.75');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
@@ -17090,7 +17105,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Widget _playerBody() {
-    if (widget.movie.isMovieBox && _loadingQualities) {
+    if (widget.movie.isMovieBox && _loadingQualities && !_initialized) {
       return Container(
         color: Colors.black,
         child: const Center(
@@ -17106,10 +17121,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 ),
               ),
               SizedBox(height: 12),
-              Text(
-                'Preparing stream...',
-                style: TextStyle(color: playerWhite, fontSize: 13),
-              ),
+              // Keep the lightweight progress indicator without a blocking
+              // "Preparing stream..." label while the source is resolving.
             ],
           ),
         ),
