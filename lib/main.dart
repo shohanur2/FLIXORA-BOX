@@ -15081,19 +15081,42 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     ));
   }
 
+  Future<void> _activateSubtitleTrack(SubtitleTrack track) async {
+    if (_isDisposed) throw StateError('The video player is no longer active.');
+    await _player.setSubtitleTrack(track);
+    final native = _player.platform;
+    if (native is NativePlayer) {
+      await native.setProperty('sub-visibility', 'yes');
+      await native.setProperty('sub-ass-override', 'force');
+    }
+    await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+    // Allow the native player to publish the selected external/embedded track.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (_isDisposed) throw StateError('The video player was closed while loading subtitles.');
+    final activeId = _player.state.track.subtitle.id;
+    if (track.id != 'auto' && track.id != 'no' && activeId != track.id) {
+      debugPrint('FLIXORA subtitle activation mismatch: requested=${track.id}, active=$activeId');
+      throw StateError('Subtitle file was added but the player did not activate its track.');
+    }
+  }
+
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    _subtitleManuallySelected = true;
-    _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
-    _subtitleVisibilityEnabled = track.id != 'no';
     try {
-      await _player.setSubtitleTrack(track);
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-      if (mounted && !_isDisposed) Navigator.of(context).maybePop();
+      await _activateSubtitleTrack(track);
+      _subtitleManuallySelected = true;
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+        _subtitleVisibilityEnabled = track.id != 'no';
+        _automaticEnglishTrack = track;
+        _automaticSubtitleMessage = 'Subtitle track active';
+      });
+      Navigator.of(context).maybePop();
       _startHideTimer();
     } catch (error) {
       if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not change subtitle track: $error')),
+          SnackBar(content: Text('Could not activate subtitle: $error')),
         );
       }
     }
@@ -15441,29 +15464,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml', 'scc', 'lrc', 'rt', 'sup'],
+        allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'],
         allowMultiple: false,
-        withData: false,
+        withData: true,
       );
       if (result == null || result.files.isEmpty) return;
       final picked = result.files.single;
       final path = picked.path;
-      if (path == null || path.isEmpty) throw StateError('Could not access the selected subtitle file.');
-      final file = File(path);
-      if (!await file.exists()) throw StateError('The selected subtitle file is not available.');
-      final length = await file.length();
-      if (length < 8 || length > 10 * 1024 * 1024) {
+      final sourceFile = path == null || path.isEmpty ? null : File(path);
+      final bytes = picked.bytes ??
+          (sourceFile != null && await sourceFile.exists()
+              ? await sourceFile.readAsBytes()
+              : null);
+      if (bytes == null) {
+        throw StateError('Android could not read the selected subtitle. Please select the file again.');
+      }
+      if (bytes.length < 8 || bytes.length > 10 * 1024 * 1024) {
         throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
       }
-      final bytes = await file.readAsBytes();
-      final content = utf8.decode(bytes, allowMalformed: true);
       final ext = picked.extension?.toLowerCase() ?? '';
-      final isPgs = ext == 'sup' && bytes.length >= 2 &&
-          bytes[0] == 0x50 && bytes[1] == 0x47;
-      final detectedExtension = isPgs ? 'sup' : _detectSubtitleExtension(content, ext);
-      if (detectedExtension == 'sup' && !isPgs) {
-        throw StateError('The PGS subtitle file is incomplete or invalid.');
+      final decodedText = _decodeSubtitleText(bytes);
+      final detectedExtension = _detectSubtitleExtension(decodedText, ext);
+      if (detectedExtension == 'sub') {
+        throw StateError('MicroDVD .sub subtitles are not supported reliably. Please use SRT or ASS.');
       }
+      final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
 
       // Keep imported subtitles in app-private storage. File-picker paths can
       // be temporary content-provider paths on Android and may expire later.
@@ -15482,23 +15507,26 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final storedFile = File(
         '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
       );
-      await file.copy(storedFile.path);
+      await storedFile.writeAsBytes(normalizedBytes, flush: true);
 
       final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it|nl|pl|th|id|ms|fa)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
       final language = match?.group(1)?.toLowerCase() ?? 'external';
       final track = SubtitleTrack.uri(Uri.file(storedFile.path).toString(),
           title: picked.name, language: language);
+      await _activateSubtitleTrack(track);
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       if (mounted && !_isDisposed) {
+        setState(() {
+          _selectedSubtitleLanguageCode = language;
+          _subtitleVisibilityEnabled = true;
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage = 'Imported and loaded: ${picked.name}';
+        });
         Navigator.of(context).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Subtitle imported: ${picked.name}')));
+          SnackBar(content: Text('Subtitle loaded: ${picked.name}')));
       }
     } catch (error) {
       if (mounted && !_isDisposed) {
@@ -16180,6 +16208,31 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return 'srt';
   }
 
+  String _decodeSubtitleText(List<int> bytes) {
+    if (bytes.isEmpty) return '';
+    // Subtitle packs frequently use UTF-16 LE/BE despite the .srt extension.
+    if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+      final units = <int>[];
+      for (var i = 2; i + 1 < bytes.length; i += 2) {
+        units.add(bytes[i] | (bytes[i + 1] << 8));
+      }
+      return String.fromCharCodes(units);
+    }
+    if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+      final units = <int>[];
+      for (var i = 2; i + 1 < bytes.length; i += 2) {
+        units.add((bytes[i] << 8) | bytes[i + 1]);
+      }
+      return String.fromCharCodes(units);
+    }
+    var start = bytes.length >= 3 &&
+            bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
+        ? 3
+        : 0;
+    final text = utf8.decode(bytes.sublist(start), allowMalformed: true);
+    return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
+  }
+
   String _detectSubtitleExtension(String source, String preferred) {
     final text = source.replaceFirst('\uFEFF', '').trim();
     final lower = text.toLowerCase();
@@ -16191,11 +16244,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     if (lower.startsWith('webvtt')) return 'vtt';
     if (lower.contains('[script info]') || lower.contains('[v4+ styles]') || lower.contains(r'{\an')) {
+      if (!lower.contains('[events]') || !lower.contains('dialogue:')) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
       return preferred == 'ssa' ? 'ssa' : 'ass';
     }
     if (lower.contains('<sami') || lower.contains('<sync')) return 'smi';
     if (lower.contains('<tt') || lower.contains('<ttml')) return 'ttml';
-    if (text.contains('-->')) return lower.contains('webvtt') ? 'vtt' : 'srt';
+    if (text.contains('-->')) {
+      final hasCueTime = RegExp(
+        r'(?m)^\\s*(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}\\s+-->\\s+(?:\\d{1,2}:)?\\d{2}:\\d{2}[,.]\\d{3}',
+      ).hasMatch(text);
+      if (!hasCueTime) {
+        throw StateError('The selected subtitle has no valid SRT/VTT cue timestamps.');
+      }
+      return lower.contains('webvtt') ? 'vtt' : 'srt';
+    }
     if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(text) || lower.contains('[subtitle]')) return 'sub';
     if (RegExp(r'(?m)^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]').hasMatch(text)) return 'lrc';
     if (RegExp(r'(?m)^\s*\d{2}:\d{2}:\d{2};\d{2}').hasMatch(text) || lower.contains('scenarist_scc')) return 'scc';
@@ -16225,7 +16289,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final support = await getApplicationSupportDirectory();
     final cacheDir = Directory('${support.path}/flixora_subtitles');
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
-    final cacheBase = _automaticSubtitleCacheKey(languageCode);
+    final releaseIdentity = [
+      option['releaseName'] ?? '',
+      option['fileName'] ?? '',
+      option['downloadUrl'] ?? '',
+    ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${releaseIdentity.hashCode.abs()}';
     final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
     if (await preferredCache.exists() && await preferredCache.length() > 16) return preferredCache;
 
@@ -16253,8 +16322,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       throw StateError('The PGS subtitle data is incomplete or invalid.');
     }
     final cachedFile = File('${cacheDir.path}/${cacheBase}.$actualExtension');
-    if (await cachedFile.exists() && await cachedFile.length() > 16) return cachedFile;
-    await cachedFile.writeAsBytes(bytes, flush: true);
+    if (await cachedFile.exists() && await cachedFile.length() > 16) {
+      final cachedBytes = await cachedFile.readAsBytes();
+      if (actualExtension == 'sup' ||
+          _detectSubtitleExtension(_decodeSubtitleText(cachedBytes), actualExtension) == actualExtension) {
+        return cachedFile;
+      }
+      await cachedFile.delete();
+    }
+    if (actualExtension == 'sup') {
+      await cachedFile.writeAsBytes(bytes, flush: true);
+    } else {
+      await cachedFile.writeAsString(
+        _decodeSubtitleText(bytes).replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
+        encoding: utf8,
+        flush: true,
+      );
+    }
     return cachedFile;
   }
 
@@ -16336,7 +16420,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final unique = <String, Map<String, dynamic>>{};
       for (final option in options) {
         final code = (option['language'] ?? '').toString().toLowerCase();
-        if (code.isNotEmpty) unique.putIfAbsent(code, () => option);
+        final identity = [
+          code,
+          option['releaseName'] ?? '',
+          option['fileName'] ?? '',
+          option['downloadUrl'] ?? '',
+        ].join('|').toLowerCase();
+        if (code.isNotEmpty) unique.putIfAbsent(identity, () => option);
       }
       final available = unique.values.toList()
         ..sort((a, b) {
@@ -16378,16 +16468,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final track = SubtitleTrack.uri(
         Uri.file(file.path).toString(),
         title: _subtitleLanguageName(code), language: code);
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      await _activateSubtitleTrack(track);
       if (mounted && !_isDisposed) {
         setState(() {
           _selectedSubtitleLanguageCode = code;
           _subtitleVisibilityEnabled = true;
           _automaticEnglishTrack = track;
-          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} downloaded and ready';
+          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} track active';
         });
       }
     } catch (error) {
@@ -16417,16 +16504,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         title: _subtitleLanguageName(code), language: code);
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      await _activateSubtitleTrack(track);
       if (mounted && !_isDisposed) {
         setState(() {
           _selectedSubtitleLanguageCode = code;
           _subtitleVisibilityEnabled = true;
           _automaticEnglishTrack = track;
-          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} selected';
+          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} track active';
         });
         Navigator.of(context).maybePop();
         _startHideTimer();
