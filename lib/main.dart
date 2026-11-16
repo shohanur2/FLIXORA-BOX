@@ -16296,7 +16296,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
     final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${releaseIdentity.hashCode.abs()}';
     final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
-    if (await preferredCache.exists() && await preferredCache.length() > 16) return preferredCache;
+    if (await preferredCache.exists() && await preferredCache.length() > 16) {
+      try {
+        final cachedBytes = await preferredCache.readAsBytes();
+        if (preferredExtension == 'sup' ||
+            _detectSubtitleExtension(_decodeSubtitleText(cachedBytes), preferredExtension) == preferredExtension) {
+          return preferredCache;
+        }
+      } catch (_) {}
+      await preferredCache.delete();
+    }
 
     final download = await http.get(uri, headers: const {
       'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
@@ -16316,25 +16325,18 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     final isPgs = preferredExtension == 'sup' &&
         bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x47;
-    final subtitleText = utf8.decode(bytes, allowMalformed: true);
+    final subtitleText = _decodeSubtitleText(bytes);
     final actualExtension = isPgs ? 'sup' : _detectSubtitleExtension(subtitleText, preferredExtension);
     if (actualExtension == 'sup' && !isPgs) {
       throw StateError('The PGS subtitle data is incomplete or invalid.');
     }
     final cachedFile = File('${cacheDir.path}/${cacheBase}.$actualExtension');
-    if (await cachedFile.exists() && await cachedFile.length() > 16) {
-      final cachedBytes = await cachedFile.readAsBytes();
-      if (actualExtension == 'sup' ||
-          _detectSubtitleExtension(_decodeSubtitleText(cachedBytes), actualExtension) == actualExtension) {
-        return cachedFile;
-      }
-      await cachedFile.delete();
-    }
+    if (await cachedFile.exists()) await cachedFile.delete();
     if (actualExtension == 'sup') {
       await cachedFile.writeAsBytes(bytes, flush: true);
     } else {
       await cachedFile.writeAsString(
-        _decodeSubtitleText(bytes).replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
+        subtitleText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
         encoding: utf8,
         flush: true,
       );
@@ -16480,11 +16482,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     } catch (error) {
       debugPrint('FLIXORA automatic subtitles: $error');
       if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) {
+        final errorText = error.toString();
+        final friendlyMessage = errorText.contains('404') ||
+                errorText.contains('No subtitles were found')
+            ? 'No matching subtitle was found for this title/episode and selected languages. Try another language or import a subtitle file.'
+            : errorText.contains('503') || errorText.contains('not configured')
+                ? 'Subtitle service needs API setup'
+                : errorText.replaceFirst('Bad state: ', '');
         setState(() {
-          _automaticSubtitleMessage = error.toString().contains('503') ||
-                  error.toString().contains('not configured')
-              ? 'Subtitle service needs API setup'
-              : error.toString().replaceFirst('Bad state: ', '');
+          _automaticSubtitleMessage = friendlyMessage;
         });
       }
     } finally {
