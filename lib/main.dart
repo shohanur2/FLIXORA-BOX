@@ -48,11 +48,11 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
-  try {
-    await FlixoraNotificationService.initialize();
-  } catch (error) {
-    debugPrint('FLIXORA notification initialization failed: $error');
-  }
+  unawaited(
+    FlixoraNotificationService.initialize().catchError((Object error) {
+      debugPrint('FLIXORA notification initialization failed: $error');
+    }),
+  );
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
