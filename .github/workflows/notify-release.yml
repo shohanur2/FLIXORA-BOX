@@ -1,0 +1,31 @@
+name: Notify FLIXORA app updates
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send FLIXORA update notification
+        env:
+          FLIXORA_NOTIFICATION_WEBHOOK_SECRET: ${{ secrets.FLIXORA_NOTIFICATION_WEBHOOK_SECRET }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          NOTIFICATION_URL: https://vxqqmilgmfrdcndorhvz.supabase.co/functions/v1/flixora-notifications
+        run: |
+          set -euo pipefail
+          if [ -z "$FLIXORA_NOTIFICATION_WEBHOOK_SECRET" ]; then
+            echo "Missing FLIXORA_NOTIFICATION_WEBHOOK_SECRET repository secret."
+            exit 1
+          fi
+          payload="$(jq -n --arg tag "$RELEASE_TAG" --arg name "$RELEASE_NAME" '{event_type:"app_release",release_tag:$tag,release_name:$name}')"
+          curl --fail-with-body --silent --show-error \
+            -X POST "$NOTIFICATION_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-flixora-webhook-secret: $FLIXORA_NOTIFICATION_WEBHOOK_SECRET" \
+            --data "$payload"
