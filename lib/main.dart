@@ -15468,42 +15468,78 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         type: FileType.custom,
         allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'],
         allowMultiple: false,
-        withData: false,
+        withData: true,
       );
       if (result == null || result.files.isEmpty) return;
+
       final picked = result.files.single;
-      final path = picked.path;
-      if (path == null || path.isEmpty) throw StateError('Could not access the selected subtitle file.');
-      final file = File(path);
-      if (!await file.exists()) throw StateError('The selected subtitle file is not available.');
-      final length = await file.length();
-      if (length < 8 || length > 10 * 1024 * 1024) {
-        throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
-      }
-      final ext = picked.extension?.toLowerCase() ?? '';
-      if (!['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'].contains(ext)) {
+      final extension = (picked.extension ?? '').toLowerCase();
+      const supported = ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'];
+      if (!supported.contains(extension)) {
         throw StateError('Unsupported subtitle file format.');
       }
-      final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it)(?:[._ -]|$)',
-          caseSensitive: false).firstMatch(picked.name);
+
+      // Keep a private app copy. Android document-picker paths can be temporary
+      // content/cache locations and should not be relied on for the active track.
+      final Uint8List? selectedBytes = picked.bytes ??
+          (picked.path != null && picked.path!.isNotEmpty
+              ? await File(picked.path!).readAsBytes()
+              : null);
+      if (selectedBytes == null) {
+        throw StateError('Could not read the selected subtitle file.');
+      }
+      if (selectedBytes.length < 8 || selectedBytes.length > 10 * 1024 * 1024) {
+        throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
+      }
+      final subtitleText = utf8.decode(selectedBytes, allowMalformed: true);
+      if (subtitleText.trim().isEmpty) {
+        throw StateError('The selected subtitle file is empty or unreadable.');
+      }
+
+      final support = await getApplicationSupportDirectory();
+      final importDirectory = Directory('${support.path}/flixora_subtitles/imported');
+      if (!await importDirectory.exists()) {
+        await importDirectory.create(recursive: true);
+      }
+      final safeName = picked.name
+          .split(RegExp(r'[/\\\\]'))
+          .last
+          .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      final fileName = '${DateTime.now().microsecondsSinceEpoch}_${safeName.isEmpty ? 'subtitle.$extension' : safeName}';
+      final file = File('${importDirectory.path}/$fileName');
+      await file.writeAsBytes(selectedBytes, flush: true);
+
+      final match = RegExp(
+        r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it)(?:[._ -]|$)',
+        caseSensitive: false,
+      ).firstMatch(picked.name);
       final language = match?.group(1)?.toLowerCase() ?? 'external';
-      final track = SubtitleTrack.uri(Uri.file(file.path).toString(),
-          title: picked.name, language: language);
+      final track = SubtitleTrack.uri(
+        Uri.file(file.path).toString(),
+        title: picked.name,
+        language: language,
+      );
+
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
       await _player.setSubtitleTrack(track);
       final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', 'yes');
+      }
       await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+
       if (mounted && !_isDisposed) {
         Navigator.of(context).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Subtitle imported: ${picked.name}')));
+          SnackBar(content: Text('Subtitle imported: ${picked.name}')),
+        );
       }
     } catch (error) {
       if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not import subtitle: $error')));
+          SnackBar(content: Text('Could not import subtitle: $error')),
+        );
       }
     }
   }
