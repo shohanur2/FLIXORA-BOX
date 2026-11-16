@@ -14395,7 +14395,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await platformPlayer.setProperty('cache-secs', '45');
         await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
         await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
-        await platformPlayer.setProperty('cache-pause-wait', '0.75');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
