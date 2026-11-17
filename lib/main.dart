@@ -16337,6 +16337,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         throw StateError('BollyNook returned an invalid download link.');
       }
     } else if (uri == null || uri.scheme != 'https' ||
+        !(isSubDl || isOpenSubtitles) ||
         (isSubDl && !uri.path.startsWith('/subtitle/'))) {
       throw StateError('Subtitle provider returned an invalid file link.');
     }
