@@ -16345,10 +16345,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       await preferredCache.delete();
     }
 
-    final download = await http.get(uri, headers: const {
+    var download = await http.get(uri, headers: const {
       'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
       'User-Agent': 'FLIXORA Subtitle Client/1.0',
     }).timeout(const Duration(seconds: 25));
+    // Providers may briefly rate-limit a valid subtitle link. Respect their
+    // Retry-After hint once, then let the caller fall back to another result.
+    if (download.statusCode == 429) {
+      final retryAfter = int.tryParse(download.headers['retry-after'] ?? '');
+      final waitSeconds = (retryAfter ?? 2).clamp(1, 8).toInt();
+      await Future<void>.delayed(Duration(seconds: waitSeconds));
+      download = await http.get(uri, headers: const {
+        'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+        'User-Agent': 'FLIXORA Subtitle Client/1.0',
+      }).timeout(const Duration(seconds: 25));
+    }
     if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
         download.bodyBytes.length > 10 * 1024 * 1024) {
       throw StateError('Could not download the selected subtitle (HTTP ${download.statusCode}).');
@@ -16569,7 +16580,30 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   Future<void> _selectAutomaticSubtitleLanguage(Map<String, dynamic> option) async {
     final code = (option['language'] ?? 'en').toString().toLowerCase();
     try {
-      final file = await _downloadAutomaticSubtitle(option);
+      // Keep the chosen language, but try its other provider/release results
+      // if the selected link is expired or rate-limited.
+      final candidates = <Map<String, dynamic>>[
+        option,
+        ..._automaticSubtitleOptions.where((candidate) =>
+            (candidate['language'] ?? '').toString().toLowerCase() == code &&
+            (candidate['downloadUrl'] ?? '') != (option['downloadUrl'] ?? '')),
+      ];
+      File? file;
+      Object? lastDownloadError;
+      for (final candidate in candidates) {
+        try {
+          file = await _downloadAutomaticSubtitle(candidate);
+          break;
+        } catch (error) {
+          lastDownloadError = error;
+          debugPrint('FLIXORA subtitle language fallback failed: $error');
+        }
+      }
+      if (file == null) {
+        throw StateError(
+          'No usable ${_subtitleLanguageName(code)} subtitle could be downloaded. ${lastDownloadError ?? ''}',
+        );
+      }
       if (!mounted || _isDisposed) return;
       final track = SubtitleTrack.uri(
         Uri.file(file.path).toString(),
