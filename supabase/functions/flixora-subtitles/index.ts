@@ -553,12 +553,30 @@ function selectExternalArchive(files:Record<string,Uint8Array>,season:number,epi
 }
 async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  const provider=String(body.provider??"").toLowerCase();
- const host=provider==="isubtitles"?"isubtitles.org":provider==="bollynook"?"bollynook.com":"";
+ const host=provider==="isubtitles"?"isubtitles.org":
+   provider==="bollynook"?"bollynook.com":
+   provider==="subdl"?"subdl.com":
+   provider==="opensubtitles"?"opensubtitles.com":"";
  if(!host)return json({error:"Unsupported subtitle provider."},400);
  const url=safeDownloadUrl(body.downloadUrl,host);if(!url)return json({error:"Invalid provider download URL."},400);
+ if(provider==="subdl"&&!new URL(url).pathname.startsWith("/subtitle/"))
+   return json({error:"Invalid SubDL subtitle path."},400);
  const referer=safeDownloadUrl(body.pageUrl,host);
- const response=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36","Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})},signal:AbortSignal.timeout(20000)});
- if(!response.ok)return json({error:provider+" download HTTP "+response.status},502);
+ const headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+   "Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})};
+ let response:Response|undefined;
+ for(let attempt=0;attempt<2;attempt++){
+   response=await fetch(url,{headers,signal:AbortSignal.timeout(20000)});
+   if(response.ok)break;
+   if(attempt===0&&(response.status===429||response.status>=500)){
+     const retryAfter=Number(response.headers.get("retry-after")??"");
+     const waitMs=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,4000):1200;
+     await new Promise(resolve=>setTimeout(resolve,waitMs));
+     continue;
+   }
+   return json({error:provider+" download HTTP "+response.status},502);
+ }
+ if(!response?.ok)return json({error:provider+" download HTTP "+(response?.status??502)},502);
  const bytes=new Uint8Array(await response.arrayBuffer());
  if(bytes.length<16||bytes.length>10*1024*1024)return json({error:"Provider returned an empty or oversized subtitle."},502);
  let selected:Uint8Array,name="subtitle.srt";
@@ -571,7 +589,7 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
   if((bytes[0]===0x52&&bytes[1]===0x61)||(bytes[0]===0x37&&bytes[1]===0x7b))return json({error:"Provider archive format is not supported; trying another subtitle source."},422);
   selected=bytes;
  }
- if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},422);
+ if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},502);
  return json({contentBase64:base64Encode(selected),fileName:name,extension:name.split(".").pop()||"srt"});
 }
 
