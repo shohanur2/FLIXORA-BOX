@@ -629,6 +629,36 @@ Deno.serve(async (request: Request) => {
     const body = await request.json() as JsonMap;
     if (body.action === "download_subsource") return await downloadSubSource(body);
     if (body.action === "download_provider_subtitle") return await downloadProviderSubtitle(body);
+    if (body.action === "search_last_resort") {
+      const tmdbId = Number(body.tmdbId ?? 0);
+      const title = String(body.title ?? "").trim().slice(0, 180);
+      const year = String(body.year ?? "").trim();
+      const mediaType = body.mediaType === "tv" ? "tv" : "movie";
+      const requested = String(body.languages ?? "EN").split(",")
+        .map(x => x.trim().toUpperCase()).filter(x => supportedLanguages.has(x));
+      const languages = [...new Set(requested)];
+      if (!languages.length) languages.push("EN");
+      const season = Math.max(0, Math.min(99, Number(body.season ?? 0) || 0));
+      const episode = Math.max(0, Math.min(999, Number(body.episode ?? 0) || 0));
+      if ((!Number.isInteger(tmdbId) || tmdbId <= 0) && !title)
+        return json({error: "A valid TMDB ID or title is required."}, 400);
+      if (mediaType === "tv" && (!season || !episode))
+        return json({error: "Season and episode are required for TV subtitles."}, 400);
+      const openKey = Deno.env.get("OPENSUBTITLES_API_KEY")?.trim() ?? "";
+      const providerErrors: string[] = [];
+      if (!openKey) {
+        return json({subtitles: [], resultCount: 0, searchedProviders: 0,
+          providerErrors: ["OpenSubtitles is not configured"], fallbackOnly: true});
+      }
+      const args: SearchArgs = {
+        apiKey: openKey, tmdbId, title, year, mediaType, languages, season, episode, providerErrors
+      };
+      // Spend the low-quota OpenSubtitles allowance only after every primary
+      // provider candidate was tried and none produced a usable subtitle.
+      const subtitles = await searchOpenSubtitles(args);
+      return json({subtitles, resultCount: subtitles.length, searchedProviders: 1,
+        providerErrors, fallbackOnly: true});
+    }
     const tmdbId = Number(body.tmdbId ?? 0);
     const title = String(body.title ?? "").trim().slice(0, 180);
     const year = String(body.year ?? "").trim();
