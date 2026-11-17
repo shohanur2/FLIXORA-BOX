@@ -131,7 +131,10 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
       url.searchParams.set("episode_number", String(args.episode));
     }
   }
-  const requested = [...new Set(args.languages.map(languageCode))].sort();
+  const requested = [...new Set(args.languages.map(languageCode))].sort((a, b) => {
+    const priority = (code: string) => code === "bn" ? 0 : code === "en" ? 1 : code === "hi" ? 2 : code === "ur" ? 3 : 4;
+    return priority(a) - priority(b);
+  });
   url.searchParams.set("languages", requested.join(","));
   const headers = {
     "Api-Key": args.apiKey,
@@ -155,11 +158,12 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
     const files = Array.isArray(attr.files) ? attr.files as JsonMap[] : [];
     const file = files.find(f => Number(f.file_id) > 0);
     if (!file) continue;
-    // Only request one download link per language. The /download endpoint
-    // consumes provider quota, so fetching every release for every language
-    // at video startup needlessly exhausts the OpenSubtitles allowance.
+    // OpenSubtitles has a very small download allowance. This provider is
+    // invoked only after the other sources return no results, and we request
+    // just one link per playback search to avoid burning the daily quota.
     candidates.push({row, attr, file, lang});
     seenLanguages.add(lang);
+    if (candidates.length >= 1) break;
   }
   const results: JsonMap[] = [];
   for (const candidate of candidates) {
@@ -575,24 +579,6 @@ Deno.serve(async (request: Request) => {
         return [];
       }
     })());
-    if (openKey) tasks.push((async () => {
-      try {
-        let found = await searchOpenSubtitles({...baseArgs, apiKey: openKey});
-        // Do not repeat fallback searches when the provider has exhausted its
-        // download quota or is rate-limiting this request.
-        const downloadBlocked = () => providerErrors.some(error =>
-          /OpenSubtitles download HTTP (?:406|429)/.test(error));
-        if (!found.length && title && !downloadBlocked())
-          found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true);
-        if (!found.length && title && year && !downloadBlocked())
-          found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true, true);
-        return found;
-      } catch (error) {
-        providerErrors.push("OpenSubtitles request failed");
-        console.warn("FLIXORA OpenSubtitles request failed", error instanceof Error ? error.message : "unknown error");
-        return [];
-      }
-    })());
     // All provider searches run independently; one failed website cannot
     // prevent results from the other sources.
     if (subsourceKey) tasks.push((async () => {
@@ -608,23 +594,41 @@ Deno.serve(async (request: Request) => {
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }
     })());
     const batches = await Promise.all(tasks);
-    const subtitles = capAndDedupe(batches.flat());
+    let subtitles = capAndDedupe(batches.flat());
+    let openSubtitlesSearched = false;
 
+    // OpenSubtitles is a last-resort source, never the first provider.
+    // Its free download quota is tiny, so do not spend it when any other
+    // configured provider already returned usable subtitle choices.
+    if (!subtitles.length && openKey) {
+      openSubtitlesSearched = true;
+      try {
+        subtitles = capAndDedupe(await searchOpenSubtitles({...baseArgs, apiKey: openKey}));
+      } catch (error) {
+        providerErrors.push("OpenSubtitles request failed");
+        console.warn("FLIXORA OpenSubtitles request failed",
+          error instanceof Error ? error.message : "unknown error");
+      }
+    }
+
+    const searchedProviders = tasks.length + (openSubtitlesSearched ? 1 : 0);
     if (!subtitles.length) {
-      const providerFailed = providerErrors.length > 0;
+      // Return a normal payload instead of HTTP 502/404. The Flutter client
+      // can then show a useful no-results message without a FunctionsHttpException.
       return json({
-        error: providerFailed
-          ? "One or more subtitle providers could not complete the search. Please try again."
-          : "No subtitles were found for the requested title, season, episode and languages.",
-        searchedProviders: tasks.length,
+        subtitles: [],
+        resultCount: 0,
+        error: "No subtitles were found from the available providers for this title, episode and languages.",
+        searchedProviders,
         providerErrors,
-      }, providerFailed ? 502 : 404);
+      });
     }
     const english = subtitles.find(x => x.language === "en");
     return json({
       subtitles,
       resultCount: subtitles.length,
-      searchedProviders: tasks.length,
+      searchedProviders,
+      providerErrors,
       ...(english ? {language:"English", format:english.format, fileName:english.fileName,
         releaseName:english.releaseName, downloadUrl:english.downloadUrl} : {})
     });
