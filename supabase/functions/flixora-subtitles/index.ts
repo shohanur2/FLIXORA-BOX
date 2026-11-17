@@ -449,8 +449,8 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
  const searchUrl=base+"/search?kwd="+encodeURIComponent(args.title);
  const html=await getProviderPage(searchUrl,host);
  const pages=[...html.matchAll(/<h3>\s*<a\b[^>]*href=["']([^"']+-subtitles)["'][^>]*>([\s\S]*?)<\/a>\s*<\/h3>/gi)]
-  .map(m=>({url:providerAbsolute(m[1],base),slug:m[1].split("/").filter(Boolean).pop()?.replace(/-subtitles$/,"")||"",title:stripHtml(m[2])}))
-  .filter(p=>p.slug&&titleMatch(p.title,args.title)).slice(0,3);
+  .map(m=>{const title=stripHtml(m[2]);const year=title.match(/\b(19|20)\d{2}\b/);return {url:providerAbsolute(m[1],base),slug:m[1].split("/").filter(Boolean).pop()?.replace(/-subtitles$/,"")||"",title,year:year?Number(year[0]):0};})
+  .filter(p=>p.slug&&titleMatch(p.title,args.title)&&(!args.year||!p.year||p.year===Number(args.year))).slice(0,3);
  const out:JsonMap[]=[];
  for(const page of pages){
   for(const lang of args.languages.map(languageCode)){
@@ -528,6 +528,7 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  }else{
   const type=(response.headers.get("content-type")??"").toLowerCase();
   if(type.includes("text/html")||bytes[0]===0x3c)return json({error:"Provider returned an HTML page, not a subtitle."},502);
+  if((bytes[0]===0x52&&bytes[1]===0x61)||(bytes[0]===0x37&&bytes[1]===0x7b))return json({error:"Provider archive format is not supported; trying another subtitle source."},422);
   selected=bytes;
  }
  if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},422);
