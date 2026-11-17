@@ -172,9 +172,13 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
       if (!dl.ok) {
         const detail = (await dl.text()).slice(0, 180).replace(/[\\r\\n]+/g, " ").trim();
         const status = dl.status;
-        args.providerErrors.push(detail
-          ? `OpenSubtitles download HTTP ${status}: ${detail}`
-          : `OpenSubtitles download HTTP ${status}`);
+        // Provider quota/rate-limit blocks this provider only. Keep it as a
+        // warning so another provider (for example SubDL) can still succeed.
+        if (status !== 406 && status !== 429) {
+          args.providerErrors.push(detail
+            ? `OpenSubtitles download HTTP ${status}: ${detail}`
+            : `OpenSubtitles download HTTP ${status}`);
+        }
         console.warn("FLIXORA OpenSubtitles download stopped", status, detail);
         // 406 commonly means the provider's download allowance is exhausted;
         // 429 means the endpoint is rate-limiting. Further calls cannot help.
