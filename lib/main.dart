@@ -4956,6 +4956,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onComplete: (path) async {
           completed = true;
           final fileSize = await File(path).length();
+          unawaited(
+            FlixoraNotificationService.showDownloadComplete(
+              title: task.displayTitle,
+              uniqueId: downloadId,
+            ),
+          );
           if (!mounted) return;
           setState(() {
             task

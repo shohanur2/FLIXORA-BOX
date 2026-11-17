@@ -17,6 +17,13 @@ const AndroidNotificationChannel _updatesChannel = AndroidNotificationChannel(
   importance: Importance.high,
 );
 
+const AndroidNotificationChannel _downloadsChannel = AndroidNotificationChannel(
+  'flixora_downloads',
+  'FLIXORA Downloads',
+  description: 'Notifications when video downloads finish.',
+  importance: Importance.high,
+);
+
 @pragma('vm:entry-point')
 Future<void> flixoraFirebaseMessagingBackgroundHandler(
   RemoteMessage message,
@@ -77,6 +84,10 @@ class FlixoraNotificationService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(_updatesChannel);
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_downloadsChannel);
 
     FirebaseMessaging.onMessage.listen(_showForegroundNotification);
 
@@ -115,6 +126,37 @@ class FlixoraNotificationService {
         ),
       ),
     );
+  }
+
+  static Future<void> showDownloadComplete({
+    required String title,
+    required int uniqueId,
+  }) async {
+    try {
+      if (!_initialized) await initialize();
+      if (!_enabled) return;
+
+      final videoTitle = title.trim();
+      if (videoTitle.isEmpty) return;
+
+      await _localNotifications.show(
+        0x40000000 | (uniqueId & 0x3fffffff),
+        'Download Complete',
+        '$videoTitle has been downloaded successfully.',
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'flixora_downloads',
+            'FLIXORA Downloads',
+            channelDescription: 'Notifications when video downloads finish.',
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+          ),
+        ),
+      );
+    } catch (error) {
+      debugPrint('Could not show FLIXORA download notification: $error');
+    }
   }
 
   static Future<bool> _requestPermissionAndSubscribe() async {
