@@ -57,6 +57,10 @@ async function searchWyzie(args: SearchArgs, apiKey: string): Promise<JsonMap[]>
   url.searchParams.set("id", String(args.tmdbId));
   url.searchParams.set("key", apiKey);
   url.searchParams.set("source", "all");
+  if (args.mediaType === "tv") {
+    url.searchParams.set("season", String(args.season));
+    url.searchParams.set("episode", String(args.episode));
+  }
   url.searchParams.set("limit", "200");
   url.searchParams.set("sort", "downloads");
   const response = await fetch(url, {signal: AbortSignal.timeout(12000)});
