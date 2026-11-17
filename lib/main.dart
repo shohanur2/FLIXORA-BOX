@@ -16697,6 +16697,119 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
 
+  void _showSubtitleDelaySettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        side: BorderSide(color: Color(0x66D6AD45)),
+      ),
+      builder: (sheetContext) {
+        var delay = _subtitleDelay;
+        return StatefulBuilder(
+          builder: (context, updateSheet) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Subtitle Delay',
+                            style: TextStyle(
+                              color: playerGoldLight,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, color: playerWhite),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'Adjust subtitle timing to match the dialogue.',
+                      style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                    ),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Text(
+                        '${delay >= 0 ? '+' : ''}${delay.toStringAsFixed(1)} s',
+                        style: const TextStyle(
+                          color: playerGoldLight,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Slider(
+                      value: delay.clamp(-10.0, 10.0).toDouble(),
+                      min: -10,
+                      max: 10,
+                      divisions: 200,
+                      activeColor: playerGold,
+                      inactiveColor: const Color(0x55FFFFFF),
+                      onChanged: (value) => updateSheet(() => delay = value),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: const [
+                        Text('-10s Earlier', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                        Text('10s Later', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: playerGoldLight,
+                              side: const BorderSide(color: playerGold),
+                            ),
+                            onPressed: () => updateSheet(() => delay = 0),
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: playerGold,
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: () async {
+                              final applied = await _applySubtitleDelay(delay);
+                              if (!applied || !mounted || _isDisposed) return;
+                              await _saveSubtitlePreferences();
+                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                              _startHideTimer();
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
+  }
+
   void _showSubtitleTracks() {
     _cancelHideTimer();
     showGeneralDialog<void>(
