@@ -623,7 +623,7 @@ Deno.serve(async (request: Request) => {
     return json({
       subtitles,
       resultCount: subtitles.length,
-      searchedProviders: tasks.length + (subSourceSearched ? 1 : 0),
+      searchedProviders: tasks.length,
       ...(english ? {language:"English", format:english.format, fileName:english.fileName,
         releaseName:english.releaseName, downloadUrl:english.downloadUrl} : {})
     });
