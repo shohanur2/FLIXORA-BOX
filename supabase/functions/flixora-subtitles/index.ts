@@ -252,11 +252,12 @@ function subsourceReleaseInfo(value: unknown): string {
 }
 function matchesSubSourceEpisode(release: string, season: number, episode: number): boolean {
   const value = String(release ?? "");
-  const compact = normalizeMatch(value).replace(/\s+/g,"");
   const exact = [
     new RegExp("s0*"+season+"e0*"+episode+"(?:[^0-9]|$)", "i"),
     new RegExp("(?:^|[^0-9])0*"+season+"x0*"+episode+"(?:[^0-9]|$)", "i"),
   ];
+  const seasonEpisode = value.match(/\bseason\s*0*(\d{1,2})\D{0,12}(?:episode|ep)\s*0*(\d{1,3})\b/i);
+  if (seasonEpisode) return Number(seasonEpisode[1]) === season && Number(seasonEpisode[2]) === episode;
   if (/(?:s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(value)) {
     return exact.some(pattern => pattern.test(value));
   }
