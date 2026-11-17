@@ -16506,9 +16506,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final response = await client.functions.invoke(
         'flixora-subtitles',
         body: {
-          'tmdbId': widget.movie.tmdbId,
+          'tmdbId': (searchTitle?.trim().isNotEmpty == true &&
+              searchTitle!.trim().toLowerCase() != widget.movie.title.trim().toLowerCase())
+              ? 0
+              : widget.movie.tmdbId,
           'title': (searchTitle?.trim().isNotEmpty == true) ? searchTitle!.trim() : widget.movie.title,
-          'year': widget.movie.year,
+          'year': (searchTitle?.trim().isNotEmpty == true &&
+              searchTitle!.trim().toLowerCase() != widget.movie.title.trim().toLowerCase())
+              ? ''
+              : widget.movie.year,
           'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
           'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
           if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
