@@ -555,9 +555,9 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
 }
 
 const gestdownLanguage: Record<string,string> = {
- en:"eng",bn:"ben",hi:"hin",ur:"urd",ar:"ara",es:"spa",fr:"fra",
- de:"deu",pt:"por",ru:"rus",ja:"jpn",ko:"kor",it:"ita",
- nl:"nld",pl:"pol",th:"tha",id:"ind",ms:"msa",fa:"fas",zh:"zho"
+ en:"English",bn:"Bengali",hi:"Hindi",ur:"Urdu",ar:"Arabic",es:"Spanish",fr:"French",
+ de:"German",pt:"Portuguese",ru:"Russian",ja:"Japanese",ko:"Korean",it:"Italian",
+ nl:"Dutch",pl:"Polish",th:"Thai",id:"Indonesian",ms:"Malay",fa:"Persian",zh:"Chinese"
 };
 function cleanProviderTitle(value:string):string {
  return normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g,"").trim();
