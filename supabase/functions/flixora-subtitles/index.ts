@@ -41,6 +41,66 @@ function releaseKey(item: JsonMap): string {
     .map(v => String(v ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
     .join("|");
 }
+
+const WYZIE_BASE = "https://sub.wyzie.io";
+function safeWyzieDownloadUrl(raw: unknown): string | null {
+  try {
+    const value = new URL(String(raw ?? ""));
+    if (value.protocol !== "https:" || value.hostname !== "sub.wyzie.io" ||
+        !value.pathname.startsWith("/c/") || !value.searchParams.has("tok")) return null;
+    return value.toString();
+  } catch { return null; }
+}
+async function searchWyzie(args: SearchArgs, apiKey: string): Promise<JsonMap[]> {
+  if (!apiKey.trim() || args.tmdbId <= 0) return [];
+  const url = new URL(WYZIE_BASE + "/search");
+  url.searchParams.set("id", String(args.tmdbId));
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("source", "all");
+  url.searchParams.set("limit", "200");
+  url.searchParams.set("sort", "downloads");
+  const response = await fetch(url, {signal: AbortSignal.timeout(12000)});
+  if (!response.ok) {
+    const detail = response.status === 429 ? "daily request limit reached" :
+      response.status === 402 ? "request balance exhausted" : "provider request failed";
+    args.providerErrors.push("Wyzie search HTTP " + response.status + " (" + detail + ")");
+    console.warn("FLIXORA Wyzie search HTTP", response.status);
+    return [];
+  }
+  const payload = await response.json() as unknown;
+  const rows = Array.isArray(payload) ? payload :
+    payload && typeof payload === "object" && Array.isArray((payload as JsonMap).data)
+      ? (payload as JsonMap).data as unknown[]
+      : payload && typeof payload === "object" && Array.isArray((payload as JsonMap).results)
+        ? (payload as JsonMap).results as unknown[] : [];
+  const output: JsonMap[] = [];
+  for (const value of rows) {
+    if (!value || typeof value !== "object") continue;
+    const row = value as JsonMap;
+    const language = languageCode(row.language);
+    const link = safeWyzieDownloadUrl(row.url ?? row.downloadUrl);
+    if (!language || !link) continue;
+    const format = String(row.format ?? "srt").toLowerCase().replace(/^\./, "");
+    const releases = Array.isArray(row.releases) ? row.releases : [];
+    const release = String(row.release ?? releases[0] ?? row.media ?? "").slice(0, 180);
+    const fileName = String(row.fileName ?? row.filename ?? (release ? release + "." + format : "subtitle." + format)).slice(0, 180);
+    output.push({
+      language,
+      displayLanguage: String(row.display ?? row.language ?? language).slice(0, 80),
+      format,
+      fileName,
+      releaseName: release,
+      downloadUrl: link,
+      provider: "Wyzie",
+      providerSource: String(row.source ?? "").slice(0, 40),
+      isHearingImpaired: row.isHearingImpaired === true,
+      ...(row.quality && typeof row.quality === "object" ? {quality: row.quality} : {}),
+    });
+    if (output.length >= 200) break;
+  }
+  return output;
+}
+
 function capAndDedupe(items: JsonMap[]): JsonMap[] {
   const seen = new Set<string>();
   const perLanguage = new Map<string, number>();
@@ -447,7 +507,8 @@ Deno.serve(async (request: Request) => {
     const subdlKey = Deno.env.get("SUBDL_API_KEY")?.trim() ?? "";
     const openKey = Deno.env.get("OPENSUBTITLES_API_KEY")?.trim() ?? "";
     const subsourceKey = Deno.env.get("SUBSOURCE_API_KEY")?.trim() ?? "";
-    if (!subdlKey && !openKey && !subsourceKey) return json({error: "Subtitle service needs API setup."}, 503);
+    const wyzieKey = Deno.env.get("WYZIE_API_KEY")?.trim() ?? "";
+    if (!subdlKey && !openKey && !subsourceKey && !wyzieKey) return json({error: "Subtitle service needs API setup."}, 503);
     const providerErrors: string[] = [];
     const baseArgs: SearchArgs = {apiKey:"", tmdbId, title, year, mediaType, languages, season, episode, providerErrors};
     const tasks: Promise<JsonMap[]>[] = [];
@@ -481,9 +542,20 @@ Deno.serve(async (request: Request) => {
         return [];
       }
     })());
-    // SubSource is the preferred provider. Keep a small number of its
-    // results first, then retain SubDL/OpenSubtitles candidates as fallbacks
-    // so a provider HTTP 429 never leaves the user without another choice.
+    // Wyzie searches every source enabled for its API key and returns all languages.
+    // It is preferred, while the other providers remain fallbacks.
+    let wyzieResults: JsonMap[] = [];
+    let wyzieSearched = false;
+    if (wyzieKey) {
+      wyzieSearched = true;
+      try {
+        wyzieResults = await searchWyzie(baseArgs, wyzieKey);
+      } catch (error) {
+        providerErrors.push("Wyzie request failed");
+        console.warn("FLIXORA Wyzie request failed", error instanceof Error ? error.message : "unknown error");
+      }
+    }
+    // SubSource remains an additional fallback provider.
     let subSourceResults: JsonMap[] = [];
     let subSourceSearched = false;
     if (subsourceKey) {
@@ -497,6 +569,15 @@ Deno.serve(async (request: Request) => {
       }
     }
     const batches = await Promise.all(tasks);
+    const wyziePerLanguage = new Map<string, number>();
+    const preferredWyzie: JsonMap[] = [];
+    for (const item of wyzieResults) {
+      const lang = String(item.language ?? "").toLowerCase();
+      const count = wyziePerLanguage.get(lang) ?? 0;
+      if (count >= 3) continue;
+      wyziePerLanguage.set(lang, count + 1);
+      preferredWyzie.push(item);
+    }
     const subSourcePerLanguage = new Map<string, number>();
     const preferredSubSource: JsonMap[] = [];
     for (const item of subSourceResults) {
@@ -506,14 +587,14 @@ Deno.serve(async (request: Request) => {
       subSourcePerLanguage.set(lang, count + 1);
       preferredSubSource.push(item);
     }
-    const subtitles = capAndDedupe([...preferredSubSource, ...batches.flat()]);
+    const subtitles = capAndDedupe([...preferredWyzie, ...preferredSubSource, ...batches.flat()]);
     if (!subtitles.length) {
       const providerFailed = providerErrors.length > 0;
       return json({
         error: providerFailed
           ? "One or more subtitle providers could not complete the search. Please try again."
           : "No subtitles were found for the requested title, season, episode and languages.",
-        searchedProviders: tasks.length + (subSourceSearched ? 1 : 0),
+        searchedProviders: tasks.length + (subSourceSearched ? 1 : 0) + (wyzieSearched ? 1 : 0),
         providerErrors,
       }, providerFailed ? 502 : 404);
     }
