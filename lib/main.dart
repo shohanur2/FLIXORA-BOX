@@ -17124,7 +17124,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                                 onPressed: downloading.isNotEmpty ? null : () async {
                                                   updateSheet(() => downloading = identity);
                                                   await _selectAutomaticSubtitleLanguage(option);
-                                                  if (mounted && !_isDisposed) {
+                                                  if (mounted && !_isDisposed &&
+                                                      _selectedSubtitleLanguageCode == code &&
+                                                      _subtitleVisibilityEnabled &&
+                                                      (_automaticSubtitleMessage ?? '').contains('track active')) {
                                                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                                                       content: Text(_subtitleLanguageName(code) + ' subtitle downloaded and applied.'),
                                                     ));
