@@ -144,57 +144,65 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
   const payload = await response.json() as JsonMap;
   const rows = Array.isArray(payload.data) ? payload.data as JsonMap[] : [];
   const candidates: {row: JsonMap; attr: JsonMap; file: JsonMap; lang: string}[] = [];
-  const perLang = new Map<string, number>();
+  const seenLanguages = new Set<string>();
   for (const row of rows) {
     const attr = row.attributes && typeof row.attributes === "object" ? row.attributes as JsonMap : {};
     const lang = languageCode(attr.language);
-    if (!requested.includes(lang)) continue;
-    const count = perLang.get(lang) ?? 0;
-    if (count >= 5) continue;
+    if (!requested.includes(lang) || seenLanguages.has(lang)) continue;
     const files = Array.isArray(attr.files) ? attr.files as JsonMap[] : [];
     const file = files.find(f => Number(f.file_id) > 0);
     if (!file) continue;
+    // Only request one download link per language. The /download endpoint
+    // consumes provider quota, so fetching every release for every language
+    // at video startup needlessly exhausts the OpenSubtitles allowance.
     candidates.push({row, attr, file, lang});
-    perLang.set(lang, count + 1);
+    seenLanguages.add(lang);
   }
   const results: JsonMap[] = [];
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < candidates.length && results.length < 50) {
-      const index = cursor++;
-      const candidate = candidates[index];
-      const id = Number(candidate.file.file_id);
-      if (!Number.isInteger(id) || id <= 0) continue;
-      try {
-        const dl = await fetch(base + "/download", {
-          method: "POST",
-          headers: {...headers, "Content-Type": "application/json"},
-          body: JSON.stringify({file_id: id}),
-          signal: AbortSignal.timeout(9000)
-        });
-        if (!dl.ok) {
-          args.providerErrors.push(`OpenSubtitles download HTTP ${dl.status}`);
-          console.warn("FLIXORA OpenSubtitles download HTTP", dl.status);
-          continue;
-        }
-        const result = await dl.json() as JsonMap;
-        const link = safeDownloadUrl(result.link, "opensubtitles.com");
-        if (!link) continue;
-        const feature = candidate.attr.feature_details && typeof candidate.attr.feature_details === "object"
-          ? candidate.attr.feature_details as JsonMap : {};
-        const release = candidate.attr.release ?? feature.title ?? feature.movie_name ?? "";
-        results.push({
-          language: candidate.lang,
-          format: String(candidate.file.file_name ?? "").split(".").pop()?.toLowerCase() || "srt",
-          fileName: String(result.file_name ?? candidate.file.file_name ?? "subtitle.srt").slice(0, 180),
-          releaseName: String(release).slice(0, 180),
-          downloadUrl: link,
-          provider: "OpenSubtitles"
-        });
-      } catch { /* One unavailable link must not block the other results. */ }
+  for (const candidate of candidates) {
+    const id = Number(candidate.file.file_id);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    try {
+      const dl = await fetch(base + "/download", {
+        method: "POST",
+        headers: {...headers, "Content-Type": "application/json"},
+        body: JSON.stringify({file_id: id}),
+        signal: AbortSignal.timeout(9000)
+      });
+      if (!dl.ok) {
+        const detail = (await dl.text()).slice(0, 180).replace(/[\\r\\n]+/g, " ").trim();
+        const status = dl.status;
+        args.providerErrors.push(detail
+          ? `OpenSubtitles download HTTP ${status}: ${detail}`
+          : `OpenSubtitles download HTTP ${status}`);
+        console.warn("FLIXORA OpenSubtitles download stopped", status, detail);
+        // 406 commonly means the provider's download allowance is exhausted;
+        // 429 means the endpoint is rate-limiting. Further calls cannot help.
+        if (status === 406 || status === 429) break;
+        continue;
+      }
+      const result = await dl.json() as JsonMap;
+      const link = safeDownloadUrl(result.link, "opensubtitles.com");
+      if (!link) continue;
+      const feature = candidate.attr.feature_details && typeof candidate.attr.feature_details === "object"
+        ? candidate.attr.feature_details as JsonMap : {};
+      const release = candidate.attr.release ?? feature.title ?? feature.movie_name ?? "";
+      results.push({
+        language: candidate.lang,
+        format: String(candidate.file.file_name ?? "").split(".").pop()?.toLowerCase() || "srt",
+        fileName: String(result.file_name ?? candidate.file.file_name ?? "subtitle.srt").slice(0, 180),
+        releaseName: String(release).slice(0, 180),
+        downloadUrl: link,
+        provider: "OpenSubtitles"
+      });
+      // Keep requests comfortably below the provider's short-window limits.
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      args.providerErrors.push("OpenSubtitles download request failed");
+      console.warn("FLIXORA OpenSubtitles download request failed",
+        error instanceof Error ? error.message : "unknown error");
     }
-  };
-  await Promise.all(Array.from({length: Math.min(4, candidates.length)}, () => worker()));
+  }
   return results;
 }
 Deno.serve(async (request: Request) => {
