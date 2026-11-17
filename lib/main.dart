@@ -16318,7 +16318,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final isSubSource = provider == 'subsource';
     final isISubtitles = provider == 'isubtitles';
     final isBollyNook = provider == 'bollynook';
-    final isProviderDownload = isSubSource || isISubtitles || isBollyNook;
+    final isProviderDownload = isSubSource || isISubtitles || isBollyNook || isSubDl || isOpenSubtitles;
     final isSubDl = uri?.host == 'dl.subdl.com';
     final isOpenSubtitles = uri != null &&
         (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
