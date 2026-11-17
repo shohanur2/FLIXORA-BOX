@@ -16486,32 +16486,67 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
       }
 
-      // Even when the stream exposes an embedded track, continue the provider
-      // search. The embedded track may be empty or in an unwanted language.
-      final client = supabaseClient;
-      if (client == null) throw StateError('Subtitle service is unavailable.');
-      final response = await client.functions.invoke(
-        'flixora-subtitles',
-        body: {
-          'tmdbId': widget.movie.tmdbId,
-          'title': (searchTitle?.trim().isNotEmpty == true) ? searchTitle!.trim() : widget.movie.title,
-          'year': widget.movie.year,
-          'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
-          'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
-          if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
-            'season': _selectedSeasonNumber,
-            'episode': _selectedEpisodeNumber,
+      // Reuse Wyzie's signed catalogue response on this device for up to 45 days.
+      // Wyzie download tokens are documented as valid for 60 days. Manual title
+      // searches bypass this cache so the user can explicitly refresh results.
+      final prefs = await SharedPreferences.getInstance();
+      final catalogKey = 'flixora_wyzie_subtitle_catalog_v1_${_automaticSubtitleCacheKey('all')}';
+      List<Map<String, dynamic>> options = [];
+      if (searchTitle == null) {
+        try {
+          final saved = prefs.getString(catalogKey);
+          if (saved != null) {
+            final decoded = jsonDecode(saved);
+            if (decoded is Map && decoded['savedAt'] is int &&
+                DateTime.now().millisecondsSinceEpoch - (decoded['savedAt'] as int) <
+                    const Duration(days: 45).inMilliseconds &&
+                decoded['options'] is List) {
+              options = (decoded['options'] as List)
+                  .whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .where((item) => (item['provider'] ?? '').toString().toLowerCase() == 'wyzie' &&
+                      (item['downloadUrl'] ?? '').toString().isNotEmpty)
+                  .toList(growable: false);
+            }
+          }
+        } catch (_) {
+          await prefs.remove(catalogKey);
+        }
+      }
+      if (options.isEmpty) {
+        final client = supabaseClient;
+        if (client == null) throw StateError('Subtitle service is unavailable.');
+        final response = await client.functions.invoke(
+          'flixora-subtitles',
+          body: {
+            'tmdbId': widget.movie.tmdbId,
+            'title': (searchTitle?.trim().isNotEmpty == true) ? searchTitle!.trim() : widget.movie.title,
+            'year': widget.movie.year,
+            'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+            'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+            if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+              'season': _selectedSeasonNumber,
+              'episode': _selectedEpisodeNumber,
+            },
           },
-        },
-      ).timeout(const Duration(seconds: 25));
-      final payload = response.data;
-      if (payload is! Map) throw StateError('No subtitles were found.');
-      final raw = payload['subtitles'];
-      final options = raw is List
-          ? raw.whereType<Map>().map((item) => Map<String, dynamic>.from(item))
-              .where((item) => (item['downloadUrl'] ?? '').toString().isNotEmpty)
-              .toList(growable: false)
-          : <Map<String, dynamic>>[];
+        ).timeout(const Duration(seconds: 25));
+        final payload = response.data;
+        if (payload is! Map) throw StateError('No subtitles were found.');
+        final raw = payload['subtitles'];
+        options = raw is List
+            ? raw.whereType<Map>().map((item) => Map<String, dynamic>.from(item))
+                .where((item) => (item['downloadUrl'] ?? '').toString().isNotEmpty)
+                .toList(growable: false)
+            : <Map<String, dynamic>>[];
+        final wyzieOptions = options.where((item) =>
+            (item['provider'] ?? '').toString().toLowerCase() == 'wyzie').toList(growable: false);
+        if (wyzieOptions.isNotEmpty && searchTitle == null) {
+          await prefs.setString(catalogKey, jsonEncode({
+            'savedAt': DateTime.now().millisecondsSinceEpoch,
+            'options': wyzieOptions,
+          }));
+        }
+      }
       final unique = <String, Map<String, dynamic>>{};
       for (final option in options) {
         final code = (option['language'] ?? '').toString().toLowerCase();
