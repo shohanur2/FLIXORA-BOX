@@ -448,6 +448,13 @@ function titleMatch(a:string,b:string):boolean{
  const y=normalizeMatch(b).replace(/\b(19|20)\d{2}\b/g,"").trim();
  return !!x&&(x===y||x.startsWith(y+" ")||y.startsWith(x+" "));
 }
+async function mapWithConcurrency<T, R>(items:T[], concurrency:number, worker:(item:T,index:number)=>Promise<R>):Promise<R[]> {
+ const results=new Array<R>(items.length); let next=0;
+ const runners=Array.from({length:Math.min(Math.max(1,concurrency),items.length)},async()=>{
+  while(true){const index=next++;if(index>=items.length)return;results[index]=await worker(items[index],index);}
+ });
+ await Promise.all(runners);return results;
+}
 async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
  const base="https://isubtitles.org",host="isubtitles.org";
  const searchUrl=base+"/search?kwd="+encodeURIComponent(args.title);
@@ -457,36 +464,38 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
   .filter(p=>p.slug&&titleMatch(p.title,args.title)&&(!args.year||!p.year||p.year===Number(args.year))).slice(0,3);
  const out:JsonMap[]=[];
  for(const page of pages){
-  for(const lang of args.languages.map(languageCode)){
-   const slug=iSubLang[lang]; if(!slug) continue;
-   let listing=""; const listUrl=base+"/"+page.slug+"/"+slug;
-   try{listing=await getProviderPage(listUrl,host,searchUrl);}catch{continue;}
+  const batches=await mapWithConcurrency(args.languages,5,async rawLang=>{
+   const lang=languageCode(rawLang),slug=iSubLang[lang];if(!slug)return [] as JsonMap[];
+   const listUrl=base+"/"+page.slug+"/"+slug;
+   let listing="";try{listing=await getProviderPage(listUrl,host,searchUrl);}catch{return [] as JsonMap[];}
+   const found:JsonMap[]=[];
    for(const row of listing.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){
-    const link=row[1].match(/href=["'](\/download\/[^"'<>]+)["']/i); if(!link) continue;
-    const url=providerAbsolute(link[1],base); if(!safeDownloadUrl(url,host)) continue;
+    const link=row[1].match(/href=["'](\/download\/[^"'<>]+)["']/i);if(!link)continue;
+    const url=providerAbsolute(link[1],base);if(!safeDownloadUrl(url,host))continue;
     const releaseCell=row[1].match(/data-title=["']Release\s*\/\s*Movie["'][^>]*>([\s\S]*?)<\/td>/i);
     const release=releaseCell?stripHtml(releaseCell[1]):page.title;
     if(args.mediaType==="tv"){
      const exact=new RegExp("(?:s0*"+args.season+"\\s*e0*"+args.episode+"|"+args.season+"x0*"+args.episode+")","i");
-     if(/(?:s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(release)&&!exact.test(release)) continue;
+     if(/(?:s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(release)&&!exact.test(release))continue;
     }
     const id=link[1].split("/").filter(Boolean).pop()||"";
-    out.push({language:lang,format:"zip",fileName:"isubtitles_"+id+".zip",releaseName:release.slice(0,180),downloadUrl:url,pageUrl:listUrl,provider:"iSubtitles",providerSource:"isubtitles"});
-    if(out.length>=20)return out;
+    found.push({language:lang,format:"zip",fileName:"isubtitles_"+id+".zip",releaseName:release.slice(0,180),downloadUrl:url,pageUrl:listUrl,provider:"iSubtitles",providerSource:"isubtitles"});
+    if(found.length>=20)break;
    }
-  }
+   return found;
+  });
+  for(const batch of batches){out.push(...batch);if(out.length>=20)return out.slice(0,20);}
   if(out.length)break;
  }
  return out;
-}
 async function searchBollyNook(args:SearchArgs):Promise<JsonMap[]>{
  if(args.mediaType!=="movie")return [];
- const base="https://www.bollynook.com",host="bollynook.com",out:JsonMap[]=[];
- for(const lang of args.languages.map(languageCode)){
-  const code=bollyLang[lang];if(!code)continue;
+ const base="https://www.bollynook.com",host="bollynook.com";
+ const batches=await mapWithConcurrency(args.languages,4,async rawLang=>{
+  const lang=languageCode(rawLang),code=bollyLang[lang];if(!code)return [] as JsonMap[];
   const searchUrl=base+"/en/search/";
   const form=new URLSearchParams({type:"2",title:args.title+(args.year?" "+args.year:""),language:code,submit:"Search"}).toString();
-  let html="";try{html=await getProviderPage(searchUrl,host,base+"/en/","POST",form);}catch{continue;}
+  let html="";try{html=await getProviderPage(searchUrl,host,base+"/en/","POST",form);}catch{return [] as JsonMap[];}
   const links=[...html.matchAll(/href=["'](\/en\/bollywood-movie-subtitles\/\d+\/[^"']+\/)["'][^>]*>([\s\S]*?)<\/a>/gi)];
   for(const match of links.slice(0,5)){
    const title=stripHtml(match[2]);if(!titleMatch(title,args.title))continue;
@@ -497,11 +506,11 @@ async function searchBollyNook(args:SearchArgs):Promise<JsonMap[]>{
    const dl=detail.match(/<a\b[^>]*class=["'][^"']*\bdownloads\b[^"']*["'][^>]*href=["']([^"']+)["']/i);
    if(!dl)continue;
    const url=providerAbsolute(dl[1],base);if(!safeDownloadUrl(url,host))continue;
-   out.push({language:lang,format:"zip",fileName:"bollynook_subtitle.zip",releaseName:(title+(year?" "+year[1]:"")).slice(0,180),downloadUrl:url,pageUrl:detailUrl,provider:"BollyNook",providerSource:"bollynook"});
-   break;
+   return [{language:lang,format:"zip",fileName:"bollynook_subtitle.zip",releaseName:(title+(year?" "+year[1]:"")).slice(0,180),downloadUrl:url,pageUrl:detailUrl,provider:"BollyNook",providerSource:"bollynook"}] as JsonMap[];
   }
- }
- return out;
+  return [] as JsonMap[];
+ });
+ return batches.flat();
 }
 function selectExternalArchive(files:Record<string,Uint8Array>,season:number,episode:number,mediaType:string):{name:string;bytes:Uint8Array}{
  const candidates=Object.entries(files).filter(([n,b])=>/\.(srt|ass|ssa|vtt)$/i.test(n)&&b.length>=16&&b.length<=5*1024*1024&&!n.split(/[\\/]/).includes(".."));
@@ -616,11 +625,11 @@ Deno.serve(async (request: Request) => {
     tasks.push(providerWithDeadline((async () => {
       try { return await searchISubtitles(baseArgs); }
       catch (error) { providerErrors.push("iSubtitles request failed"); console.warn("FLIXORA iSubtitles failed",error); return []; }
-    })(), "iSubtitles", providerErrors));
+    })(), "iSubtitles", providerErrors, 10500));
     if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }
-    })(), "BollyNook", providerErrors));
+    })(), "BollyNook", providerErrors, 10500));
     const batches = await Promise.all(tasks);
     let subtitles = capAndDedupe(batches.flat());
     let openSubtitlesSearched = false;
