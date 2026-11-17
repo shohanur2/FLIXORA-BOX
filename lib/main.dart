@@ -16542,7 +16542,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         ].join('|').toLowerCase();
         if (code.isNotEmpty) unique.putIfAbsent(identity, () => option);
       }
-      final available = unique.values.toList()
+      var available = unique.values.toList()
         ..sort((a, b) {
           int priority(Map<String, dynamic> option) {
             final code = (option['language'] ?? '').toString().toLowerCase();
@@ -16552,9 +16552,29 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           }
           return priority(a).compareTo(priority(b));
         });
-      if (available.isEmpty) throw StateError('No subtitles were found for this title and episode.');
+      Future<List<Map<String, dynamic>>> searchTitleFallbackOptions() async {
+        final fallbackTitle = searchTitle?.trim().isNotEmpty == true ? searchTitle!.trim() : widget.movie.title;
+        final fallbackResponse = await client.functions.invoke('flixora-subtitles', body: {
+          'action': 'search_title_fallback', 'tmdbId': 0, 'title': fallbackTitle,
+          'year': widget.movie.year,
+          'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+          'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+          if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+            'season': _selectedSeasonNumber, 'episode': _selectedEpisodeNumber,
+          },
+        }).timeout(const Duration(seconds: 18));
+        final payload = fallbackResponse.data;
+        final raw = payload is Map ? payload['subtitles'] : null;
+        return raw is List ? raw.whereType<Map>().map((x) => Map<String,dynamic>.from(x))
+          .where((x) => (x['downloadUrl'] ?? '').toString().isNotEmpty).toList(growable:false)
+          : <Map<String,dynamic>>[];
+      }
+      if (available.isEmpty) {
+        try { available = await searchTitleFallbackOptions(); }
+        catch (error) { debugPrint('FLIXORA title fallback search failed: $error'); }
+      }
       if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
-      if (mounted && !_isDisposed) {
+      if (available.isNotEmpty && mounted && !_isDisposed) {
         setState(() {
           _automaticSubtitleOptions = available;
           _automaticSubtitleMessage = '${available.length} language(s) available';
@@ -16601,7 +16621,21 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       // If primary providers returned listings but every file failed to
       // download/validate, make one final request to the quota-limited
       // provider. This avoids spending its small allowance on normal searches.
-      final alreadyTriedOpenSubtitles = available.any((option) =>
+      if (file == null) {
+        try {
+          final fallbackOptions = await searchTitleFallbackOptions();
+          final tried = orderedOptions.map((x) =>
+            '${(x['provider'] ?? '').toString().toLowerCase()}|${x['downloadUrl'] ?? ''}').toSet();
+          for (final option in fallbackOptions) {
+            final key = '${(option['provider'] ?? '').toString().toLowerCase()}|${option['downloadUrl'] ?? ''}';
+            if (tried.contains(key)) continue;
+            if (requestToken != _automaticSubtitleRequestToken || _subtitleManuallySelected || _isDisposed) return;
+            try { file = await _downloadAutomaticSubtitle(option); selected = option; break; }
+            catch (error) { lastDownloadError = error; debugPrint('FLIXORA title-fallback candidate failed: $error'); }
+          }
+        } catch (error) { lastDownloadError = error; debugPrint('FLIXORA title-fallback search failed: $error'); }
+      }
+      final alreadyTriedOpenSubtitles = orderedOptions.any((option) =>
           (option['provider'] ?? '').toString().toLowerCase() == 'opensubtitles');
       if (file == null && !alreadyTriedOpenSubtitles) {
         try {

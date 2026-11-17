@@ -659,6 +659,62 @@ Deno.serve(async (request: Request) => {
       return json({subtitles, resultCount: subtitles.length, searchedProviders: 1,
         providerErrors, fallbackOnly: true});
     }
+    if (body.action === "search_title_fallback") {
+      const title = String(body.title ?? "").trim().slice(0, 180);
+      const year = String(body.year ?? "").trim();
+      const mediaType = body.mediaType === "tv" ? "tv" : "movie";
+      const requested = String(body.languages ?? "EN").split(",")
+        .map(x => x.trim().toUpperCase()).filter(x => supportedLanguages.has(x));
+      const languages = [...new Set(requested)];
+      if (!languages.length) languages.push("EN");
+      const season = Math.max(0, Math.min(99, Number(body.season ?? 0) || 0));
+      const episode = Math.max(0, Math.min(999, Number(body.episode ?? 0) || 0));
+      if (!title) return json({error:"A valid title is required."},400);
+      if (mediaType === "tv" && (!season || !episode))
+        return json({error:"Season and episode are required for TV subtitles."},400);
+      const subdlKey = Deno.env.get("SUBDL_API_KEY")?.trim() ?? "";
+      const subsourceKey = Deno.env.get("SUBSOURCE_API_KEY")?.trim() ?? "";
+      const providerErrors: string[] = [];
+      const args: SearchArgs = {apiKey:"",tmdbId:0,title,year,mediaType,languages,season,episode,providerErrors};
+      const tasks: Promise<JsonMap[]>[] = [];
+      if (subdlKey) tasks.push(providerWithDeadline((async () => {
+        try {
+          let found = await searchSubDL({...args,apiKey:subdlKey});
+          if (!found.length && year) found = await searchSubDL({...args,apiKey:subdlKey},true,true);
+          return found;
+        } catch (error) {
+          providerErrors.push("SubDL title fallback failed");
+          console.warn("FLIXORA SubDL title fallback failed",error);
+          return [];
+        }
+      })(),"SubDL title fallback",providerErrors));
+      if (subsourceKey) tasks.push(providerWithDeadline((async () => {
+        try { return await searchSubSource(args,subsourceKey); }
+        catch (error) {
+          providerErrors.push("SubSource title fallback failed");
+          console.warn("FLIXORA SubSource title fallback failed",error);
+          return [];
+        }
+      })(),"SubSource title fallback",providerErrors));
+      tasks.push(providerWithDeadline((async () => {
+        try { return await searchISubtitles(args); }
+        catch (error) {
+          providerErrors.push("iSubtitles title fallback failed");
+          console.warn("FLIXORA iSubtitles title fallback failed",error);
+          return [];
+        }
+      })(),"iSubtitles title fallback",providerErrors,10500));
+      if (mediaType === "movie") tasks.push(providerWithDeadline((async () => {
+        try { return await searchBollyNook(args); }
+        catch (error) {
+          providerErrors.push("BollyNook title fallback failed");
+          console.warn("FLIXORA BollyNook title fallback failed",error);
+          return [];
+        }
+      })(),"BollyNook title fallback",providerErrors,10500));
+      const subtitles = capAndDedupe((await Promise.all(tasks)).flat());
+      return json({subtitles,resultCount:subtitles.length,searchedProviders:tasks.length,providerErrors,titleFallback:true});
+    }
     const tmdbId = Number(body.tmdbId ?? 0);
     const title = String(body.title ?? "").trim().slice(0, 180);
     const year = String(body.year ?? "").trim();
