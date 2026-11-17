@@ -240,7 +240,6 @@ async function subsourceJson(url: URL, apiKey: string): Promise<JsonMap> {
   });
   if (!response.ok) throw new Error("SubSource HTTP " + response.status);
   const payload = await response.json() as JsonMap;
-  if (payload.success !== true) throw new Error("SubSource returned an unsuccessful response");
   return payload;
 }
 function subsourceReleaseInfo(value: unknown): string {
@@ -261,17 +260,29 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   const movieSearch = new URL(SUBSOURCE_BASE + "/movies/search");
   movieSearch.searchParams.set("searchType", "text");
   movieSearch.searchParams.set("q", args.title);
+  movieSearch.searchParams.set("type", args.mediaType === "tv" ? "series" : "movie");
+  if (/^\d{4}$/.test(args.year)) movieSearch.searchParams.set("year", args.year);
   if (args.mediaType === "tv") movieSearch.searchParams.set("season", String(args.season));
   const moviePayload = await subsourceJson(movieSearch, apiKey);
   const movieRows = Array.isArray(moviePayload.data) ? moviePayload.data as JsonMap[] : [];
   const wantedTitle = normalizeMatch(args.title);
   const scored = movieRows.map(row => {
     const id = Number(row.movieId ?? row.id ?? 0);
-    const rowText = normalizeMatch(JSON.stringify(row));
-    let score = id > 0 && rowText.includes(wantedTitle) ? 10 : 0;
-    if (args.year && rowText.includes(args.year)) score += 2;
+    const type = String(row.type ?? "").toLowerCase();
+    if (args.mediaType === "tv" && type && type !== "series" && type !== "tv") return {id, score:0};
+    if (args.mediaType !== "tv" && type && type !== "movie") return {id, score:0};
+    const rowTmdbId = Number(row.tmdbId ?? 0);
+    if (args.tmdbId > 0 && rowTmdbId > 0 && rowTmdbId !== args.tmdbId) return {id, score:0};
+    const titleMatches = normalizeMatch(row.title) === wantedTitle ||
+      normalizeMatch(row.alternateTitle) === wantedTitle;
+    if (!titleMatches) return {id, score:0};
+    const releaseYear = Number(row.releaseYear ?? 0);
+    if (args.year && releaseYear > 0 && releaseYear !== Number(args.year)) return {id, score:0};
+    let score = 10;
+    if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 20;
+    if (args.year && releaseYear === Number(args.year)) score += 2;
     return {id, score};
-  }).filter(x => Number.isInteger(x.id) && x.id > 0 && x.score >= 10)
+  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 10)
     .sort((a,b) => b.score-a.score);
   const movieId = scored[0]?.id;
   if (!movieId) return [];
@@ -290,7 +301,6 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
     const lang = subsourceLanguageCode(row.language ?? row.languageName ?? row.languageCode);
     if (!requested.has(lang)) continue;
     const release = subsourceReleaseInfo(row.releaseInfo ?? row.release_info);
-    if (args.mediaType === "tv" && !matchesSubSourceEpisode(release, args.season, args.episode)) continue;
     if (seen.has(lang + ":" + id)) continue;
     seen.add(lang + ":" + id);
     output.push({
@@ -315,7 +325,15 @@ function chooseSubSourceArchiveFile(files: Record<string, Uint8Array>, releaseNa
     /\.(srt|ass|ssa|vtt)$/i.test(name) && bytes.length >= 8 && bytes.length <= 5 * 1024 * 1024 &&
     !name.split(/[\\/]/).some(part => part === ".."));
   if (!candidates.length) throw new Error("SubSource ZIP contains no supported subtitle file");
-  if (candidates.length === 1) return {name:candidates[0][0], bytes:candidates[0][1]};
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    const hasEpisodeMarker = /(?:S\d{1,2}\s*E\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(only[0]);
+    if (mediaType === "tv" && hasEpisodeMarker &&
+        !matchesSubSourceEpisode(only[0], season, episode)) {
+      throw new Error("SubSource archive contains a different TV episode.");
+    }
+    return {name:only[0], bytes:only[1]};
+  }
   const episodeMatches = mediaType === "tv"
     ? candidates.filter(([name]) => matchesSubSourceEpisode(name, season, episode))
     : candidates;
@@ -346,11 +364,15 @@ async function downloadSubSource(body: JsonMap): Promise<Response> {
   let extracted: Record<string, Uint8Array>;
   try { extracted = unzipSync(archive); }
   catch { return json({error:"Could not extract the SubSource subtitle archive."},502); }
-  const selected = chooseSubSourceArchiveFile(extracted,String(body.releaseName ?? ""),
-    Number(body.season ?? 0),Number(body.episode ?? 0),body.mediaType === "tv" ? "tv" : "movie");
-  return json({contentBase64:base64Encode(selected.bytes),
-    fileName:selected.name.split(/[\\/]/).pop() ?? "subtitle.srt",
-    extension:selected.name.split(".").pop()?.toLowerCase() ?? "srt"});
+  try {
+    const selected = chooseSubSourceArchiveFile(extracted,String(body.releaseName ?? ""),
+      Number(body.season ?? 0),Number(body.episode ?? 0),body.mediaType === "tv" ? "tv" : "movie");
+    return json({contentBase64:base64Encode(selected.bytes),
+      fileName:selected.name.split(/[\\/]/).pop() ?? "subtitle.srt",
+      extension:selected.name.split(".").pop()?.toLowerCase() ?? "srt"});
+  } catch (error) {
+    return json({error:error instanceof Error ? error.message : "Could not select a matching subtitle file."},422);
+  }
 }
 
 Deno.serve(async (request: Request) => {
@@ -412,8 +434,10 @@ Deno.serve(async (request: Request) => {
     })());
     const batches = await Promise.all(tasks);
     let subtitles = capAndDedupe(batches.flat());
+    let subSourceSearched = false;
     // SubSource is a last-resort provider so normal requests do not consume its daily quota.
     if (!subtitles.length && subsourceKey) {
+      subSourceSearched = true;
       try {
         subtitles = capAndDedupe(await searchSubSource(baseArgs, subsourceKey));
       } catch (error) {
@@ -428,7 +452,7 @@ Deno.serve(async (request: Request) => {
         error: providerFailed
           ? "One or more subtitle providers could not complete the search. Please try again."
           : "No subtitles were found for the requested title, season, episode and languages.",
-        searchedProviders: tasks.length,
+        searchedProviders: tasks.length + (subSourceSearched ? 1 : 0),
         providerErrors,
       }, providerFailed ? 502 : 404);
     }
@@ -436,7 +460,7 @@ Deno.serve(async (request: Request) => {
     return json({
       subtitles,
       resultCount: subtitles.length,
-      searchedProviders: tasks.length,
+      searchedProviders: tasks.length + (subSourceSearched ? 1 : 0),
       ...(english ? {language:"English", format:english.format, fileName:english.fileName,
         releaseName:english.releaseName, downloadUrl:english.downloadUrl} : {})
     });
