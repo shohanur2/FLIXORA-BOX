@@ -16316,14 +16316,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final uri = Uri.tryParse(downloadUrl);
     final provider = (option['provider'] ?? '').toString().toLowerCase();
     final isSubSource = provider == 'subsource';
+    final isWyzie = provider == 'wyzie';
     final isSubDl = uri?.host == 'dl.subdl.com';
     final isOpenSubtitles = uri != null &&
         (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
+    final isWyzieUrl = uri != null && uri.host == 'sub.wyzie.io' &&
+        uri.path.startsWith('/c/') && uri.queryParameters.containsKey('tok');
     if (isSubSource) {
       final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
       if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
     } else if (uri == null || uri.scheme != 'https' ||
-        !(isSubDl || isOpenSubtitles) ||
+        !(isSubDl || isOpenSubtitles || (isWyzie && isWyzieUrl)) ||
         (isSubDl && !uri.path.startsWith('/subtitle/'))) {
       throw StateError('Subtitle provider returned an invalid file link.');
     }
@@ -16332,10 +16335,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final support = await getApplicationSupportDirectory();
     final cacheDir = Directory('${support.path}/flixora_subtitles');
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
+    // Do not include expiring signed download URLs in the cache key.
+    // The same release should reuse its validated local subtitle after relaunch.
     final releaseIdentity = [
+      option['provider'] ?? '',
+      option['providerSource'] ?? '',
+      option['subsourceId'] ?? '',
       option['releaseName'] ?? '',
       option['fileName'] ?? '',
-      option['downloadUrl'] ?? '',
     ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
     final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${releaseIdentity.hashCode.abs()}';
     final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
