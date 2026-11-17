@@ -481,20 +481,32 @@ Deno.serve(async (request: Request) => {
         return [];
       }
     })());
-    const batches = await Promise.all(tasks);
-    let subtitles = capAndDedupe(batches.flat());
+    // SubSource is the preferred provider. Keep a small number of its
+    // results first, then retain SubDL/OpenSubtitles candidates as fallbacks
+    // so a provider HTTP 429 never leaves the user without another choice.
+    let subSourceResults: JsonMap[] = [];
     let subSourceSearched = false;
-    // SubSource is a last-resort provider so normal requests do not consume its daily quota.
-    if (!subtitles.length && subsourceKey) {
+    if (subsourceKey) {
       subSourceSearched = true;
       try {
-        subtitles = capAndDedupe(await searchSubSource(baseArgs, subsourceKey));
+        subSourceResults = await searchSubSource(baseArgs, subsourceKey);
       } catch (error) {
         providerErrors.push(error instanceof Error ? error.message : "SubSource request failed");
         console.warn("FLIXORA SubSource request failed",
           error instanceof Error ? error.message : "unknown error");
       }
     }
+    const batches = await Promise.all(tasks);
+    const subSourcePerLanguage = new Map<string, number>();
+    const preferredSubSource: JsonMap[] = [];
+    for (const item of subSourceResults) {
+      const lang = String(item.language ?? "").toLowerCase();
+      const count = subSourcePerLanguage.get(lang) ?? 0;
+      if (count >= 2) continue;
+      subSourcePerLanguage.set(lang, count + 1);
+      preferredSubSource.push(item);
+    }
+    const subtitles = capAndDedupe([...preferredSubSource, ...batches.flat()]);
     if (!subtitles.length) {
       const providerFailed = providerErrors.length > 0;
       return json({
