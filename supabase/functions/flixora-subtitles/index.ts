@@ -488,6 +488,7 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
   if(out.length)break;
  }
  return out;
+}
 async function searchBollyNook(args:SearchArgs):Promise<JsonMap[]>{
  if(args.mediaType!=="movie")return [];
  const base="https://www.bollynook.com",host="bollynook.com";
