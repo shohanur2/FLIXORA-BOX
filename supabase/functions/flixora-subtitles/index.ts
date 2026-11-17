@@ -73,7 +73,7 @@ async function searchSubDL(args: SearchArgs, titleFallback = false, omitYear = f
     url.searchParams.set("season_number", String(args.season));
     url.searchParams.set("episode_number", String(args.episode));
   }
-  const response = await fetch(url, { signal: AbortSignal.timeout(9000) });
+  const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
   if (!response.ok) {
     args.providerErrors.push(`SubDL search HTTP ${response.status}`);
     console.warn("FLIXORA SubDL search HTTP", response.status);
@@ -539,6 +539,29 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  return json({contentBase64:base64Encode(selected),fileName:name,extension:name.split(".").pop()||"srt"});
 }
 
+const subtitleSearchCache = new Map<string, {expiresAt:number; payload:JsonMap}>();
+function subtitleCacheKey(args: SearchArgs): string {
+  return [args.tmdbId,args.title.toLowerCase(),args.year,args.mediaType,args.season,args.episode,
+    [...args.languages].sort().join(",")].join("|");
+}
+async function providerWithDeadline(task: Promise<JsonMap[]>, label: string,
+  errors: string[], timeoutMs = 5200): Promise<JsonMap[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<JsonMap[]>((resolve) => {
+        timer = setTimeout(() => {
+          errors.push(label + " search timed out");
+          resolve([]);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") return new Response("ok", {headers: corsHeaders});
   if (request.method !== "POST") return json({error: "Method not allowed"}, 405);
@@ -566,6 +589,12 @@ Deno.serve(async (request: Request) => {
 
     const providerErrors: string[] = [];
     const baseArgs: SearchArgs = {apiKey:"", tmdbId, title, year, mediaType, languages, season, episode, providerErrors};
+    const cacheKey = subtitleCacheKey(baseArgs);
+    const cached = subtitleSearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return json({...cached.payload, cacheHit:true});
+    }
+    if (cached) subtitleSearchCache.delete(cacheKey);
     const tasks: Promise<JsonMap[]>[] = [];
     if (subdlKey) tasks.push((async () => {
       try {
@@ -581,7 +610,7 @@ Deno.serve(async (request: Request) => {
     })());
     // All provider searches run independently; one failed website cannot
     // prevent results from the other sources.
-    if (subsourceKey) tasks.push((async () => {
+    if (subsourceKey) tasks.push(providerWithDeadline((async () => {
       try { return await searchSubSource(baseArgs, subsourceKey); }
       catch (error) { providerErrors.push("SubSource request failed"); console.warn("FLIXORA SubSource failed",error); return []; }
     })());
@@ -589,7 +618,7 @@ Deno.serve(async (request: Request) => {
       try { return await searchISubtitles(baseArgs); }
       catch (error) { providerErrors.push("iSubtitles request failed"); console.warn("FLIXORA iSubtitles failed",error); return []; }
     })());
-    if(mediaType==="movie") tasks.push((async () => {
+    if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }
     })());
@@ -615,23 +644,31 @@ Deno.serve(async (request: Request) => {
     if (!subtitles.length) {
       // Return a normal payload instead of HTTP 502/404. The Flutter client
       // can then show a useful no-results message without a FunctionsHttpException.
-      return json({
+      const emptyPayload: JsonMap = {
         subtitles: [],
         resultCount: 0,
         error: "No subtitles were found from the available providers for this title, episode and languages.",
         searchedProviders,
         providerErrors,
-      });
+      };
+      subtitleSearchCache.set(cacheKey,{expiresAt:Date.now()+30000,payload:emptyPayload});
+      return json(emptyPayload);
     }
     const english = subtitles.find(x => x.language === "en");
-    return json({
+    const successPayload: JsonMap = {
       subtitles,
       resultCount: subtitles.length,
       searchedProviders,
       providerErrors,
       ...(english ? {language:"English", format:english.format, fileName:english.fileName,
         releaseName:english.releaseName, downloadUrl:english.downloadUrl} : {})
-    });
+    };
+    subtitleSearchCache.set(cacheKey,{expiresAt:Date.now()+5*60*1000,payload:successPayload});
+    if (subtitleSearchCache.size > 150) {
+      const firstKey = subtitleSearchCache.keys().next().value;
+      if (firstKey) subtitleSearchCache.delete(firstKey);
+    }
+    return json(successPayload);
   } catch {
     return json({error: "Automatic subtitle lookup failed."}, 500);
   }
