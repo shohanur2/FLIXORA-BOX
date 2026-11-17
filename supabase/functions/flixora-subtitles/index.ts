@@ -251,15 +251,21 @@ function subsourceReleaseInfo(value: unknown): string {
   return Array.isArray(value) ? value.map(x => String(x ?? "")).join(" ") : String(value ?? "");
 }
 function matchesSubSourceEpisode(release: string, season: number, episode: number): boolean {
-  const compact = normalizeMatch(release).replace(/\s+/g, "");
-  const s = String(season), ss = s.padStart(2,"0"), e = String(episode), ee = e.padStart(2,"0");
-  const exact = ["s"+ss+"e"+ee,"s"+s+"e"+e,"s"+ss+"e"+e,"s"+s+"e"+ee,
-    s+"x"+ee,s+"x"+e,ss+"x"+ee,ss+"x"+e];
-  if (exact.some(x => compact.includes(x))) return true;
-  const explicit = new RegExp("(?:^|[^a-z0-9])s0*"+season+"[-_. ]*e0*"+episode+"(?:[^0-9]|$)|(?:^|[^0-9])0*"+season+"x0*"+episode+"(?:[^0-9]|$)", "i");
-  if (explicit.test(release)) return true;
-  const otherEpisode = /\b(?:S\d{1,2}\s*E|E|EP(?:ISODE)?)\s*0*\d+\b/i;
-  return !otherEpisode.test(release) && new RegExp("(?:^|[^0-9])0*"+episode+"(?:[^0-9]|$)").test(release);
+  const value = String(release ?? "");
+  const exact = [
+    new RegExp("s0*"+season+"e0*"+episode+"(?:[^0-9]|$)", "i"),
+    new RegExp("(?:^|[^0-9])0*"+season+"x0*"+episode+"(?:[^0-9]|$)", "i"),
+  ];
+  const seasonEpisode = value.match(/\bseason\s*0*(\d{1,2})\D{0,12}(?:episode|ep)\s*0*(\d{1,3})\b/i);
+  if (seasonEpisode) return Number(seasonEpisode[1]) === season && Number(seasonEpisode[2]) === episode;
+  if (/(?:s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(value)) {
+    return exact.some(pattern => pattern.test(value));
+  }
+  const episodeOnly = value.match(/\b(?:episode|ep|e)\s*0*(\d{1,3})\b/i);
+  if (episodeOnly) return Number(episodeOnly[1]) === episode;
+  // Some SubSource entries identify only the series/season, not the episode.
+  // Keep those candidates; the requested season is already sent to its API.
+  return true;
 }
 async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMap[]> {
   const movieSearch = new URL(SUBSOURCE_BASE + "/movies/search");
@@ -270,25 +276,31 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   if (args.mediaType === "tv") movieSearch.searchParams.set("season", String(args.season));
   const moviePayload = await subsourceJson(movieSearch, apiKey);
   const movieRows = Array.isArray(moviePayload.data) ? moviePayload.data as JsonMap[] : [];
-  const wantedTitle = normalizeMatch(args.title);
+  const wantedTitle = normalizeMatch(args.title).replace(/\b(19|20)\d{2}\b/g, "").trim();
   const scored = movieRows.map(row => {
     const id = Number(row.movieId ?? row.id ?? 0);
     const type = String(row.type ?? "").toLowerCase();
     if (args.mediaType === "tv" && type && type !== "series" && type !== "tv") return {id, score:0};
     if (args.mediaType !== "tv" && type && type !== "movie") return {id, score:0};
-    const rowTmdbId = Number(row.tmdbId ?? 0);
+    const rowTmdbId = Number(row.tmdbId ?? row.tmdb_id ?? 0);
     if (args.tmdbId > 0 && rowTmdbId > 0 && rowTmdbId !== args.tmdbId) return {id, score:0};
-    const titleMatches = normalizeMatch(row.title) === wantedTitle ||
-      normalizeMatch(row.alternateTitle) === wantedTitle;
+    const titleValues = [row.title, row.alternateTitle, row.originalTitle, row.englishTitle, row.name]
+      .map(value => normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g, "").trim())
+      .filter(Boolean);
+    const titleMatches = titleValues.some(value => value === wantedTitle ||
+      value.startsWith(wantedTitle + " ") || wantedTitle.startsWith(value + " "));
     if (!titleMatches) return {id, score:0};
-    const releaseYear = Number(row.releaseYear ?? 0);
+    const releaseYear = Number(row.releaseYear ?? row.release_year ?? row.year ?? 0);
     if (args.year && releaseYear > 0 && releaseYear !== Number(args.year)) return {id, score:0};
-    let score = 10;
+    let score = titleValues.includes(wantedTitle) ? 10 : 7;
     if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 20;
     if (args.year && releaseYear === Number(args.year)) score += 2;
     return {id, score};
-  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 10)
+  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 7)
     .sort((a,b) => b.score-a.score);
+  console.info("FLIXORA SubSource series match", {
+    searchRows: movieRows.length, matchingRows: scored.length, hasTmdbId: args.tmdbId > 0,
+  });
   const movieId = scored[0]?.id;
   if (!movieId) return [];
   const subtitleUrl = new URL(SUBSOURCE_BASE + "/subtitles");
@@ -300,12 +312,23 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   const requested = new Set(args.languages.map(languageCode));
   const output: JsonMap[] = [];
   const seen = new Set<string>();
+  let languageRejected = 0, episodeRejected = 0;
   for (const row of rows) {
     const id = Number(row.subtitleId ?? row.id ?? 0);
     if (!Number.isInteger(id) || id <= 0) continue;
     const lang = subsourceLanguageCode(row.language ?? row.languageName ?? row.languageCode);
-    if (!requested.has(lang)) continue;
+    if (!requested.has(lang)) { languageRejected++; continue; }
     const release = subsourceReleaseInfo(row.releaseInfo ?? row.release_info);
+    if (args.mediaType === "tv") {
+      const rowSeason = Number(row.seasonNumber ?? row.season_number ?? row.season ?? 0);
+      const rowEpisode = Number(row.episodeNumber ?? row.episode_number ?? row.episode ?? 0);
+      if ((rowSeason > 0 && rowSeason !== args.season) ||
+          (rowEpisode > 0 && rowEpisode !== args.episode) ||
+          !matchesSubSourceEpisode(release, args.season, args.episode)) {
+        episodeRejected++;
+        continue;
+      }
+    }
     if (seen.has(lang + ":" + id)) continue;
     seen.add(lang + ":" + id);
     output.push({
@@ -315,6 +338,9 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
     });
     if (output.length >= 40) break;
   }
+  console.info("FLIXORA SubSource subtitle rows", {
+    totalRows: rows.length, accepted: output.length, languageRejected, episodeRejected,
+  });
   return output;
 }
 function validateSubSourceZipLimits(archive: Uint8Array): void {
@@ -527,12 +553,30 @@ function selectExternalArchive(files:Record<string,Uint8Array>,season:number,epi
 }
 async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  const provider=String(body.provider??"").toLowerCase();
- const host=provider==="isubtitles"?"isubtitles.org":provider==="bollynook"?"bollynook.com":"";
+ const host=provider==="isubtitles"?"isubtitles.org":
+   provider==="bollynook"?"bollynook.com":
+   provider==="subdl"?"subdl.com":
+   provider==="opensubtitles"?"opensubtitles.com":"";
  if(!host)return json({error:"Unsupported subtitle provider."},400);
  const url=safeDownloadUrl(body.downloadUrl,host);if(!url)return json({error:"Invalid provider download URL."},400);
+ if(provider==="subdl"&&!new URL(url).pathname.startsWith("/subtitle/"))
+   return json({error:"Invalid SubDL subtitle path."},400);
  const referer=safeDownloadUrl(body.pageUrl,host);
- const response=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36","Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})},signal:AbortSignal.timeout(20000)});
- if(!response.ok)return json({error:provider+" download HTTP "+response.status},502);
+ const headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+   "Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})};
+ let response:Response|undefined;
+ for(let attempt=0;attempt<2;attempt++){
+   response=await fetch(url,{headers,signal:AbortSignal.timeout(20000)});
+   if(response.ok)break;
+   if(attempt===0&&(response.status===429||response.status>=500)){
+     const retryAfter=Number(response.headers.get("retry-after")??"");
+     const waitMs=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,4000):1200;
+     await new Promise(resolve=>setTimeout(resolve,waitMs));
+     continue;
+   }
+   return json({error:provider+" download HTTP "+response.status},502);
+ }
+ if(!response?.ok)return json({error:provider+" download HTTP "+(response?.status??502)},502);
  const bytes=new Uint8Array(await response.arrayBuffer());
  if(bytes.length<16||bytes.length>10*1024*1024)return json({error:"Provider returned an empty or oversized subtitle."},502);
  let selected:Uint8Array,name="subtitle.srt";
@@ -545,7 +589,7 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
   if((bytes[0]===0x52&&bytes[1]===0x61)||(bytes[0]===0x37&&bytes[1]===0x7b))return json({error:"Provider archive format is not supported; trying another subtitle source."},422);
   selected=bytes;
  }
- if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},422);
+ if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},502);
  return json({contentBase64:base64Encode(selected),fileName:name,extension:name.split(".").pop()||"srt"});
 }
 
@@ -557,16 +601,22 @@ function subtitleCacheKey(args: SearchArgs): string {
 async function providerWithDeadline(task: Promise<JsonMap[]>, label: string,
   errors: string[], timeoutMs = 5200): Promise<JsonMap[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now();
   try {
-    return await Promise.race([
+    const results = await Promise.race([
       task,
       new Promise<JsonMap[]>((resolve) => {
         timer = setTimeout(() => {
           errors.push(label + " search timed out");
+          console.warn("FLIXORA provider timeout", label, timeoutMs);
           resolve([]);
         }, timeoutMs);
       }),
     ]);
+    console.info("FLIXORA provider result", label, {
+      resultCount: results.length, elapsedMs: Date.now() - startedAt,
+    });
+    return results;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
