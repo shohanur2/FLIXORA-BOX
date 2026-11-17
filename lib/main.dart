@@ -16842,7 +16842,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     if (code.isNotEmpty) {
                       entries.putIfAbsent(code, () => {
                         'kind': 'embedded', 'language': code, 'track': track,
-                        'releaseName': track.title ?? '',
+                        'releaseName': _subtitleTrackDisplayName(track),
                       });
                     }
                   }
@@ -16985,6 +16985,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                       _importSubtitleFile();
                                     }, detail: 'Load a subtitle from your device',
                                       trailing: const Icon(Icons.file_upload_outlined, color: playerGoldLight)),
+                                    row('Add subtitle URL', 'external', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _addExternalSubtitle();
+                                    }, detail: 'Load a subtitle from a web URL',
+                                      trailing: const Icon(Icons.link_rounded, color: playerGoldLight)),
                                     row('Download Subtitle', 'download', () {
                                       Navigator.of(sheetContext).pop();
                                       _showSubtitleDownloadPanel();
