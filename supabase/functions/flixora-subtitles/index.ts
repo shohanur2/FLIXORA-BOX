@@ -312,6 +312,49 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   }
   return output;
 }
+function validateSubSourceZipLimits(archive: Uint8Array): void {
+  const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+  const minimum = Math.max(0, archive.length - 65557);
+  let endRecord = -1;
+  for (let offset = archive.length - 22; offset >= minimum; offset--) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      endRecord = offset;
+      break;
+    }
+  }
+  if (endRecord < 0) throw new Error("ZIP end record is missing.");
+  const entryCount = view.getUint16(endRecord + 10, true);
+  const centralSize = view.getUint32(endRecord + 12, true);
+  const centralOffset = view.getUint32(endRecord + 16, true);
+  if (entryCount < 1 || entryCount > 100 ||
+      centralOffset + centralSize > endRecord || centralOffset >= archive.length) {
+    throw new Error("ZIP archive structure or file count is invalid.");
+  }
+  let offset = centralOffset;
+  let totalUncompressed = 0;
+  for (let index = 0; index < entryCount; index++) {
+    if (offset + 46 > archive.length || view.getUint32(offset, true) !== 0x02014b50) {
+      throw new Error("ZIP central directory is invalid.");
+    }
+    const compressed = view.getUint32(offset + 20, true);
+    const uncompressed = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    if (compressed === 0xffffffff || uncompressed === 0xffffffff ||
+        uncompressed > 5 * 1024 * 1024) {
+      throw new Error("ZIP entry exceeds the subtitle extraction size limit.");
+    }
+    totalUncompressed += uncompressed;
+    if (totalUncompressed > 20 * 1024 * 1024) {
+      throw new Error("ZIP archive exceeds the total extraction size limit.");
+    }
+    offset += 46 + nameLength + extraLength + commentLength;
+    if (offset > centralOffset + centralSize) {
+      throw new Error("ZIP central directory bounds are invalid.");
+    }
+  }
+}
 function base64Encode(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -362,7 +405,10 @@ async function downloadSubSource(body: JsonMap): Promise<Response> {
     return json({error:"SubSource returned an invalid or oversized subtitle archive."},502);
   }
   let extracted: Record<string, Uint8Array>;
-  try { extracted = unzipSync(archive); }
+  try {
+    validateSubSourceZipLimits(archive);
+    extracted = unzipSync(archive);
+  }
   catch { return json({error:"Could not extract the SubSource subtitle archive."},502); }
   try {
     const selected = chooseSubSourceArchiveFile(extracted,String(body.releaseName ?? ""),
