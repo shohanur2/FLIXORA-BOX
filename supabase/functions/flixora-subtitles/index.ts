@@ -482,29 +482,19 @@ Deno.serve(async (request: Request) => {
         return [];
       }
     })());
-    // SubSource remains an additional fallback provider.
-    let subSourceResults: JsonMap[] = [];
-    let subSourceSearched = false;
-    if (subsourceKey) {
-      subSourceSearched = true;
-      try {
-        subSourceResults = await searchSubSource(baseArgs, subsourceKey);
-      } catch (error) {
-        providerErrors.push(error instanceof Error ? error.message : "SubSource request failed");
+    // Keep SubSource independent from the other providers so its failure
+    // never blocks SubDL or OpenSubtitles results.
+    if (subsourceKey) tasks.push((async () => {
+      try { return await searchSubSource(baseArgs, subsourceKey); }
+      catch (error) {
+        providerErrors.push("SubSource request failed");
         console.warn("FLIXORA SubSource request failed",
           error instanceof Error ? error.message : "unknown error");
+        return [];
       }
-    }
+    })());
     const batches = await Promise.all(tasks);
-    const subSourcePerLanguage = new Map<string, number>();
-    const preferredSubSource: JsonMap[] = [];
-    for (const item of subSourceResults) {
-      const lang = String(item.language ?? "").toLowerCase();
-      const count = subSourcePerLanguage.get(lang) ?? 0;
-      if (count >= 2) continue;
-      subSourcePerLanguage.set(lang, count + 1);
-      preferredSubSource.push(item);
-    }
+    const subtitles = capAndDedupe(batches.flat());
 
     if (!subtitles.length) {
       const providerFailed = providerErrors.length > 0;
@@ -512,7 +502,7 @@ Deno.serve(async (request: Request) => {
         error: providerFailed
           ? "One or more subtitle providers could not complete the search. Please try again."
           : "No subtitles were found for the requested title, season, episode and languages.",
-        searchedProviders: tasks.length + (subSourceSearched ? 1 : 0),
+        searchedProviders: tasks.length,
         providerErrors,
       }, providerFailed ? 502 : 404);
     }
