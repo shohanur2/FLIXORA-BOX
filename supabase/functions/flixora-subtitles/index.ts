@@ -553,6 +553,105 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
  }
  return out;
 }
+
+const gestdownLanguage: Record<string,string> = {
+ en:"English",bn:"Bengali",hi:"Hindi",ur:"Urdu",ar:"Arabic",es:"Spanish",fr:"French",
+ de:"German",pt:"Portuguese",ru:"Russian",ja:"Japanese",ko:"Korean",it:"Italian",
+ nl:"Dutch",pl:"Polish",th:"Thai",id:"Indonesian",ms:"Malay",fa:"Persian",zh:"Chinese"
+};
+function cleanProviderTitle(value:string):string {
+ return normalizeMatch(value).replace(/\\b(19|20)\\d{2}\\b/g,"").trim();
+}
+async function searchGestdown(args:SearchArgs):Promise<JsonMap[]> {
+ if(args.mediaType!=="tv")return [];
+ const base="https://api.gestdown.info";
+ const showResponse=await fetch(base+"/shows/search/"+encodeURIComponent(args.title),
+   {headers:{Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+ if(!showResponse.ok)throw new Error("Gestdown show search HTTP "+showResponse.status);
+ const showPayload=await showResponse.json() as JsonMap;
+ const shows=Array.isArray(showPayload.shows)?showPayload.shows as JsonMap[]:[];
+ const wanted=cleanProviderTitle(args.title);
+ const candidates=shows.filter(show=>cleanProviderTitle(String(show.name??""))===wanted);
+ const show=candidates.find(item=>Array.isArray(item.seasons)&&
+   (item.seasons as unknown[]).some(value=>Number(value)===args.season));
+ if(!show)return [];
+ const showId=String(show.id??"");
+ if(!showId||!/^[a-zA-Z0-9_-]+$/.test(showId))return [];
+ const output:JsonMap[]=[];
+ for(const rawLang of args.languages){
+  const lang=languageCode(rawLang),languageName=gestdownLanguage[lang];
+  if(!languageName)continue;
+  const response=await fetch(base+"/subtitles/get/"+encodeURIComponent(showId)+"/"+
+    args.season+"/"+args.episode+"/"+encodeURIComponent(languageName),
+    {headers:{Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+  if(!response.ok)continue;
+  const payload=await response.json() as JsonMap;
+  const rows=Array.isArray(payload.matchingSubtitles)?payload.matchingSubtitles as JsonMap[]:[];
+  for(const row of rows){
+   const uri=String(row.downloadUri??"");
+   if(!uri.startsWith("/")||uri.startsWith("//"))continue;
+   const downloadUrl=new URL(uri,base).toString();
+   if(!safeDownloadUrl(downloadUrl,"api.gestdown.info"))continue;
+   const version=String(row.version??row.subtitleId??"Gestdown").slice(0,150);
+   output.push({language:lang,format:"zip",fileName:"gestdown_"+String(row.subtitleId??"subtitle")+".zip",
+    releaseName:version,downloadUrl,provider:"Gestdown",providerSource:"gestdown"});
+   if(output.length>=20)break;
+  }
+ }
+ return output;
+}
+async function searchTVSubtitles(args:SearchArgs):Promise<JsonMap[]> {
+ if(args.mediaType!=="tv")return [];
+ const base="https://www.tvsubtitles.net",host="www.tvsubtitles.net";
+ const searchUrl=base+"/search1.php";
+ const html=await getProviderPage(searchUrl,host,undefined,"POST","qs="+encodeURIComponent(args.title));
+ const wanted=cleanProviderTitle(args.title);
+ let showId="";
+ for(const match of html.matchAll(/<a\\b[^>]*href=["']([^"']*tvshow-(\\d+)\\.html[^"']*)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)){
+  const title=stripHtml(match[3]).replace(/\\s*\\(\\d{4}(?:-\\d{4})?\\)\\s*$/,"");
+  if(cleanProviderTitle(title)===wanted){showId=match[2];break;}
+ }
+ if(!showId)return [];
+ const seasonUrl=base+"/tvshow-"+showId+"-"+args.season+".html";
+ const seasonHtml=await getProviderPage(seasonUrl,host);
+ let episodeId="";
+ for(const row of seasonHtml.matchAll(/<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi)){
+  const text=stripHtml(row[1]);
+  const label=text.match(/\\b(\\d{1,2})x(\\d{1,4})\\b/i);
+  if(!label||Number(label[1])!==args.season||Number(label[2])!==args.episode)continue;
+  const link=row[1].match(/href=["'][^"']*episode-(\\d+)\\.html[^"']*["']/i);
+  if(link){episodeId=link[1];break;}
+ }
+ if(!episodeId)return [];
+ const output:JsonMap[]=[];
+ for(const rawLang of args.languages){
+  const lang=languageCode(rawLang);
+  const langCode:Record<string,string>={en:"en",zh:"cn",ja:"jp",fr:"fr",de:"de",es:"es",it:"it",pt:"pt",ru:"ru",nl:"nl",pl:"pl"};
+  const code=langCode[lang];if(!code)continue;
+  const episodeUrl=base+"/episode-"+episodeId+"-"+code+".html";
+  let episodeHtml="";
+  try{episodeHtml=await getProviderPage(episodeUrl,host);}catch{continue;}
+  for(const link of episodeHtml.matchAll(/<a\\b[^>]*href=["']([^"']*subtitle-(\\d+)\\.html[^"']*)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)){
+   const subtitleId=link[2];
+   const release=stripHtml(link[3])||("TVSubtitles "+subtitleId);
+   const subtitlePage=providerAbsolute(link[1],base);
+   const downloadPage=base+"/download-"+subtitleId+".html";
+   let downloadHtml="";
+   try{downloadHtml=await getProviderPage(downloadPage,host,subtitlePage);}catch{continue;}
+   const fragments=[...downloadHtml.matchAll(/var\\s+s\\d+\\s*=\\s*'([^']*)'/g)].map(item=>item[1]);
+   if(!fragments.length)continue;
+   const relative=fragments.join("");
+   const downloadUrl=providerAbsolute(relative,base);
+   if(!safeDownloadUrl(downloadUrl,host))continue;
+   output.push({language:lang,format:"zip",fileName:"tvsubtitles_"+subtitleId+".zip",
+    releaseName:release.slice(0,180),downloadUrl,pageUrl:subtitlePage,provider:"TVSubtitles",providerSource:"tvsubtitles"});
+   if(output.length>=20)break;
+  }
+  if(output.length)break;
+ }
+ return output;
+}
+
 async function searchBollyNook(args:SearchArgs):Promise<JsonMap[]>{
  if(args.mediaType!=="movie")return [];
  const base="https://www.bollynook.com",host="bollynook.com";
@@ -594,7 +693,9 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  const host=provider==="isubtitles"?"isubtitles.org":
    provider==="bollynook"?"bollynook.com":
    provider==="subdl"?"subdl.com":
-   provider==="opensubtitles"?"opensubtitles.com":"";
+   provider==="opensubtitles"?"opensubtitles.com":
+   provider==="gestdown"?"api.gestdown.info":
+   provider==="tvsubtitles"?"www.tvsubtitles.net":"";
  if(!host)return json({error:"Unsupported subtitle provider."},400);
  const url=safeDownloadUrl(body.downloadUrl,host);if(!url)return json({error:"Invalid provider download URL."},400);
  if(provider==="subdl"&&!new URL(url).pathname.startsWith("/subtitle/"))
@@ -742,6 +843,16 @@ Deno.serve(async (request: Request) => {
           return [];
         }
       })(),"iSubtitles title fallback",providerErrors,10500));
+      if (mediaType === "tv") {
+        tasks.push(providerWithDeadline((async () => {
+          try { return await searchGestdown(args); }
+          catch (error) { providerErrors.push("Gestdown title fallback failed"); console.warn("FLIXORA Gestdown title fallback failed",error); return []; }
+        })(),"Gestdown title fallback",providerErrors,10500));
+        tasks.push(providerWithDeadline((async () => {
+          try { return await searchTVSubtitles(args); }
+          catch (error) { providerErrors.push("TVSubtitles title fallback failed"); console.warn("FLIXORA TVSubtitles title fallback failed",error); return []; }
+        })(),"TVSubtitles title fallback",providerErrors,12000));
+      }
       if (mediaType === "movie") tasks.push(providerWithDeadline((async () => {
         try { return await searchBollyNook(args); }
         catch (error) {
@@ -801,6 +912,16 @@ Deno.serve(async (request: Request) => {
       try { return await searchISubtitles(baseArgs); }
       catch (error) { providerErrors.push("iSubtitles request failed"); console.warn("FLIXORA iSubtitles failed",error); return []; }
     })(), "iSubtitles", providerErrors, 10500));
+    if(mediaType==="tv") {
+      tasks.push(providerWithDeadline((async () => {
+        try { return await searchGestdown(baseArgs); }
+        catch (error) { providerErrors.push("Gestdown request failed"); console.warn("FLIXORA Gestdown failed",error); return []; }
+      })(),"Gestdown",providerErrors,10500));
+      tasks.push(providerWithDeadline((async () => {
+        try { return await searchTVSubtitles(baseArgs); }
+        catch (error) { providerErrors.push("TVSubtitles request failed"); console.warn("FLIXORA TVSubtitles failed",error); return []; }
+      })(),"TVSubtitles",providerErrors,12000));
+    }
     if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }
