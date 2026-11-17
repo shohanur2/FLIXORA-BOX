@@ -560,7 +560,7 @@ const gestdownLanguage: Record<string,string> = {
  nl:"Dutch",pl:"Polish",th:"Thai",id:"Indonesian",ms:"Malay",fa:"Persian",zh:"Chinese"
 };
 function cleanProviderTitle(value:string):string {
- return normalizeMatch(value).replace(/\\b(19|20)\\d{2}\\b/g,"").trim();
+ return normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g,"").trim();
 }
 async function searchGestdown(args:SearchArgs):Promise<JsonMap[]> {
  if(args.mediaType!=="tv")return [];
@@ -607,19 +607,19 @@ async function searchTVSubtitles(args:SearchArgs):Promise<JsonMap[]> {
  const html=await getProviderPage(searchUrl,host,undefined,"POST","qs="+encodeURIComponent(args.title));
  const wanted=cleanProviderTitle(args.title);
  let showId="";
- for(const match of html.matchAll(/<a\\b[^>]*href=["']([^"']*tvshow-(\\d+)\\.html[^"']*)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)){
-  const title=stripHtml(match[3]).replace(/\\s*\\(\\d{4}(?:-\\d{4})?\\)\\s*$/,"");
+ for(const match of html.matchAll(/<a\b[^>]*href=["']([^"']*tvshow-(\d+)\.html[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)){
+  const title=stripHtml(match[3]).replace(/\s*\(\d{4}(?:-\d{4})?\)\s*$/,"");
   if(cleanProviderTitle(title)===wanted){showId=match[2];break;}
  }
  if(!showId)return [];
  const seasonUrl=base+"/tvshow-"+showId+"-"+args.season+".html";
  const seasonHtml=await getProviderPage(seasonUrl,host);
  let episodeId="";
- for(const row of seasonHtml.matchAll(/<tr\\b[^>]*>([\\s\\S]*?)<\\/tr>/gi)){
+ for(const row of seasonHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){
   const text=stripHtml(row[1]);
-  const label=text.match(/\\b(\\d{1,2})x(\\d{1,4})\\b/i);
+  const label=text.match(/\b(\d{1,2})x(\d{1,4})\b/i);
   if(!label||Number(label[1])!==args.season||Number(label[2])!==args.episode)continue;
-  const link=row[1].match(/href=["'][^"']*episode-(\\d+)\\.html[^"']*["']/i);
+  const link=row[1].match(/href=["'][^"']*episode-(\d+)\.html[^"']*["']/i);
   if(link){episodeId=link[1];break;}
  }
  if(!episodeId)return [];
@@ -631,14 +631,14 @@ async function searchTVSubtitles(args:SearchArgs):Promise<JsonMap[]> {
   const episodeUrl=base+"/episode-"+episodeId+"-"+code+".html";
   let episodeHtml="";
   try{episodeHtml=await getProviderPage(episodeUrl,host);}catch{continue;}
-  for(const link of episodeHtml.matchAll(/<a\\b[^>]*href=["']([^"']*subtitle-(\\d+)\\.html[^"']*)["'][^>]*>([\\s\\S]*?)<\\/a>/gi)){
+  for(const link of episodeHtml.matchAll(/<a\b[^>]*href=["']([^"']*subtitle-(\d+)\.html[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)){
    const subtitleId=link[2];
    const release=stripHtml(link[3])||("TVSubtitles "+subtitleId);
    const subtitlePage=providerAbsolute(link[1],base);
    const downloadPage=base+"/download-"+subtitleId+".html";
    let downloadHtml="";
    try{downloadHtml=await getProviderPage(downloadPage,host,subtitlePage);}catch{continue;}
-   const fragments=[...downloadHtml.matchAll(/var\\s+s\\d+\\s*=\\s*'([^']*)'/g)].map(item=>item[1]);
+   const fragments=[...downloadHtml.matchAll(/var\s+s\d+\s*=\s*'([^']*)'/g)].map(item=>item[1]);
    if(!fragments.length)continue;
    const relative=fragments.join("");
    const downloadUrl=providerAbsolute(relative,base);
