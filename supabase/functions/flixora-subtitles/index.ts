@@ -245,8 +245,14 @@ Deno.serve(async (request: Request) => {
     if (openKey) tasks.push((async () => {
       try {
         let found = await searchOpenSubtitles({...baseArgs, apiKey: openKey});
-        if (!found.length && title) found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true);
-        if (!found.length && title && year) found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true, true);
+        // Do not repeat fallback searches when the provider has exhausted its
+        // download quota or is rate-limiting this request.
+        const downloadBlocked = () => providerErrors.some(error =>
+          /OpenSubtitles download HTTP (?:406|429)/.test(error));
+        if (!found.length && title && !downloadBlocked())
+          found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true);
+        if (!found.length && title && year && !downloadBlocked())
+          found = await searchOpenSubtitles({...baseArgs, apiKey: openKey}, true, true);
         return found;
       } catch (error) {
         providerErrors.push("OpenSubtitles request failed");
