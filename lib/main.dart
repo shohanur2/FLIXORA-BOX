@@ -16318,10 +16318,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final isSubSource = provider == 'subsource';
     final isISubtitles = provider == 'isubtitles';
     final isBollyNook = provider == 'bollynook';
+    final isGestdown = provider == 'gestdown';
+    final isTVSubtitles = provider == 'tvsubtitles';
     final isSubDl = uri?.host == 'dl.subdl.com';
     final isOpenSubtitles = uri != null &&
         (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
-    final isProviderDownload = isSubSource || isISubtitles || isBollyNook || isSubDl || isOpenSubtitles;
+    final isProviderDownload = isSubSource || isISubtitles || isBollyNook ||
+        isGestdown || isTVSubtitles || isSubDl || isOpenSubtitles;
     if (isSubSource) {
       final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
       if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
@@ -16335,6 +16338,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (uri == null || uri.scheme != 'https' ||
           !(uri.host == 'bollynook.com' || uri.host == 'www.bollynook.com')) {
         throw StateError('BollyNook returned an invalid download link.');
+      }
+    } else if (isGestdown) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'api.gestdown.info' || !uri.path.startsWith('/')) {
+        throw StateError('Gestdown returned an invalid download link.');
+      }
+    } else if (isTVSubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'www.tvsubtitles.net') {
+        throw StateError('TVSubtitles returned an invalid download link.');
       }
     } else if (uri == null || uri.scheme != 'https' ||
         !(isSubDl || isOpenSubtitles) ||
