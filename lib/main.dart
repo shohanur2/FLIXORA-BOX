@@ -16314,10 +16314,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final languageCode = (option['language'] ?? 'en').toString().toLowerCase();
     final downloadUrl = (option['downloadUrl'] ?? '').toString();
     final uri = Uri.tryParse(downloadUrl);
+    final provider = (option['provider'] ?? '').toString().toLowerCase();
+    final isSubSource = provider == 'subsource';
     final isSubDl = uri?.host == 'dl.subdl.com';
     final isOpenSubtitles = uri != null &&
         (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
-    if (uri == null || uri.scheme != 'https' ||
+    if (isSubSource) {
+      final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
+      if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
+    } else if (uri == null || uri.scheme != 'https' ||
         !(isSubDl || isOpenSubtitles) ||
         (isSubDl && !uri.path.startsWith('/subtitle/'))) {
       throw StateError('Subtitle provider returned an invalid file link.');
@@ -16345,20 +16350,50 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       await preferredCache.delete();
     }
 
-    var download = await http.get(uri, headers: const {
-      'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
-      'User-Agent': 'FLIXORA Subtitle Client/1.0',
-    }).timeout(const Duration(seconds: 25));
-    // Providers may briefly rate-limit a valid subtitle link. Respect their
-    // Retry-After hint once, then let the caller fall back to another result.
-    if (download.statusCode == 429) {
-      final retryAfter = int.tryParse(download.headers['retry-after'] ?? '');
-      final waitSeconds = (retryAfter ?? 2).clamp(1, 8).toInt();
-      await Future<void>.delayed(Duration(seconds: waitSeconds));
-      download = await http.get(uri, headers: const {
+    late http.Response download;
+    if (isSubSource) {
+      final client = supabaseClient;
+      if (client == null) throw StateError('Subtitle service is unavailable.');
+      final result = await client.functions.invoke(
+        'flixora-subtitles',
+        body: {
+          'action': 'download_subsource',
+          'subtitleId': option['subsourceId'],
+          'releaseName': option['releaseName'] ?? '',
+          'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+          if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+            'season': _selectedSeasonNumber,
+            'episode': _selectedEpisodeNumber,
+          },
+        },
+      ).timeout(const Duration(seconds: 30));
+      final payload = result.data;
+      if (payload is! Map || (payload['contentBase64'] ?? '').toString().isEmpty) {
+        final message = payload is Map
+            ? (payload['error'] ?? 'SubSource subtitle download failed.')
+            : 'SubSource subtitle download failed.';
+        throw StateError(message.toString());
+      }
+      final bytes = base64Decode(payload['contentBase64'].toString());
+      download = http.Response.bytes(bytes, 200, headers: {
+        'content-type': 'application/octet-stream',
+      });
+    } else {
+      download = await http.get(uri!, headers: const {
         'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
         'User-Agent': 'FLIXORA Subtitle Client/1.0',
       }).timeout(const Duration(seconds: 25));
+      // Providers may briefly rate-limit a valid subtitle link. Respect their
+      // Retry-After hint once, then let the caller fall back to another result.
+      if (download.statusCode == 429) {
+        final retryAfter = int.tryParse(download.headers['retry-after'] ?? '');
+        final waitSeconds = (retryAfter ?? 2).clamp(1, 8).toInt();
+        await Future<void>.delayed(Duration(seconds: waitSeconds));
+        download = await http.get(uri, headers: const {
+          'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+          'User-Agent': 'FLIXORA Subtitle Client/1.0',
+        }).timeout(const Duration(seconds: 25));
+      }
     }
     if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
         download.bodyBytes.length > 10 * 1024 * 1024) {
