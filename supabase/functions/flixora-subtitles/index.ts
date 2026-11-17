@@ -266,7 +266,7 @@ function subsourceTitleScore(candidate: unknown, wanted: string): number {
   if (wantedTokens.length < 2) return 0;
   const overlap = wantedTokens.filter(token => titleTokens.has(token)).length;
   const coverage = overlap / wantedTokens.length;
-  return overlap >= 2 && coverage >= 0.8 ? Math.round(coverage * 70) : 0;
+  return overlap >= 2 && coverage >= 0.8 ? Math.round(coverage * 85) : 0;
 }
 async function subsourceJson(url: URL, apiKey: string): Promise<JsonMap> {
   const response = await fetch(url, {
@@ -555,9 +555,9 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
 }
 
 const gestdownLanguage: Record<string,string> = {
- en:"English",bn:"Bengali",hi:"Hindi",ur:"Urdu",ar:"Arabic",es:"Spanish",fr:"French",
- de:"German",pt:"Portuguese",ru:"Russian",ja:"Japanese",ko:"Korean",it:"Italian",
- nl:"Dutch",pl:"Polish",th:"Thai",id:"Indonesian",ms:"Malay",fa:"Persian",zh:"Chinese"
+ en:"eng",bn:"ben",hi:"hin",ur:"urd",ar:"ara",es:"spa",fr:"fra",
+ de:"deu",pt:"por",ru:"rus",ja:"jpn",ko:"kor",it:"ita",
+ nl:"nld",pl:"pol",th:"tha",id:"ind",ms:"msa",fa:"fas",zh:"zho"
 };
 function cleanProviderTitle(value:string):string {
  return normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g,"").trim();
@@ -567,14 +567,16 @@ async function searchGestdown(args:SearchArgs):Promise<JsonMap[]> {
  const base="https://api.gestdown.info";
  const showResponse=await fetch(base+"/shows/search/"+encodeURIComponent(args.title),
    {headers:{Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+ if(showResponse.status===404){console.info("FLIXORA Gestdown show not found",args.title);return [];}
  if(!showResponse.ok)throw new Error("Gestdown show search HTTP "+showResponse.status);
  const showPayload=await showResponse.json() as JsonMap;
  const shows=Array.isArray(showPayload.shows)?showPayload.shows as JsonMap[]:[];
  const wanted=cleanProviderTitle(args.title);
  const candidates=shows.filter(show=>cleanProviderTitle(String(show.name??""))===wanted);
- const show=candidates.find(item=>Array.isArray(item.seasons)&&
+ const show=candidates.find(item=>!Array.isArray(item.seasons)||
    (item.seasons as unknown[]).some(value=>Number(value)===args.season));
- if(!show)return [];
+ if(!show){console.info("FLIXORA Gestdown no exact show/season match",{title:args.title,showCount:shows.length});return [];}
+
  const showId=String(show.id??"");
  if(!showId||!/^[a-zA-Z0-9_-]+$/.test(showId))return [];
  const output:JsonMap[]=[];
@@ -848,10 +850,6 @@ Deno.serve(async (request: Request) => {
           try { return await searchGestdown(args); }
           catch (error) { providerErrors.push("Gestdown title fallback failed"); console.warn("FLIXORA Gestdown title fallback failed",error); return []; }
         })(),"Gestdown title fallback",providerErrors,10500));
-        tasks.push(providerWithDeadline((async () => {
-          try { return await searchTVSubtitles(args); }
-          catch (error) { providerErrors.push("TVSubtitles title fallback failed"); console.warn("FLIXORA TVSubtitles title fallback failed",error); return []; }
-        })(),"TVSubtitles title fallback",providerErrors,12000));
       }
       if (mediaType === "movie") tasks.push(providerWithDeadline((async () => {
         try { return await searchBollyNook(args); }
@@ -917,10 +915,6 @@ Deno.serve(async (request: Request) => {
         try { return await searchGestdown(baseArgs); }
         catch (error) { providerErrors.push("Gestdown request failed"); console.warn("FLIXORA Gestdown failed",error); return []; }
       })(),"Gestdown",providerErrors,10500));
-      tasks.push(providerWithDeadline((async () => {
-        try { return await searchTVSubtitles(baseArgs); }
-        catch (error) { providerErrors.push("TVSubtitles request failed"); console.warn("FLIXORA TVSubtitles failed",error); return []; }
-      })(),"TVSubtitles",providerErrors,12000));
     }
     if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
