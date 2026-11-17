@@ -192,7 +192,22 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
         if (status === 406 || status === 429) break;
         continue;
       }
-      const result = await dl.json() as JsonMap;
+      const contentType = (dl.headers.get("content-type") ?? "").toLowerCase();
+      const responseText = await dl.text();
+      if (!contentType.includes("application/json") && !contentType.includes("+json")) {
+        args.providerErrors.push("OpenSubtitles download returned a non-JSON response");
+        console.warn("FLIXORA OpenSubtitles download returned non-JSON", {
+          contentType: contentType.slice(0,80), preview: responseText.slice(0,100).replace(/[\\r\\n]+/g," "),
+        });
+        continue;
+      }
+      let result: JsonMap;
+      try { result = JSON.parse(responseText) as JsonMap; }
+      catch {
+        args.providerErrors.push("OpenSubtitles download returned invalid JSON");
+        console.warn("FLIXORA OpenSubtitles download returned invalid JSON");
+        continue;
+      }
       const link = safeDownloadUrl(result.link, "opensubtitles.com");
       if (!link) continue;
       const feature = candidate.attr.feature_details && typeof candidate.attr.feature_details === "object"
@@ -238,6 +253,21 @@ function normalizeMatch(value: unknown): string {
   return String(value ?? "").toLowerCase().normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
+function normalizeSubSourceTitle(value: unknown): string {
+  return normalizeMatch(value).replace(/\b([a-z])\s+([a-z])\b/g, "$1$2");
+}
+function subsourceTitleScore(candidate: unknown, wanted: string): number {
+  const title = normalizeSubSourceTitle(candidate);
+  if (!title || !wanted) return 0;
+  if (title === wanted) return 100;
+  if (title.startsWith(wanted + " ") || wanted.startsWith(title + " ")) return 85;
+  const wantedTokens = [...new Set(wanted.split(" ").filter(Boolean))];
+  const titleTokens = new Set(title.split(" ").filter(Boolean));
+  if (wantedTokens.length < 2) return 0;
+  const overlap = wantedTokens.filter(token => titleTokens.has(token)).length;
+  const coverage = overlap / wantedTokens.length;
+  return overlap >= 2 && coverage >= 0.8 ? Math.round(coverage * 70) : 0;
+}
 async function subsourceJson(url: URL, apiKey: string): Promise<JsonMap> {
   const response = await fetch(url, {
     headers: {"X-API-Key": apiKey, "Accept": "application/json"},
@@ -276,28 +306,36 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   if (args.mediaType === "tv") movieSearch.searchParams.set("season", String(args.season));
   const moviePayload = await subsourceJson(movieSearch, apiKey);
   const movieRows = Array.isArray(moviePayload.data) ? moviePayload.data as JsonMap[] : [];
-  const wantedTitle = normalizeMatch(args.title).replace(/\b(19|20)\d{2}\b/g, "").trim();
+  const wantedTitle = normalizeSubSourceTitle(args.title).replace(/\b(19|20)\d{2}\b/g, "").trim();
   const scored = movieRows.map(row => {
-    const id = Number(row.movieId ?? row.id ?? 0);
-    const type = String(row.type ?? "").toLowerCase();
-    if (args.mediaType === "tv" && type && type !== "series" && type !== "tv") return {id, score:0};
-    if (args.mediaType !== "tv" && type && type !== "movie") return {id, score:0};
+    const id = Number(row.movieId ?? row.movie_id ?? row.id ?? 0);
+    const type = String(row.type ?? row.mediaType ?? row.media_type ?? "").toLowerCase();
+    if (args.mediaType === "tv" && type && !["series", "tv", "show"].includes(type)) return {id, score:0};
+    if (args.mediaType !== "tv" && type && !["movie", "film"].includes(type)) return {id, score:0};
     const rowTmdbId = Number(row.tmdbId ?? row.tmdb_id ?? 0);
     if (args.tmdbId > 0 && rowTmdbId > 0 && rowTmdbId !== args.tmdbId) return {id, score:0};
-    const titleValues = [row.title, row.alternateTitle, row.originalTitle, row.englishTitle, row.name]
-      .map(value => normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g, "").trim())
+    const titleValues = Object.entries(row)
+      .filter(([key, value]) => /title|name/i.test(key) && (typeof value === "string" || typeof value === "number"))
+      .map(([, value]) => normalizeSubSourceTitle(value).replace(/\b(19|20)\d{2}\b/g, "").trim())
       .filter(Boolean);
-    const titleMatches = titleValues.some(value => value === wantedTitle ||
-      value.startsWith(wantedTitle + " ") || wantedTitle.startsWith(value + " "));
-    if (!titleMatches) return {id, score:0};
-    const releaseYear = Number(row.releaseYear ?? row.release_year ?? row.year ?? 0);
+    const titleScore = Math.max(0, ...titleValues.map(value => subsourceTitleScore(value, wantedTitle)));
+    if (titleScore < 60) return {id, score:0};
+    const yearValue = row.releaseYear ?? row.release_year ?? row.year ?? "";
+    const releaseYear = Number(String(yearValue).slice(0,4));
     if (args.year && releaseYear > 0 && releaseYear !== Number(args.year)) return {id, score:0};
-    let score = titleValues.includes(wantedTitle) ? 10 : 7;
-    if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 20;
-    if (args.year && releaseYear === Number(args.year)) score += 2;
+    let score = titleScore;
+    if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 30;
+    if (args.year && releaseYear === Number(args.year)) score += 10;
     return {id, score};
-  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 7)
+  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 60)
     .sort((a,b) => b.score-a.score);
+  if (!scored.length) {
+    console.info("FLIXORA SubSource unmatched search rows", movieRows.slice(0,5).map(row => ({
+      keys: Object.keys(row).filter(key => /title|name|type|year|tmdb|id/i.test(key)),
+      titles: Object.entries(row).filter(([key,value]) => /title|name/i.test(key) && typeof value === "string")
+        .map(([,value]) => String(value).slice(0,100)),
+    })));
+  }
   console.info("FLIXORA SubSource series match", {
     searchRows: movieRows.length, matchingRows: scored.length, hasTmdbId: args.tmdbId > 0,
   });
