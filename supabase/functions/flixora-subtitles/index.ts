@@ -596,7 +596,7 @@ Deno.serve(async (request: Request) => {
     }
     if (cached) subtitleSearchCache.delete(cacheKey);
     const tasks: Promise<JsonMap[]>[] = [];
-    if (subdlKey) tasks.push((async () => {
+    if (subdlKey) tasks.push(providerWithDeadline((async () => {
       try {
         let found = await searchSubDL({...baseArgs, apiKey: subdlKey});
         if (!found.length && tmdbId > 0 && title) found = await searchSubDL({...baseArgs, apiKey: subdlKey}, true);
@@ -607,21 +607,20 @@ Deno.serve(async (request: Request) => {
         console.warn("FLIXORA SubDL request failed", error instanceof Error ? error.message : "unknown error");
         return [];
       }
-    })());
-    // All provider searches run independently; one failed website cannot
-    // prevent results from the other sources.
+    })(), "SubDL", providerErrors));
+    // Run independent provider searches concurrently with a short deadline.
     if (subsourceKey) tasks.push(providerWithDeadline((async () => {
       try { return await searchSubSource(baseArgs, subsourceKey); }
       catch (error) { providerErrors.push("SubSource request failed"); console.warn("FLIXORA SubSource failed",error); return []; }
-    })());
-    tasks.push((async () => {
+    })(), "SubSource", providerErrors));
+    tasks.push(providerWithDeadline((async () => {
       try { return await searchISubtitles(baseArgs); }
       catch (error) { providerErrors.push("iSubtitles request failed"); console.warn("FLIXORA iSubtitles failed",error); return []; }
-    })());
+    })(), "iSubtitles", providerErrors));
     if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }
-    })());
+    })(), "BollyNook", providerErrors));
     const batches = await Promise.all(tasks);
     let subtitles = capAndDedupe(batches.flat());
     let openSubtitlesSearched = false;
