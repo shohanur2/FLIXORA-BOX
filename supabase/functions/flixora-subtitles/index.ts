@@ -370,9 +370,12 @@ function chooseSubSourceArchiveFile(files: Record<string, Uint8Array>, releaseNa
   if (!candidates.length) throw new Error("SubSource ZIP contains no supported subtitle file");
   if (candidates.length === 1) {
     const only = candidates[0];
-    const hasEpisodeMarker = /(?:S\d{1,2}\s*E\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(only[0]);
-    if (mediaType === "tv" && hasEpisodeMarker &&
-        !matchesSubSourceEpisode(only[0], season, episode)) {
+    const episodeMarker = /(?:S\d{1,2}\s*E\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i;
+    const fileHasEpisode = episodeMarker.test(only[0]);
+    const releaseHasEpisode = episodeMarker.test(releaseName);
+    if (mediaType === "tv" &&
+        ((fileHasEpisode && !matchesSubSourceEpisode(only[0], season, episode)) ||
+         (!fileHasEpisode && releaseHasEpisode && !matchesSubSourceEpisode(releaseName, season, episode)))) {
       throw new Error("SubSource archive contains a different TV episode.");
     }
     return {name:only[0], bytes:only[1]};
