@@ -12803,7 +12803,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (_tvEpisodeError != null) ...[
             const SizedBox(height: 8),
             Text(
-              _tvEpisodeError!,
+              _tvEpisodeError!.replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA'),
               style: const TextStyle(
                 color: Color(0xFFFFC56E),
                 fontSize: 10,
