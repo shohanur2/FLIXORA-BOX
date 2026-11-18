@@ -14124,6 +14124,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Some network streams publish subtitle tracks after playback starts.
+      if (value.subtitle.any((track) => track.id != 'auto' && track.id != 'no')) {
+        unawaited(_activateEmbeddedSubtitleIfAvailable());
+      }
       // Re-apply the user's audio sync preference when a new media exposes
       // its tracks. This only changes the active Player's audio-delay property.
       if (_audioDelay.abs() >= 0.01) {
@@ -16463,6 +16467,54 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return cachedFile;
   }
 
+  Future<bool> _activateEmbeddedSubtitleIfAvailable() async {
+    if (_isDisposed || widget.localFilePath != null ||
+        _subtitleManuallySelected || _automaticSubtitleLoading ||
+        _automaticEnglishTrack != null) return false;
+    final embeddedTracks = _tracks.subtitle
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .toList(growable: false);
+    if (embeddedTracks.isEmpty) return false;
+    final orderedTracks = <SubtitleTrack>[
+      ...embeddedTracks.where(_isBanglaSubtitleTrack),
+      ...embeddedTracks.where(_isEnglishSubtitleTrack),
+      ...embeddedTracks.where((track) =>
+          !_isBanglaSubtitleTrack(track) && !_isEnglishSubtitleTrack(track)),
+    ];
+    for (final track in orderedTracks) {
+      if (_isDisposed || _subtitleManuallySelected) return false;
+      try {
+        await _player.setSubtitleTrack(track);
+        final native = _player.platform;
+        if (native is NativePlayer) {
+          await native.setProperty('sub-visibility', 'yes');
+        }
+        await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (_isDisposed) return false;
+        final activeId = _player.state.track.subtitle.id;
+        if (activeId != track.id) {
+          debugPrint('FLIXORA embedded subtitle not active: requested=${track.id}, active=$activeId');
+          continue;
+        }
+        if (mounted) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _subtitleVisibilityEnabled = true;
+            _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+            _automaticSubtitleMessage =
+                'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
+          });
+        }
+        debugPrint('FLIXORA embedded subtitle activated: id=${track.id}, language=${track.language}');
+        return true;
+      } catch (error) {
+        debugPrint('FLIXORA embedded subtitle selection failed for ${track.id}: $error');
+      }
+    }
+    return false;
+  }
+
   Future<void> _ensureAutomaticEnglishSubtitle({
     bool searchProviders = false,
     String? searchTitle,
@@ -16478,40 +16530,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
     var embeddedTrackSelected = false;
     try {
-      // Keep embedded subtitles active while explicit searches discover other languages.
-      for (var attempt = 0; attempt < 8; attempt++) {
-        final embeddedTracks = _tracks.subtitle
-            .where((track) => track.id != 'auto' && track.id != 'no')
-            .toList(growable: false);
-        if (embeddedTracks.isNotEmpty) {
-          final track = embeddedTracks.firstWhere(
-            _isBanglaSubtitleTrack,
-            orElse: () => embeddedTracks.firstWhere(
-              _isEnglishSubtitleTrack,
-              orElse: () => embeddedTracks.first,
-            ),
-          );
-          if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
-          try {
-            await _player.setSubtitleTrack(track);
-            final native = _player.platform;
-            if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-            await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-            embeddedTrackSelected = true;
-            if (mounted && !_isDisposed) {
-              setState(() {
-                _automaticEnglishTrack = track;
-                _subtitleVisibilityEnabled = true;
-                _automaticSubtitleMessage =
-                    'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
-              });
-            }
-          } catch (error) {
-            debugPrint('FLIXORA embedded subtitle selection failed: $error');
-          }
-          break;
-        }
-        if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
+      // Wait for stream metadata; the track listener retries if it arrives later.
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+        embeddedTrackSelected = await _activateEmbeddedSubtitleIfAvailable();
+        if (embeddedTrackSelected) break;
+        if (attempt < 11) await Future.delayed(const Duration(milliseconds: 250));
       }
 
       final client = supabaseClient;
@@ -16593,7 +16617,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _automaticSubtitleMessage = '${available.length} language(s) available';
         });
       }
-      if ((embeddedTrackSelected && searchProviders) || _subtitleManuallySelected) return;
+      // Keep a working embedded track active; users may still manually
+      // search and select an external subtitle from the existing panel.
+      if (embeddedTrackSelected || _subtitleManuallySelected) return;
 
       // Prefer Bangla, then English, then other available languages.
       // Try every candidate for the preferred language so one expired or
