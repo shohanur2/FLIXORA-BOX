@@ -17217,15 +17217,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         var selectedLanguage = 'all';
         var downloading = '';
         var message = _automaticSubtitleMessage ?? '';
-        final languages = <Map<String, String>>[
-          {'code': 'all', 'label': 'All'},
-        ];
-        final seenLanguages = <String>{'all'};
-        for (final option in _automaticSubtitleOptions) {
-          final code = (option['language'] ?? '').toString().trim().toLowerCase();
-          if (code.isEmpty || !seenLanguages.add(code)) continue;
-          languages.add({'code': code, 'label': _subtitleLanguageName(code)});
-        }
+        var subtitleRefreshStarted = false;
         return SafeArea(
           child: Align(
             alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
@@ -17234,6 +17226,39 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               height: panelHeight,
               child: StatefulBuilder(
                 builder: (sheetContext, updateSheet) {
+                  if (widget.movie.isMovieBox && !subtitleRefreshStarted) {
+                    subtitleRefreshStarted = true;
+                    unawaited(() async {
+                      if (_automaticSubtitleOptions.isEmpty &&
+                          !_automaticSubtitleLoading) {
+                        await _ensureAutomaticEnglishSubtitle();
+                      } else {
+                        for (var attempt = 0;
+                            attempt < 50 && _automaticSubtitleLoading;
+                            attempt++) {
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 100),
+                          );
+                        }
+                      }
+                      if (sheetContext.mounted) updateSheet(() {});
+                    }());
+                  }
+                  final languages = <Map<String, String>>[
+                    {'code': 'all', 'label': 'All'},
+                  ];
+                  final seenLanguages = <String>{'all'};
+                  for (final option in _automaticSubtitleOptions) {
+                    final code = (option['language'] ?? '')
+                        .toString()
+                        .trim()
+                        .toLowerCase();
+                    if (code.isEmpty || !seenLanguages.add(code)) continue;
+                    languages.add({
+                      'code': code,
+                      'label': _subtitleLanguageName(code),
+                    });
+                  }
                   final results = _automaticSubtitleOptions.where((option) {
                     final code = (option['language'] ?? '').toString().toLowerCase();
                     final languageOk = selectedLanguage == 'all' || code == selectedLanguage ||
