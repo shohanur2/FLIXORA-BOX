@@ -180,58 +180,50 @@ jobs:
               raise SystemExit("SparkBoxCore play request source changed; review the token-refresh patch.")
           h5_content = h5_content.replace(old_play_request, new_play_request, 1)
 
-          # Restore MovieBox's native external subtitle discovery using the
-          # same mobile endpoints as the reference MovieBox implementation.
-          # The old code incorrectly sent a streamId as resourceId and hard-coded
-          # episode=0, which returns an empty list for most titles/episodes.
-          # Carry the actual successful play attempt's episode number to the
-          # caption lookup (MovieBox movies can resolve through 0/0 or 1/1).
-          replacements = [
-              ("let mut cap_keys: Vec<(String, String)> = Vec::new();",
-               "let mut cap_keys: Vec<(String, String, i64)> = Vec::new();"),
-              ("cap_keys: &mut Vec<(String, String)>,",
-               "cap_keys: &mut Vec<(String, String, i64)>,"),
-              ("""                cap_keys.push((
-                    sid.to_string(),
-                    if first_stream_id.is_empty() {
-                        format!("{sid}|{se}|{ep}")
-                    } else {
-                        first_stream_id
-                    },
-                ));""",
-               """                cap_keys.push((
-                    sid.to_string(),
-                    if first_stream_id.is_empty() {
-                        format!("{sid}|{se}|{ep}")
-                    } else {
-                        first_stream_id
-                    },
-                    ep,
-                ));"""),
-          ]
-          for old, new in replacements:
-              if old not in h5_content:
-                  raise SystemExit(f"SparkBoxCore subtitle context changed: {old[:70]}")
-              h5_content = h5_content.replace(old, new, 1)
+          # Restore MovieBox-native subtitle discovery and the native subtitle-search fallback.
+          # Keep the current season/episode and title with each successful play attempt.
+          import re
+          old_decl = "let mut cap_keys: Vec<(String, String)> = Vec::new();"
+          if old_decl not in h5_content:
+              raise SystemExit("SparkBoxCore cap_keys declaration changed.")
+          h5_content = h5_content.replace(old_decl, "let mut cap_keys: Vec<(String, String, i64, i64, String)> = Vec::new();", 1)
+          old_sig = "cap_keys: &mut Vec<(String, String)>,"
+          if old_sig not in h5_content:
+              raise SystemExit("SparkBoxCore play_once subtitle signature changed.")
+          h5_content = h5_content.replace(old_sig, "cap_keys: &mut Vec<(String, String, i64, i64, String)>,", 1)
+          push_pattern = re.compile(r"cap_keys\\.push\\(\\(\\s*sid\\.to_string\\(\\),\\s*if first_stream_id\\.is_empty\\(\\) \\{\\s*format!\\(\\\"\\{sid\\}\\|\\{se\\}\\|\\{ep\\}\\\"\\)\\s*\\} else \\{\\s*first_stream_id\\s*\\},\\s*\\)\\);", re.S)
+          push_replacement = """cap_keys.push((
+                      sid.to_string(),
+                      if first_stream_id.is_empty() {
+                          format!("{sid}|{se}|{ep}")
+                      } else {
+                          first_stream_id
+                      },
+                      se,
+                      ep,
+                      d.title.clone(),
+                  ));"""
+          h5_content, push_count = push_pattern.subn(lambda _: push_replacement, h5_content, count=1)
+          if push_count != 1:
+              raise SystemExit("SparkBoxCore cap_keys.push context changed; refusing an unsafe patch.")
 
           caption_start = h5_content.find("    /// External subtitle tracks for the resolved (subjectId, streamId) pairs,")
-          caption_end = h5_content.find("\n}\n\n/// Dart-style", caption_start)
+          caption_end = h5_content.find("\\n}\\n\\n/// Dart-style", caption_start)
           if caption_start < 0 or caption_end < 0:
               raise SystemExit("SparkBoxCore caption loader changed; review the subtitle patch.")
-          caption_impl = r'''    /// External MovieBox subtitles for the resolved subject and current episode.
+          caption_impl = r'''    /// MovieBox-native captions plus title/episode-scoped subtitle search.
           async fn load_captions(
               &self,
-              cap_keys: &[(String, String, i64)],
+              cap_keys: &[(String, String, i64, i64, String)],
               subtitles: &mut Vec<SubtitleLink>,
           ) {
               let mut seen = std::collections::HashSet::new();
-              let keys: Vec<&(String, String, i64)> = cap_keys
+              let keys: Vec<&(String, String, i64, i64, String)> = cap_keys
                   .iter()
                   .filter(|key| seen.insert((*key).clone()))
                   .collect();
 
-              for (sid, stream_id, episode) in keys {
-                  // Stream captions are an additional source when a real stream id exists.
+              for (sid, stream_id, season, episode, title) in keys {
                   if !stream_id.is_empty() && !stream_id.contains('|') {
                       let path = format!(
                           "/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId={sid}&streamId={stream_id}"
@@ -241,21 +233,18 @@ jobs:
                       }
                   }
 
-                  // MovieBox's ext-captions API requires the resourceId from
-                  // subject-api/get. It is not the stream id.
-                  let detail_path = format!(
-                      "/wefeed-mobile-bff/subject-api/get?subjectId={sid}"
-                  );
+                  // resourceId is returned by subject-api/get; never substitute streamId.
+                  let detail_path = format!("/wefeed-mobile-bff/subject-api/get?subjectId={sid}");
                   let resource_id = if let Some(root) = self.mobile_get(&detail_path).await {
                       let data = root.get("data").and_then(Value::as_object);
                       let subject = data
                           .and_then(|value| value.get("subject"))
                           .and_then(Value::as_object);
                       let detectors = get_arr(data.and_then(|value| value.get("resourceDetectors")));
-                      let nested_detectors = get_arr(subject.and_then(|value| value.get("resourceDetectors")));
+                      let nested = get_arr(subject.and_then(|value| value.get("resourceDetectors")));
                       detectors
                           .into_iter()
-                          .chain(nested_detectors)
+                          .chain(nested)
                           .map(|detector| s(detector, "resourceId"))
                           .find(|value| !value.trim().is_empty())
                           .unwrap_or_default()
@@ -263,11 +252,28 @@ jobs:
                       String::new()
                   };
                   let resource_id = if resource_id.is_empty() { sid.as_str() } else { resource_id.as_str() };
-                  let path = format!(
+                  let ext_path = format!(
                       "/wefeed-mobile-bff/subject-api/get-ext-captions?resourceId={resource_id}&subjectId={sid}&episode={episode}"
                   );
-                  if let Some(root) = self.mobile_get(&path).await {
+                  if let Some(root) = self.mobile_get(&ext_path).await {
                       Self::append_caption_items(&root, subtitles);
+                  }
+
+                  // Native subtitle-search endpoint. For series, include SxxEyy so
+                  // results are scoped to the currently selected episode.
+                  let query = if *season > 0 && *episode > 0 {
+                      format!("{title} S{season:02}E{episode:02}")
+                  } else {
+                      title.clone()
+                  };
+                  if !query.trim().is_empty() {
+                      let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
+                      let search_path = format!(
+                          "/wefeed-mobile-bff/subject-api/subtitle-search?q={encoded}"
+                      );
+                      if let Some(root) = self.mobile_get(&search_path).await {
+                          Self::append_search_caption_items(&root, subtitles, *season, *episode);
+                      }
                   }
               }
           }
@@ -275,34 +281,62 @@ jobs:
           fn append_caption_items(root: &Map<String, Value>, subtitles: &mut Vec<SubtitleLink>) {
               let data = root.get("data").and_then(Value::as_object);
               let ext = get_arr(data.and_then(|value| value.get("extCaptions")));
-              let list = if !ext.is_empty() {
-                  ext
-              } else {
-                  let items = get_arr(data.and_then(|value| value.get("list")));
-                  if !items.is_empty() {
-                      items
-                  } else {
-                      get_arr(data.and_then(|value| value.get("captions")))
-                  }
-              };
-              for caption in list {
-                  let url = s(caption, "url");
-                  if url.trim().is_empty() || subtitles.iter().any(|item| item.url == url) {
+              let items = get_arr(data.and_then(|value| value.get("items")));
+              let list = get_arr(data.and_then(|value| value.get("list")));
+              let captions = get_arr(data.and_then(|value| value.get("captions")));
+              let values = if !ext.is_empty() { ext } else if !items.is_empty() { items } else if !list.is_empty() { list } else { captions };
+              Self::append_values(values, subtitles);
+          }
+
+          fn append_search_caption_items(
+              root: &Map<String, Value>,
+              subtitles: &mut Vec<SubtitleLink>,
+              season: i64,
+              episode: i64,
+          ) {
+              let data = root.get("data").and_then(Value::as_object);
+              let items = get_arr(data.and_then(|value| value.get("items")));
+              let list = get_arr(data.and_then(|value| value.get("list")));
+              let values = if !items.is_empty() { items } else { list };
+              // Explicit season/episode metadata must match; the query itself is
+              // also episode-qualified for providers that omit these fields.
+              let filtered: Vec<&Value> = values.into_iter().filter(|item| {
+                  let item_se = s(item, "se").parse::<i64>()
+                      .or_else(|_| s(item, "season").parse::<i64>()).unwrap_or(0);
+                  let item_ep = s(item, "ep").parse::<i64>()
+                      .or_else(|_| s(item, "episode").parse::<i64>())
+                      .or_else(|_| s(item, "episodeNumber").parse::<i64>()).unwrap_or(0);
+                  !(season > 0 && episode > 0)
+                      || !((item_se > 0 && item_se != season) || (item_ep > 0 && item_ep != episode))
+              }).collect();
+              Self::append_values(filtered, subtitles);
+          }
+
+          fn append_values<'a>(values: Vec<&'a Value>, subtitles: &mut Vec<SubtitleLink>) {
+              for item in values {
+                  let url = ["url", "downloadUrl", "subtitleUrl"]
+                      .iter()
+                      .map(|key| s(item, key))
+                      .find(|value| !value.trim().is_empty())
+                      .unwrap_or_default();
+                  if url.trim().is_empty() || subtitles.iter().any(|existing| existing.url == url) {
                       continue;
                   }
-                  let language = [
-                      s(caption, "lanName"),
-                      s(caption, "lan"),
-                      s(caption, "language"),
-                      s(caption, "languageName"),
-                  ]
-                  .into_iter()
-                  .find(|value| !value.trim().is_empty())
-                  .unwrap_or_else(|| "Unknown".to_string());
-                  let mut label = language.clone();
+                  let language = ["lanName", "lan", "language", "languageName", "lang"]
+                      .iter()
+                      .map(|key| s(item, key))
+                      .find(|value| !value.trim().is_empty())
+                      .unwrap_or_else(|| "Unknown".to_string());
+                  let release = ["releaseName", "fileName", "name", "title"]
+                      .iter()
+                      .map(|key| s(item, key))
+                      .find(|value| !value.trim().is_empty())
+                      .unwrap_or_default();
+                  let base_label = if release.is_empty() { language.clone() } else { format!("{language} · {release}") };
+                  let mut label = base_label.clone();
                   let mut suffix = 2;
-                  while subtitles.iter().any(|item| item.label == label) {
-                      label = format!("{language} ({suffix})");
+                  while subtitles.iter().any(|existing| existing.label == label) {
+                      label = format!("{base_label} ({suffix})");
                       suffix += 1;
                   }
                   subtitles.push(SubtitleLink { label, url });
