@@ -2756,44 +2756,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return result;
   }
 
-  final Stopwatch _startupTotalWatch = Stopwatch();
-  final Stopwatch _startupPlayerConfigWatch = Stopwatch();
-  final Map<String, String> _startupStageResults = <String, String>{};
-  bool _startupDiagnosticSummaryShown = false;
-
-  void _recordStartupStage(String stage, Stopwatch watch, {String result = 'ok'}) {
-    watch.stop();
-    final value = '${watch.elapsedMilliseconds}ms ($result)';
-    _startupStageResults[stage] = value;
-    debugPrint('FLIXORA_STARTUP_DIAGNOSTIC stage=$stage value=$value');
-  }
-
-  void _showStartupDiagnosticSummary({required String outcome}) {
-    if (_startupDiagnosticSummaryShown || !mounted) return;
-    _startupDiagnosticSummaryShown = true;
-    final total = _startupTotalWatch.elapsedMilliseconds;
-    final details = _startupStageResults.entries
-        .map((entry) => '${entry.key}: ${entry.value}')
-        .join(' | ');
-    final report = 'FLIXORA_STARTUP_DIAGNOSTIC outcome=$outcome total_player_ms=$total $details';
-    debugPrint(report);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Playback diagnostic ($outcome)\nPlayer: ${total}ms\n$details',
-          maxLines: 4,
-          overflow: TextOverflow.ellipsis,
-        ),
-        duration: const Duration(seconds: 8),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
-    _startupTotalWatch.start();
     WidgetsBinding.instance.addObserver(this);
     final authClient = supabaseClient;
     if (authClient != null) {
@@ -11812,6 +11777,41 @@ class MoviePlayerScreen extends StatefulWidget {
 }
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindingObserver {
+  final Stopwatch _startupTotalWatch = Stopwatch();
+  final Stopwatch _startupPlayerConfigWatch = Stopwatch();
+  final Map<String, String> _startupStageResults = <String, String>{};
+  bool _startupDiagnosticSummaryShown = false;
+
+  void _recordStartupStage(String stage, Stopwatch watch, {String result = 'ok'}) {
+    watch.stop();
+    final value = '${watch.elapsedMilliseconds}ms ($result)';
+    _startupStageResults[stage] = value;
+    debugPrint('FLIXORA_STARTUP_DIAGNOSTIC stage=$stage value=$value');
+  }
+
+  void _showStartupDiagnosticSummary({required String outcome}) {
+    if (_startupDiagnosticSummaryShown || !mounted) return;
+    _startupDiagnosticSummaryShown = true;
+    final total = _startupTotalWatch.elapsedMilliseconds;
+    final details = _startupStageResults.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join(' | ');
+    final report = 'FLIXORA_STARTUP_DIAGNOSTIC outcome=$outcome total_player_ms=$total $details';
+    debugPrint(report);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Playback diagnostic ($outcome)\nPlayer: ${total}ms\n$details',
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+        ),
+        duration: const Duration(seconds: 8),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+
   late final Player _player;
   late final VideoController _videoController;
   late Future<Map<String, dynamic>> _movieDetailsFuture;
@@ -12052,6 +12052,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   @override
   void initState() {
     super.initState();
+    _startupTotalWatch.start();
     WidgetsBinding.instance.addObserver(this);
 
     _playerIsOnline = widget.isOnline;
