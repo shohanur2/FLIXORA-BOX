@@ -15106,17 +15106,23 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _selectMovieBoxSubtitle(Map<String, dynamic> subtitle) async {
-    final url = (subtitle['url'] ?? '').toString().trim();
-    if (url.isEmpty) return;
-    final uri = Uri.tryParse(url);
-    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
+    final options = _movieBoxSubtitleOptions([subtitle]);
+    if (options.isEmpty) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This MovieBox subtitle link is unavailable.')),
+        );
+      }
       return;
     }
+    final option = options.first;
+    final url = (option['downloadUrl'] ?? '').toString();
+    final language = (option['language'] ?? 'und').toString();
+    final release = (option['releaseName'] ?? 'MovieBox subtitle').toString();
     await _selectSubtitleTrack(SubtitleTrack.uri(
       url,
-      title: (subtitle['label'] ?? 'MovieBox subtitle').toString(),
-      language: (subtitle['label'] ?? '').toString(),
+      title: '${_subtitleLanguageName(language)} · $release',
+      language: language,
     ));
   }
 
@@ -16577,17 +16583,58 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final options = <Map<String, dynamic>>[];
     for (var index = 0; index < subtitles.length; index++) {
       final subtitle = subtitles[index];
-      final url = (subtitle['url'] ?? '').toString().trim();
+      final url = (subtitle['url'] ??
+              subtitle['downloadUrl'] ??
+              subtitle['subtitleUrl'] ??
+              subtitle['fileUrl'] ??
+              '')
+          .toString()
+          .trim();
       final uri = Uri.tryParse(url);
-      if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty || uri.userInfo.isNotEmpty) continue;
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty) {
+        continue;
+      }
       final language = _movieBoxSubtitleLanguage(subtitle);
-      final fileName = (subtitle['fileName'] ?? subtitle['filename'] ?? (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '')).toString();
-      final releaseName = (subtitle['name'] ?? subtitle['title'] ?? subtitle['label'] ?? fileName).toString().trim();
-      final format = (subtitle['format'] ?? (fileName.contains('.') ? fileName.split('.').last : 'srt')).toString().toLowerCase();
-      options.add(<String, dynamic>{'provider':'moviebox','providerSource':'moviebox','language':language,'releaseName':releaseName.isEmpty ? 'MovieBox subtitle ' + (index + 1).toString() : releaseName,'fileName':fileName,'downloadUrl':url,'format':format,'movieBoxSubtitle':subtitle,'movieBoxIndex':index});
+      final fileName = (subtitle['fileName'] ??
+              subtitle['filename'] ??
+              subtitle['file_name'] ??
+              subtitle['releaseName'] ??
+              (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
+          .toString()
+          .trim();
+      final releaseName = (subtitle['releaseName'] ??
+              subtitle['name'] ??
+              subtitle['title'] ??
+              subtitle['label'] ??
+              fileName)
+          .toString()
+          .trim();
+      final format = (subtitle['format'] ??
+              (fileName.contains('.') ? fileName.split('.').last : 'srt'))
+          .toString()
+          .toLowerCase();
+      options.add(<String, dynamic>{
+        'provider': 'moviebox',
+        'providerSource': 'moviebox',
+        'language': language,
+        'releaseName': releaseName.isEmpty
+            ? '${_subtitleLanguageName(language)} · MovieBox subtitle ${index + 1}'
+            : releaseName,
+        'fileName': fileName,
+        'downloadUrl': url,
+        'format': format,
+        'movieBoxSubtitle': subtitle,
+        'movieBoxIndex': index,
+      });
     }
-    options.sort((a,b) {
-      int priority(Map<String,dynamic> option) { final code=(option['language']??'').toString(); return code=='bn'?0:(code=='bn+en'?1:(code=='en'?2:3)); }
+    options.sort((a, b) {
+      int priority(Map<String, dynamic> option) {
+        final code = (option['language'] ?? '').toString();
+        return code == 'bn' ? 0 : (code == 'bn+en' ? 1 : (code == 'en' ? 2 : 3));
+      }
       return priority(a).compareTo(priority(b));
     });
     return options;
@@ -17071,16 +17118,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         var selectedLanguage = 'all';
         var downloading = '';
         var message = _automaticSubtitleMessage ?? '';
-        const languages = [
+        final languages = <Map<String, String>>[
           {'code': 'all', 'label': 'All'},
-          {'code': 'en', 'label': 'English'},
-          {'code': 'bn', 'label': 'বাংলা'},
-          {'code': 'hi', 'label': 'हिन्दी'},
-          {'code': 'fr', 'label': 'Français'},
-          {'code': 'id', 'label': 'Indonesia'},
-          {'code': 'pt', 'label': 'Português'},
-          {'code': 'ur', 'label': 'اردو'},
         ];
+        final seenLanguages = <String>{'all'};
+        for (final option in _automaticSubtitleOptions) {
+          final code = (option['language'] ?? '').toString().trim().toLowerCase();
+          if (code.isEmpty || !seenLanguages.add(code)) continue;
+          languages.add({'code': code, 'label': _subtitleLanguageName(code)});
+        }
         return SafeArea(
           child: Align(
             alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
