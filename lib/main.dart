@@ -5256,32 +5256,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
-  Future<List<dynamic>> _findAdminRowsByTitleYear(
-    dynamic client,
-    Movie requested,
-  ) async {
-    if (client == null || requested.title.trim().isEmpty) return <dynamic>[];
-    final candidates = await client
-        .from('movies')
-        .select()
-        .ilike('title', requested.title.trim())
-        .eq('media_type', requested.mediaType)
-        .order('created_at', ascending: false)
-        .limit(10);
-    final rows = (candidates as List).whereType<Map>();
-    final wantedTitle = _normalizedMovieTitle(requested.title);
-    final matching = rows.where((row) {
-      final rowTitle = _normalizedMovieTitle((row['title'] ?? '').toString());
-      final rowDate = (row['release_date'] ?? '').toString();
-      final rowYear = rowDate.length >= 4 ? rowDate.substring(0, 4) : 'N/A';
-      return rowTitle == wantedTitle &&
-          (requested.year == 'N/A' ||
-           rowYear == 'N/A' ||
-           rowYear == requested.year);
-    }).toList();
-    return matching.isEmpty ? <dynamic>[] : [matching.first];
-  }
-
   /// Resolve playback from the MovieBox catalogue only. Admin/Supabase
   /// is intentionally not queried from the Visitor App playback path.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
