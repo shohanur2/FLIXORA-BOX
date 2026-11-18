@@ -180,8 +180,113 @@ jobs:
               raise SystemExit("SparkBoxCore play request source changed; review the token-refresh patch.")
           h5_content = h5_content.replace(old_play_request, new_play_request, 1)
 
-          # Keep MovieBox/WeFeed external caption enrichment enabled so the
-          # stream response includes the subtitle list consumed by FLIXORA.
+          # Restore MovieBox's native external subtitle discovery using the
+          # same mobile endpoints as the reference MovieBox implementation.
+          # The old code incorrectly sent a streamId as resourceId and hard-coded
+          # episode=0, which returns an empty list for most titles/episodes.
+          old_caption_call = "        let _ = self.load_captions(&cap_keys, &mut subtitles).await;"
+          new_caption_call = "        let _ = self.load_captions(&cap_keys, &mut subtitles, ep).await;"
+          if old_caption_call not in h5_content:
+              raise SystemExit("SparkBoxCore caption call changed; review the subtitle patch.")
+          h5_content = h5_content.replace(old_caption_call, new_caption_call, 1)
+
+          caption_start = h5_content.find("    /// External subtitle tracks for the resolved (subjectId, streamId) pairs,")
+          caption_end = h5_content.find("\\n}\\n\\n/// Dart-style", caption_start)
+          if caption_start < 0 or caption_end < 0:
+              raise SystemExit("SparkBoxCore caption loader changed; review the subtitle patch.")
+          caption_impl = r'''    /// External MovieBox subtitles for the resolved subject and current episode.
+          async fn load_captions(
+              &self,
+              cap_keys: &[(String, String)],
+              subtitles: &mut Vec<SubtitleLink>,
+              episode: i64,
+          ) {
+              let mut seen = std::collections::HashSet::new();
+              let keys: Vec<&(String, String)> = cap_keys
+                  .iter()
+                  .filter(|key| seen.insert((*key).clone()))
+                  .collect();
+
+              for (sid, stream_id) in keys {
+                  // Stream captions are an additional source when a real stream id exists.
+                  if !stream_id.is_empty() && !stream_id.contains('|') {
+                      let path = format!(
+                          "/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId={sid}&streamId={stream_id}"
+                      );
+                      if let Some(root) = self.mobile_get(&path).await {
+                          append_caption_items(&root, subtitles);
+                      }
+                  }
+
+                  // MovieBox's ext-captions API requires the resourceId from
+                  // subject-api/get. It is not the stream id.
+                  let detail_path = format!(
+                      "/wefeed-mobile-bff/subject-api/get?subjectId={sid}"
+                  );
+                  let resource_id = if let Some(root) = self.mobile_get(&detail_path).await {
+                      let data = root.get("data").and_then(Value::as_object);
+                      let subject = data
+                          .and_then(|value| value.get("subject"))
+                          .and_then(Value::as_object);
+                      let detectors = get_arr(data.and_then(|value| value.get("resourceDetectors")));
+                      let nested_detectors = get_arr(subject.and_then(|value| value.get("resourceDetectors")));
+                      detectors
+                          .into_iter()
+                          .chain(nested_detectors)
+                          .map(|detector| s(detector, "resourceId"))
+                          .find(|value| !value.trim().is_empty())
+                          .unwrap_or_default()
+                  } else {
+                      String::new()
+                  };
+                  let resource_id = if resource_id.is_empty() { sid.as_str() } else { resource_id.as_str() };
+                  let path = format!(
+                      "/wefeed-mobile-bff/subject-api/get-ext-captions?resourceId={resource_id}&subjectId={sid}&episode={episode}"
+                  );
+                  if let Some(root) = self.mobile_get(&path).await {
+                      append_caption_items(&root, subtitles);
+                  }
+              }
+          }
+
+          fn append_caption_items(root: &Map<String, Value>, subtitles: &mut Vec<SubtitleLink>) {
+              let data = root.get("data").and_then(Value::as_object);
+              let ext = get_arr(data.and_then(|value| value.get("extCaptions")));
+              let list = if !ext.is_empty() {
+                  ext
+              } else {
+                  let items = get_arr(data.and_then(|value| value.get("list")));
+                  if !items.is_empty() {
+                      items
+                  } else {
+                      get_arr(data.and_then(|value| value.get("captions")))
+                  }
+              };
+              for caption in list {
+                  let url = s(caption, "url");
+                  if url.trim().is_empty() || subtitles.iter().any(|item| item.url == url) {
+                      continue;
+                  }
+                  let language = [
+                      s(caption, "lanName"),
+                      s(caption, "lan"),
+                      s(caption, "language"),
+                      s(caption, "languageName"),
+                  ]
+                  .into_iter()
+                  .find(|value| !value.trim().is_empty())
+                  .unwrap_or_else(|| "Unknown".to_string());
+                  let mut label = language.clone();
+                  let mut suffix = 2;
+                  while subtitles.iter().any(|item| item.label == label) {
+                      label = format!("{language} ({suffix})");
+                      suffix += 1;
+                  }
+                  subtitles.push(SubtitleLink { label, url });
+              }
+          }
+          '''
+          h5_content = h5_content[:caption_start] + caption_impl + h5_content[caption_end:]
           h5_source.write_text(h5_content)
           PY
 
