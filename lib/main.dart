@@ -13571,12 +13571,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final detail = _movieBoxDetail!;
     unawaited(() async {
       try {
-        await MovieBoxService.streams(
+        await MovieBoxService.streamsFast(
           detail,
           season: nextSeason,
           episode: nextEpisode,
           isSeries: true,
-        ).timeout(const Duration(seconds: 22));
+        ).timeout(const Duration(seconds: 18));
       } catch (_) {}
     }());
   }
