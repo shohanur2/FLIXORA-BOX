@@ -12974,6 +12974,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _prepareMovieBoxPlayback({
     Future<void>? playerConfiguration,
+    bool forceRefreshDetail = false,
+    bool allowStartupRetry = true,
   }) async {
     if (_isDisposed || !_playerIsOnline) {
       if (mounted) {
@@ -12990,8 +12992,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     try {
       final rawItem = widget.movie.toMovieBoxMap();
-      final detailFuture = MovieBoxService.playDetail(rawItem)
-          .timeout(const Duration(seconds: 18));
+      final detailFuture = MovieBoxService.playDetail(
+        rawItem,
+        forceRefresh: forceRefreshDetail,
+      ).timeout(const Duration(seconds: 18));
       final seasonsFuture = widget.movie.movieBoxIsSeries
           ? MovieBoxService.seasons(widget.movie.movieBoxId)
               .timeout(const Duration(seconds: 18))
@@ -13118,6 +13122,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       await streamFuture;
     } catch (error) {
+      if (allowStartupRetry && mounted && !_isDisposed) {
+        debugPrint('MovieBox startup failed; retrying with fresh playback details: $error');
+        await _prepareMovieBoxPlayback(
+          playerConfiguration: playerConfiguration,
+          forceRefreshDetail: true,
+          allowStartupRetry: false,
+        );
+        return;
+      }
       debugPrint('MovieBox playback preparation failed: $error');
       if (mounted && !_isDisposed && !_initialized) {
         setState(() {
@@ -13451,15 +13464,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         try {
           await _player.open(
             Media(url, httpHeaders: _headersForQuality(candidate)),
-            play: false,
+            play: true,
           );
-          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-            return false;
-          }
-
-          try {
-            await _player.setAudioTrack(AudioTrack.auto());
-          } catch (_) {}
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
           }
@@ -13471,11 +13477,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
           }
-          await _player.play();
-          if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
-            return false;
-          }
-
           if (mounted) {
             setState(() {
               _initialized = true;
@@ -14244,7 +14245,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ? const <String, String>{}
                   : _headersForQuality(candidate),
             ),
-            play: false,
+            play: true,
           );
           if (!mounted || _isDisposed) return;
 
@@ -14256,8 +14257,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           });
           if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
 
-          // Start MPV first so duration and byte-range seeking are ready.
-          await _player.play();
+          // Playback starts as soon as the native media open completes.
           if (!mounted || _isDisposed) return;
           await _restoreResumePosition();
           if (!mounted || _isDisposed) return;
@@ -14516,6 +14516,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   void _handlePlayerGestureStart(ScaleStartDetails details) {
     _gestureFeedbackTimer?.cancel();
+    final topSystemGestureArea =
+        MediaQuery.of(context).viewPadding.top + 24.0;
+    if (details.localFocalPoint.dy <= topSystemGestureArea) {
+      _gestureStartPoint = null;
+      _gestureMode = 'system';
+      _gesturePreviewPosition = null;
+      return;
+    }
     _gestureStartPoint = details.localFocalPoint;
     _gestureStartPosition = _position;
     _gestureStartBrightness = _screenBrightness;
@@ -18776,8 +18784,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isDisposed) return;
 
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
+    if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       if (!_isBackgrounded) {
