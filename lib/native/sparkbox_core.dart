@@ -224,6 +224,31 @@ class SparkBoxCore {
         }
       });
 
+  /// Resolve Original stream first, without waiting for dub or external subtitle discovery.
+  static Future<Map<String, dynamic>> streamsFast(
+    Map<String, dynamic> detail, {
+    required int season,
+    required int episode,
+    required bool isSeries,
+  }) =>
+      _run(() {
+        final library = _openLibrary();
+        final call = library.lookupFunction<
+            Pointer<Utf8> Function(Pointer<Utf8>, Int32, Int32, Int32),
+            Pointer<Utf8> Function(Pointer<Utf8>, int, int, int)>(
+          'sparkbox_streams_fast',
+        );
+        final input = jsonEncode(_encodeMap(detail)).toNativeUtf8();
+        try {
+          return _readObject(
+            library,
+            call(input, season, episode, isSeries ? 1 : 0),
+          );
+        } finally {
+          malloc.free(input);
+        }
+      });
+
   /// Resolve playable HLS/DASH/MP4 links and external subtitle links.
   static Future<Map<String, dynamic>> streams(
     Map<String, dynamic> detail, {
