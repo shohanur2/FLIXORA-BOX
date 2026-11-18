@@ -180,14 +180,8 @@ jobs:
               raise SystemExit("SparkBoxCore play request source changed; review the token-refresh patch.")
           h5_content = h5_content.replace(old_play_request, new_play_request, 1)
 
-          # Stream URLs are required before playback; external caption lookups
-          # are optional and could block the player for several extra requests.
-          # Keep captions returned inline by the play endpoint.
-          old_captions = "        let _ = self.load_captions(&cap_keys, &mut subtitles).await;"
-          new_captions = "        // External caption enrichment is deferred; inline captions remain available."
-          if old_captions not in h5_content:
-              raise SystemExit("SparkBoxCore caption enrichment call changed; review the playback fast-path patch.")
-          h5_content = h5_content.replace(old_captions, new_captions, 1)
+          # Keep MovieBox/WeFeed external caption enrichment enabled so the
+          # stream response includes the subtitle list consumed by FLIXORA.
           h5_source.write_text(h5_content)
           PY
 
