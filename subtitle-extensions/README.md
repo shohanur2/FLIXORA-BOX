@@ -6,9 +6,11 @@ GitHub is the source of truth for FLIXORA subtitle add-on discovery and registry
 
 The registry currently includes:
 - **OpenSubtitles v3** — official Stremio subtitle add-on manifest: `https://opensubtitles-v3.strem.io/manifest.json`
+- **Strelingo** — bilingual English + Bengali Stremio add-on; returns one merged subtitle track: `https://strelingo.pronouncetube.com`
+- **SubSense** — multi-source subtitle aggregator: `https://subsense.nepiraw.com`
 - **Subtitle Search Engine** — public Stremio add-on manifest: `https://subtitles.website/stremio/manifest.json`
 
-Both are queried for English and Bengali subtitle results. Availability depends on each add-on's catalogue, language coverage, uptime, and rate limits. The public Subtitle Search Engine service documents a guest limit of 10 requests per day; HTTP 429 responses are treated as an add-on failure and FLIXORA continues to the next enabled extension.
+Extensions are queried for English and Bengali subtitle results. Strelingo is configured for English+Bengali and its combined language label is recognized as one bilingual subtitle file. SubSense aggregates multiple upstream sources; optional sources may still require user API keys. Availability depends on each add-on's catalogue, language coverage, uptime, and rate limits. HTTP 429 responses are treated as an add-on failure and FLIXORA continues to the next enabled extension.
 
 ## Protocol
 
@@ -48,6 +50,11 @@ Both are queried for English and Bengali subtitle results. Availability depends 
 - Do not download or execute arbitrary Dart, JavaScript, Python, or native code from GitHub.
 - Keep manual subtitle import and embedded subtitle selection available.
 - Keep the existing Subtitle Panel appearance and every non-subtitle feature unchanged.
+
+## Subtitle format and dual-language reference
+
+- [Cleedek Subtitle Overlay](https://github.com/Cleedek/subtitle-overlay) is used as a technical reference for multi-format subtitle handling, legacy text encodings, and dual-language presentation concepts. Its browser-extension runtime is not embedded in FLIXORA; FLIXORA continues to use its native Flutter/libmpv subtitle pipeline.
+- [Strelingo](https://github.com/Serkali-sudo/strelingo-addon) provides the Stremio-compatible merged English+Bengali subtitle source.
 
 ## Protocol references
 
