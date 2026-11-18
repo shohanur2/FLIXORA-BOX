@@ -239,6 +239,40 @@ class MovieBoxService {
     );
   }
 
+  /// Fast playback request: Original stream only; full language/subtitle
+  /// enrichment remains available through [streams] after playback starts.
+  static Future<Map<String, dynamic>> streamsFast(
+    Map<String, dynamic> detail, {
+    required int season,
+    required int episode,
+    required bool isSeries,
+    bool forceRefresh = false,
+  }) {
+    final subject = (detail['subjectId'] ??
+            detail['subject_id'] ??
+            detail['id'] ??
+            detail['detailPath'] ??
+            detail.toString())
+        .toString();
+    final key = '$subject:$season:$episode:$isSeries';
+    if (forceRefresh) _streamsCache.remove(key);
+    return _remember(
+      _streamsCache,
+      'fast:$key',
+      const Duration(seconds: 30),
+      () => _retry(
+        () => SparkBoxCore.streamsFast(
+          detail,
+          season: season,
+          episode: episode,
+          isSeries: isSeries,
+        ),
+        isUsable: MovieBoxStreamPolicy.hasPlayableLinks,
+        maxAttempts: 1,
+      ),
+    );
+  }
+
   /// Resolve the first playable item while the movie details screen is open.
   /// The player and download actions reuse these short-lived requests.
   static Future<Map<String, dynamic>?> prewarmStreams(
