@@ -214,7 +214,7 @@ jobs:
                           "/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId={sid}&streamId={stream_id}"
                       );
                       if let Some(root) = self.mobile_get(&path).await {
-                          append_caption_items(&root, subtitles);
+                          Self::append_caption_items(&root, subtitles);
                       }
                   }
 
@@ -244,7 +244,7 @@ jobs:
                       "/wefeed-mobile-bff/subject-api/get-ext-captions?resourceId={resource_id}&subjectId={sid}&episode={episode}"
                   );
                   if let Some(root) = self.mobile_get(&path).await {
-                      append_caption_items(&root, subtitles);
+                      Self::append_caption_items(&root, subtitles);
                   }
               }
           }
