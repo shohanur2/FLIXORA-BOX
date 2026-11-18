@@ -16592,18 +16592,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   String _movieBoxSubtitleLanguage(Map<String, dynamic> subtitle) {
     // WeFeed has returned multiple metadata shapes across MovieBox releases.
     // Prefer ISO language codes, then display-name fields such as lanName.
-    final rawValue = subtitle['language'] ??
-        subtitle['lang'] ??
-        subtitle['lan'] ??
-        subtitle['languageCode'] ??
-        subtitle['langCode'] ??
-        subtitle['lanCode'] ??
-        subtitle['languageName'] ??
-        subtitle['langName'] ??
-        subtitle['lanName'] ??
-        subtitle['label'] ??
-        subtitle['name'] ??
-        '';
+    final rawValue = <dynamic>[
+      subtitle['language'],
+      subtitle['lang'],
+      subtitle['lan'],
+      subtitle['languageCode'],
+      subtitle['langCode'],
+      subtitle['lanCode'],
+      subtitle['languageName'],
+      subtitle['langName'],
+      subtitle['lanName'],
+      subtitle['label'],
+      subtitle['name'],
+    ].firstWhere(
+      (value) => value != null && value.toString().trim().isNotEmpty,
+      orElse: () => '',
+    );
     final raw = (rawValue is Map
             ? (rawValue['code'] ?? rawValue['lang'] ?? rawValue['name'] ?? '')
             : rawValue)
@@ -16682,13 +16686,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final options = <Map<String, dynamic>>[];
     for (var index = 0; index < subtitles.length; index++) {
       final subtitle = subtitles[index];
-      final url = (subtitle['url'] ??
-              subtitle['downloadUrl'] ??
-              subtitle['subtitleUrl'] ??
-              subtitle['fileUrl'] ??
-              '')
-          .toString()
-          .trim();
+      final url = <dynamic>[
+        subtitle['url'],
+        subtitle['downloadUrl'],
+        subtitle['subtitleUrl'],
+        subtitle['fileUrl'],
+      ].firstWhere(
+        (value) => value != null && value.toString().trim().isNotEmpty,
+        orElse: () => '',
+      ).toString().trim();
       final uri = Uri.tryParse(url);
       if (uri == null ||
           (uri.scheme != 'https' && uri.scheme != 'http') ||
