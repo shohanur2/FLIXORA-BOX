@@ -16318,7 +16318,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               ? bytes[i] | (bytes[i + 1] << 8)
               : (bytes[i] << 8) | bytes[i + 1]);
         }
-        return String.fromCharCodes(units).replaceAll('\\u0000', '');
+        return String.fromCharCodes(units).replaceAll('\u0000', '');
       }
     }
     var start = bytes.length >= 3 &&
