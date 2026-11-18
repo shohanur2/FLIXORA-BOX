@@ -16242,8 +16242,33 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       'id': 'Indonesian', 'ind': 'Indonesian',
       'ms': 'Malay', 'may': 'Malay', 'msa': 'Malay',
       'fa': 'Persian', 'per': 'Persian', 'fas': 'Persian',
+      'ta': 'Tamil', 'tam': 'Tamil',
+      'te': 'Telugu', 'tel': 'Telugu',
+      'kn': 'Kannada', 'kan': 'Kannada',
+      'ml': 'Malayalam', 'mal': 'Malayalam',
+      'vi': 'Vietnamese', 'vie': 'Vietnamese',
+      'tl': 'Filipino', 'tgl': 'Filipino',
+      'uk': 'Ukrainian', 'ukr': 'Ukrainian',
+      'el': 'Greek', 'ell': 'Greek',
+      'he': 'Hebrew', 'heb': 'Hebrew',
+      'sv': 'Swedish', 'swe': 'Swedish',
+      'no': 'Norwegian', 'nor': 'Norwegian',
+      'da': 'Danish', 'dan': 'Danish',
+      'fi': 'Finnish', 'fin': 'Finnish',
+      'cs': 'Czech', 'ces': 'Czech', 'cze': 'Czech',
+      'hu': 'Hungarian', 'hun': 'Hungarian',
+      'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian',
+      'bg': 'Bulgarian', 'bul': 'Bulgarian',
+      'hr': 'Croatian', 'hrv': 'Croatian',
+      'sr': 'Serbian', 'srp': 'Serbian',
+      'sk': 'Slovak', 'slk': 'Slovak', 'slo': 'Slovak',
+      'sl': 'Slovenian', 'slv': 'Slovenian',
+      'et': 'Estonian', 'est': 'Estonian',
+      'lv': 'Latvian', 'lav': 'Latvian',
+      'lt': 'Lithuanian', 'lit': 'Lithuanian',
     };
-    final key = code.trim().toLowerCase().split(RegExp('[-_]')).first;
+    final normalized = code.trim().toLowerCase().replaceAll('_', '-');
+    final key = normalized.split(RegExp('[-_]')).first;
     return names[key] ?? (code.isEmpty ? 'Unknown language' : code.toUpperCase());
   }
 
@@ -16565,15 +16590,89 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   String _movieBoxSubtitleLanguage(Map<String, dynamic> subtitle) {
-    final raw = (subtitle['language'] ?? subtitle['lang'] ?? subtitle['label'] ?? subtitle['name'] ?? '').toString().trim().toLowerCase();
-    final parts = raw.split(RegExp(r'[+/,;|]')).map((part) => part.trim()).where((part) => part.isNotEmpty).toList(growable: false);
+    // WeFeed has returned multiple metadata shapes across MovieBox releases.
+    // Prefer ISO language codes, then display-name fields such as lanName.
+    final rawValue = subtitle['language'] ??
+        subtitle['lang'] ??
+        subtitle['lan'] ??
+        subtitle['languageCode'] ??
+        subtitle['langCode'] ??
+        subtitle['lanCode'] ??
+        subtitle['languageName'] ??
+        subtitle['langName'] ??
+        subtitle['lanName'] ??
+        subtitle['label'] ??
+        subtitle['name'] ??
+        '';
+    final raw = (rawValue is Map
+            ? (rawValue['code'] ?? rawValue['lang'] ?? rawValue['name'] ?? '')
+            : rawValue)
+        .toString()
+        .trim()
+        .toLowerCase();
+    final parts = raw
+        .split(RegExp(r'[+/,;|]'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
     String normalize(String value) {
-      final token = value.split(RegExp(r'[-_\s]')).firstWhere((part) => part.isNotEmpty, orElse: () => value).toLowerCase();
-      const aliases = <String, String>{'english':'en','eng':'en','en':'en','bengali':'bn','bangla':'bn','ben':'bn','beng':'bn','bn':'bn','hindi':'hi','hin':'hi','hi':'hi','urdu':'ur','urd':'ur','ur':'ur','arabic':'ar','ara':'ar','ar':'ar','japanese':'ja','jpn':'ja','ja':'ja','korean':'ko','kor':'ko','ko':'ko','chinese':'zh','chi':'zh','zho':'zh','zh':'zh'};
+      final token = value
+          .split(RegExp(r'[-_\\s]'))
+          .firstWhere((part) => part.isNotEmpty, orElse: () => value)
+          .toLowerCase();
+      const aliases = <String, String>{
+        'english': 'en', 'eng': 'en', 'en': 'en',
+        'bengali': 'bn', 'bangla': 'bn', 'ben': 'bn', 'beng': 'bn', 'bn': 'bn',
+        'hindi': 'hi', 'hin': 'hi', 'hi': 'hi',
+        'urdu': 'ur', 'urd': 'ur', 'ur': 'ur',
+        'arabic': 'ar', 'ara': 'ar', 'ar': 'ar',
+        'japanese': 'ja', 'jpn': 'ja', 'ja': 'ja',
+        'korean': 'ko', 'kor': 'ko', 'ko': 'ko',
+        'chinese': 'zh', 'chi': 'zh', 'zho': 'zh', 'zh': 'zh',
+        'spanish': 'es', 'spa': 'es', 'es': 'es',
+        'french': 'fr', 'fre': 'fr', 'fra': 'fr', 'fr': 'fr',
+        'german': 'de', 'ger': 'de', 'deu': 'de', 'de': 'de',
+        'portuguese': 'pt', 'por': 'pt', 'pt': 'pt',
+        'russian': 'ru', 'rus': 'ru', 'ru': 'ru',
+        'turkish': 'tr', 'tur': 'tr', 'tr': 'tr',
+        'italian': 'it', 'ita': 'it', 'it': 'it',
+        'dutch': 'nl', 'nld': 'nl', 'nl': 'nl',
+        'polish': 'pl', 'pol': 'pl', 'pl': 'pl',
+        'thai': 'th', 'tha': 'th', 'th': 'th',
+        'indonesian': 'id', 'ind': 'id', 'id': 'id',
+        'malay': 'ms', 'may': 'ms', 'msa': 'ms', 'ms': 'ms',
+        'persian': 'fa', 'per': 'fa', 'fas': 'fa', 'fa': 'fa',
+        'tamil': 'ta', 'tam': 'ta', 'ta': 'ta',
+        'telugu': 'te', 'tel': 'te', 'te': 'te',
+        'kannada': 'kn', 'kan': 'kn', 'kn': 'kn',
+        'malayalam': 'ml', 'mal': 'ml', 'ml': 'ml',
+        'vietnamese': 'vi', 'vie': 'vi', 'vi': 'vi',
+        'filipino': 'tl', 'tagalog': 'tl', 'tgl': 'tl', 'tl': 'tl',
+        'ukrainian': 'uk', 'ukr': 'uk', 'uk': 'uk',
+        'greek': 'el', 'ell': 'el', 'el': 'el',
+        'hebrew': 'he', 'heb': 'he', 'he': 'he',
+        'swedish': 'sv', 'swe': 'sv', 'sv': 'sv',
+        'norwegian': 'no', 'nor': 'no', 'no': 'no',
+        'danish': 'da', 'dan': 'da', 'da': 'da',
+        'finnish': 'fi', 'fin': 'fi', 'fi': 'fi',
+        'czech': 'cs', 'ces': 'cs', 'cze': 'cs', 'cs': 'cs',
+        'hungarian': 'hu', 'hun': 'hu', 'hu': 'hu',
+        'romanian': 'ro', 'ron': 'ro', 'rum': 'ro', 'ro': 'ro',
+        'bulgarian': 'bg', 'bul': 'bg', 'bg': 'bg',
+        'croatian': 'hr', 'hrv': 'hr', 'hr': 'hr',
+        'serbian': 'sr', 'srp': 'sr', 'sr': 'sr',
+        'slovak': 'sk', 'slk': 'sk', 'slo': 'sk', 'sk': 'sk',
+        'slovenian': 'sl', 'slv': 'sl', 'sl': 'sl',
+        'estonian': 'et', 'est': 'et', 'et': 'et',
+        'latvian': 'lv', 'lav': 'lv', 'lv': 'lv',
+        'lithuanian': 'lt', 'lit': 'lt', 'lt': 'lt',
+      };
       return aliases[token] ?? token;
     }
     final normalized = parts.map(normalize).toSet().toList(growable: false);
-    if (normalized.length > 1 && normalized.contains('bn') && normalized.contains('en')) return 'bn+en';
+    if (normalized.length > 1 && normalized.contains('bn') && normalized.contains('en')) {
+      return 'bn+en';
+    }
     if (normalized.isNotEmpty) return normalized.first;
     return 'und';
   }
