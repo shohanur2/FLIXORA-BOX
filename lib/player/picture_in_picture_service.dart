@@ -20,4 +20,17 @@ class PictureInPictureService {
       // Older installed builds do not have the native bridge yet.
     }
   }
+
+  static Future<bool> enter() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('enter') ?? false;
+    } on PlatformException {
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }
