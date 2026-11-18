@@ -16223,6 +16223,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return '${language.isEmpty ? 'en' : language}_${widget.movie.mediaType}_${_automaticSubtitleMediaId()}$episode';
   }
 
+  int _stableSubtitleCacheHash(String value) {
+    var hash = 0x811c9dc5;
+    for (final unit in value.codeUnits) {
+      hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+    }
+    return hash;
+  }
+
   String _subtitleLanguageName(String code) {
     const names = <String, String>{
       'en': 'English', 'eng': 'English',
@@ -16401,7 +16409,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       option['releaseName'] ?? '',
       option['fileName'] ?? '',
     ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-    final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${releaseIdentity.hashCode.abs()}';
+    final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${_stableSubtitleCacheHash(releaseIdentity)}';
     final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
     if (await preferredCache.exists() && await preferredCache.length() > 16) {
       try {
