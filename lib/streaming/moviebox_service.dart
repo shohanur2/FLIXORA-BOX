@@ -179,7 +179,7 @@ class MovieBoxService {
       return _retry(
         () => SparkBoxCore.playDetail(item),
         isUsable: (value) => value.isNotEmpty,
-        maxAttempts: 2,
+        maxAttempts: 1,
       );
     }
     if (forceRefresh) _playDetailCache.remove(id);
