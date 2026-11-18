@@ -312,7 +312,7 @@ jobs:
               Self::append_values(filtered, subtitles);
           }
 
-          fn append_values<'a>(values: Vec<&'a Value>, subtitles: &mut Vec<SubtitleLink>) {
+          fn append_values<'a>(values: Vec<&'a Map<String, Value>>, subtitles: &mut Vec<SubtitleLink>) {
               for item in values {
                   let url = ["url", "downloadUrl", "subtitleUrl"]
                       .iter()
