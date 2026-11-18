@@ -191,7 +191,7 @@ jobs:
           if old_sig not in h5_content:
               raise SystemExit("SparkBoxCore play_once subtitle signature changed.")
           h5_content = h5_content.replace(old_sig, "cap_keys: &mut Vec<(String, String, i64, i64, String)>,", 1)
-          push_pattern = re.compile(r"cap_keys\.push\(\(\s*sid\.to_string\(\),\s*if first_stream_id\.is_empty\(\) \{\s*format!\("\{sid\}\|\{se\}\|\{ep\}"\)\s*\} else \{\s*first_stream_id\s*\},\s*\)\);", re.S)
+          push_pattern = re.compile(r'cap_keys\.push\(\(\s*sid\.to_string\(\),\s*if first_stream_id\.is_empty\(\) \{\s*format!\("\{sid\}\|\{se\}\|\{ep\}"\)\s*\} else \{\s*first_stream_id\s*\},\s*\)\);', re.S)
           push_replacement = """cap_keys.push((
                       sid.to_string(),
                       if first_stream_id.is_empty() {
