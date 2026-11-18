@@ -192,7 +192,22 @@ async function searchOpenSubtitles(args: SearchArgs, titleFallback = false, omit
         if (status === 406 || status === 429) break;
         continue;
       }
-      const result = await dl.json() as JsonMap;
+      const contentType = (dl.headers.get("content-type") ?? "").toLowerCase();
+      const responseText = await dl.text();
+      if (!contentType.includes("application/json") && !contentType.includes("+json")) {
+        args.providerErrors.push("OpenSubtitles download returned a non-JSON response");
+        console.warn("FLIXORA OpenSubtitles download returned non-JSON", {
+          contentType: contentType.slice(0,80), preview: responseText.slice(0,100).replace(/[\\r\\n]+/g," "),
+        });
+        continue;
+      }
+      let result: JsonMap;
+      try { result = JSON.parse(responseText) as JsonMap; }
+      catch {
+        args.providerErrors.push("OpenSubtitles download returned invalid JSON");
+        console.warn("FLIXORA OpenSubtitles download returned invalid JSON");
+        continue;
+      }
       const link = safeDownloadUrl(result.link, "opensubtitles.com");
       if (!link) continue;
       const feature = candidate.attr.feature_details && typeof candidate.attr.feature_details === "object"
@@ -238,6 +253,21 @@ function normalizeMatch(value: unknown): string {
   return String(value ?? "").toLowerCase().normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
+function normalizeSubSourceTitle(value: unknown): string {
+  return normalizeMatch(value).replace(/\b([a-z])\s+([a-z])\b/g, "$1$2");
+}
+function subsourceTitleScore(candidate: unknown, wanted: string): number {
+  const title = normalizeSubSourceTitle(candidate);
+  if (!title || !wanted) return 0;
+  if (title === wanted) return 100;
+  if (title.startsWith(wanted + " ") || wanted.startsWith(title + " ")) return 85;
+  const wantedTokens = [...new Set(wanted.split(" ").filter(Boolean))];
+  const titleTokens = new Set(title.split(" ").filter(Boolean));
+  if (wantedTokens.length < 2) return 0;
+  const overlap = wantedTokens.filter(token => titleTokens.has(token)).length;
+  const coverage = overlap / wantedTokens.length;
+  return overlap >= 2 && coverage >= 0.8 ? Math.round(coverage * 85) : 0;
+}
 async function subsourceJson(url: URL, apiKey: string): Promise<JsonMap> {
   const response = await fetch(url, {
     headers: {"X-API-Key": apiKey, "Accept": "application/json"},
@@ -251,15 +281,21 @@ function subsourceReleaseInfo(value: unknown): string {
   return Array.isArray(value) ? value.map(x => String(x ?? "")).join(" ") : String(value ?? "");
 }
 function matchesSubSourceEpisode(release: string, season: number, episode: number): boolean {
-  const compact = normalizeMatch(release).replace(/\s+/g, "");
-  const s = String(season), ss = s.padStart(2,"0"), e = String(episode), ee = e.padStart(2,"0");
-  const exact = ["s"+ss+"e"+ee,"s"+s+"e"+e,"s"+ss+"e"+e,"s"+s+"e"+ee,
-    s+"x"+ee,s+"x"+e,ss+"x"+ee,ss+"x"+e];
-  if (exact.some(x => compact.includes(x))) return true;
-  const explicit = new RegExp("(?:^|[^a-z0-9])s0*"+season+"[-_. ]*e0*"+episode+"(?:[^0-9]|$)|(?:^|[^0-9])0*"+season+"x0*"+episode+"(?:[^0-9]|$)", "i");
-  if (explicit.test(release)) return true;
-  const otherEpisode = /\b(?:S\d{1,2}\s*E|E|EP(?:ISODE)?)\s*0*\d+\b/i;
-  return !otherEpisode.test(release) && new RegExp("(?:^|[^0-9])0*"+episode+"(?:[^0-9]|$)").test(release);
+  const value = String(release ?? "");
+  const exact = [
+    new RegExp("s0*"+season+"e0*"+episode+"(?:[^0-9]|$)", "i"),
+    new RegExp("(?:^|[^0-9])0*"+season+"x0*"+episode+"(?:[^0-9]|$)", "i"),
+  ];
+  const seasonEpisode = value.match(/\bseason\s*0*(\d{1,2})\D{0,12}(?:episode|ep)\s*0*(\d{1,3})\b/i);
+  if (seasonEpisode) return Number(seasonEpisode[1]) === season && Number(seasonEpisode[2]) === episode;
+  if (/(?:s\d{1,2}\s*e\d{1,3}|\b\d{1,2}x\d{1,3}\b)/i.test(value)) {
+    return exact.some(pattern => pattern.test(value));
+  }
+  const episodeOnly = value.match(/\b(?:episode|ep|e)\s*0*(\d{1,3})\b/i);
+  if (episodeOnly) return Number(episodeOnly[1]) === episode;
+  // Some SubSource entries identify only the series/season, not the episode.
+  // Keep those candidates; the requested season is already sent to its API.
+  return true;
 }
 async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMap[]> {
   const movieSearch = new URL(SUBSOURCE_BASE + "/movies/search");
@@ -270,25 +306,39 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   if (args.mediaType === "tv") movieSearch.searchParams.set("season", String(args.season));
   const moviePayload = await subsourceJson(movieSearch, apiKey);
   const movieRows = Array.isArray(moviePayload.data) ? moviePayload.data as JsonMap[] : [];
-  const wantedTitle = normalizeMatch(args.title);
+  const wantedTitle = normalizeSubSourceTitle(args.title).replace(/\b(19|20)\d{2}\b/g, "").trim();
   const scored = movieRows.map(row => {
-    const id = Number(row.movieId ?? row.id ?? 0);
-    const type = String(row.type ?? "").toLowerCase();
-    if (args.mediaType === "tv" && type && type !== "series" && type !== "tv") return {id, score:0};
-    if (args.mediaType !== "tv" && type && type !== "movie") return {id, score:0};
-    const rowTmdbId = Number(row.tmdbId ?? 0);
+    const id = Number(row.movieId ?? row.movie_id ?? row.id ?? 0);
+    const type = String(row.type ?? row.mediaType ?? row.media_type ?? "").toLowerCase();
+    if (args.mediaType === "tv" && type && !["series", "tv", "show"].includes(type)) return {id, score:0};
+    if (args.mediaType !== "tv" && type && !["movie", "film"].includes(type)) return {id, score:0};
+    const rowTmdbId = Number(row.tmdbId ?? row.tmdb_id ?? 0);
     if (args.tmdbId > 0 && rowTmdbId > 0 && rowTmdbId !== args.tmdbId) return {id, score:0};
-    const titleMatches = normalizeMatch(row.title) === wantedTitle ||
-      normalizeMatch(row.alternateTitle) === wantedTitle;
-    if (!titleMatches) return {id, score:0};
-    const releaseYear = Number(row.releaseYear ?? 0);
+    const titleValues = Object.entries(row)
+      .filter(([key, value]) => /title|name/i.test(key) && (typeof value === "string" || typeof value === "number"))
+      .map(([, value]) => normalizeSubSourceTitle(value).replace(/\b(19|20)\d{2}\b/g, "").trim())
+      .filter(Boolean);
+    const titleScore = Math.max(0, ...titleValues.map(value => subsourceTitleScore(value, wantedTitle)));
+    if (titleScore < 60) return {id, score:0};
+    const yearValue = row.releaseYear ?? row.release_year ?? row.year ?? "";
+    const releaseYear = Number(String(yearValue).slice(0,4));
     if (args.year && releaseYear > 0 && releaseYear !== Number(args.year)) return {id, score:0};
-    let score = 10;
-    if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 20;
-    if (args.year && releaseYear === Number(args.year)) score += 2;
+    let score = titleScore;
+    if (args.tmdbId > 0 && rowTmdbId === args.tmdbId) score += 30;
+    if (args.year && releaseYear === Number(args.year)) score += 10;
     return {id, score};
-  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 10)
+  }).filter(x => Number.isSafeInteger(x.id) && x.id > 0 && x.score >= 60)
     .sort((a,b) => b.score-a.score);
+  if (!scored.length) {
+    console.info("FLIXORA SubSource unmatched search rows", movieRows.slice(0,5).map(row => ({
+      keys: Object.keys(row).filter(key => /title|name|type|year|tmdb|id/i.test(key)),
+      titles: Object.entries(row).filter(([key,value]) => /title|name/i.test(key) && typeof value === "string")
+        .map(([,value]) => String(value).slice(0,100)),
+    })));
+  }
+  console.info("FLIXORA SubSource series match", {
+    searchRows: movieRows.length, matchingRows: scored.length, hasTmdbId: args.tmdbId > 0,
+  });
   const movieId = scored[0]?.id;
   if (!movieId) return [];
   const subtitleUrl = new URL(SUBSOURCE_BASE + "/subtitles");
@@ -300,12 +350,23 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
   const requested = new Set(args.languages.map(languageCode));
   const output: JsonMap[] = [];
   const seen = new Set<string>();
+  let languageRejected = 0, episodeRejected = 0;
   for (const row of rows) {
     const id = Number(row.subtitleId ?? row.id ?? 0);
     if (!Number.isInteger(id) || id <= 0) continue;
     const lang = subsourceLanguageCode(row.language ?? row.languageName ?? row.languageCode);
-    if (!requested.has(lang)) continue;
+    if (!requested.has(lang)) { languageRejected++; continue; }
     const release = subsourceReleaseInfo(row.releaseInfo ?? row.release_info);
+    if (args.mediaType === "tv") {
+      const rowSeason = Number(row.seasonNumber ?? row.season_number ?? row.season ?? 0);
+      const rowEpisode = Number(row.episodeNumber ?? row.episode_number ?? row.episode ?? 0);
+      if ((rowSeason > 0 && rowSeason !== args.season) ||
+          (rowEpisode > 0 && rowEpisode !== args.episode) ||
+          !matchesSubSourceEpisode(release, args.season, args.episode)) {
+        episodeRejected++;
+        continue;
+      }
+    }
     if (seen.has(lang + ":" + id)) continue;
     seen.add(lang + ":" + id);
     output.push({
@@ -315,6 +376,9 @@ async function searchSubSource(args: SearchArgs, apiKey: string): Promise<JsonMa
     });
     if (output.length >= 40) break;
   }
+  console.info("FLIXORA SubSource subtitle rows", {
+    totalRows: rows.length, accepted: output.length, languageRejected, episodeRejected,
+  });
   return output;
 }
 function validateSubSourceZipLimits(archive: Uint8Array): void {
@@ -489,6 +553,107 @@ async function searchISubtitles(args:SearchArgs):Promise<JsonMap[]>{
  }
  return out;
 }
+
+const gestdownLanguage: Record<string,string> = {
+ en:"English",bn:"Bengali",hi:"Hindi",ur:"Urdu",ar:"Arabic",es:"Spanish",fr:"French",
+ de:"German",pt:"Portuguese",ru:"Russian",ja:"Japanese",ko:"Korean",it:"Italian",
+ nl:"Dutch",pl:"Polish",th:"Thai",id:"Indonesian",ms:"Malay",fa:"Persian",zh:"Chinese"
+};
+function cleanProviderTitle(value:string):string {
+ return normalizeMatch(value).replace(/\b(19|20)\d{2}\b/g,"").trim();
+}
+async function searchGestdown(args:SearchArgs):Promise<JsonMap[]> {
+ if(args.mediaType!=="tv")return [];
+ const base="https://api.gestdown.info";
+ const showResponse=await fetch(base+"/shows/search/"+encodeURIComponent(args.title),
+   {headers:{Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+ if(showResponse.status===404){console.info("FLIXORA Gestdown show not found",args.title);return [];}
+ if(!showResponse.ok)throw new Error("Gestdown show search HTTP "+showResponse.status);
+ const showPayload=await showResponse.json() as JsonMap;
+ const shows=Array.isArray(showPayload.shows)?showPayload.shows as JsonMap[]:[];
+ const wanted=cleanProviderTitle(args.title);
+ const candidates=shows.filter(show=>cleanProviderTitle(String(show.name??""))===wanted);
+ const show=candidates.find(item=>!Array.isArray(item.seasons)||
+   (item.seasons as unknown[]).some(value=>Number(value)===args.season));
+ if(!show){console.info("FLIXORA Gestdown no exact show/season match",{title:args.title,showCount:shows.length});return [];}
+
+ const showId=String(show.id??"");
+ if(!showId||!/^[a-zA-Z0-9_-]+$/.test(showId))return [];
+ const output:JsonMap[]=[];
+ for(const rawLang of args.languages){
+  const lang=languageCode(rawLang),languageName=gestdownLanguage[lang];
+  if(!languageName)continue;
+  const response=await fetch(base+"/subtitles/get/"+encodeURIComponent(showId)+"/"+
+    args.season+"/"+args.episode+"/"+encodeURIComponent(languageName),
+    {headers:{Accept:"application/json"},signal:AbortSignal.timeout(9000)});
+  if(!response.ok)continue;
+  const payload=await response.json() as JsonMap;
+  const rows=Array.isArray(payload.matchingSubtitles)?payload.matchingSubtitles as JsonMap[]:[];
+  for(const row of rows){
+   const uri=String(row.downloadUri??"");
+   if(!uri.startsWith("/")||uri.startsWith("//"))continue;
+   const downloadUrl=new URL(uri,base).toString();
+   if(!safeDownloadUrl(downloadUrl,"api.gestdown.info"))continue;
+   const version=String(row.version??row.subtitleId??"Gestdown").slice(0,150);
+   output.push({language:lang,format:"zip",fileName:"gestdown_"+String(row.subtitleId??"subtitle")+".zip",
+    releaseName:version,downloadUrl,provider:"Gestdown",providerSource:"gestdown"});
+   if(output.length>=20)break;
+  }
+ }
+ return output;
+}
+async function searchTVSubtitles(args:SearchArgs):Promise<JsonMap[]> {
+ if(args.mediaType!=="tv")return [];
+ const base="https://www.tvsubtitles.net",host="www.tvsubtitles.net";
+ const searchUrl=base+"/search1.php";
+ const html=await getProviderPage(searchUrl,host,undefined,"POST","qs="+encodeURIComponent(args.title));
+ const wanted=cleanProviderTitle(args.title);
+ let showId="";
+ for(const match of html.matchAll(/<a\b[^>]*href=["']([^"']*tvshow-(\d+)\.html[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)){
+  const title=stripHtml(match[3]).replace(/\s*\(\d{4}(?:-\d{4})?\)\s*$/,"");
+  if(cleanProviderTitle(title)===wanted){showId=match[2];break;}
+ }
+ if(!showId)return [];
+ const seasonUrl=base+"/tvshow-"+showId+"-"+args.season+".html";
+ const seasonHtml=await getProviderPage(seasonUrl,host);
+ let episodeId="";
+ for(const row of seasonHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)){
+  const text=stripHtml(row[1]);
+  const label=text.match(/\b(\d{1,2})x(\d{1,4})\b/i);
+  if(!label||Number(label[1])!==args.season||Number(label[2])!==args.episode)continue;
+  const link=row[1].match(/href=["'][^"']*episode-(\d+)\.html[^"']*["']/i);
+  if(link){episodeId=link[1];break;}
+ }
+ if(!episodeId)return [];
+ const output:JsonMap[]=[];
+ for(const rawLang of args.languages){
+  const lang=languageCode(rawLang);
+  const langCode:Record<string,string>={en:"en",zh:"cn",ja:"jp",fr:"fr",de:"de",es:"es",it:"it",pt:"pt",ru:"ru",nl:"nl",pl:"pl"};
+  const code=langCode[lang];if(!code)continue;
+  const episodeUrl=base+"/episode-"+episodeId+"-"+code+".html";
+  let episodeHtml="";
+  try{episodeHtml=await getProviderPage(episodeUrl,host);}catch{continue;}
+  for(const link of episodeHtml.matchAll(/<a\b[^>]*href=["']([^"']*subtitle-(\d+)\.html[^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi)){
+   const subtitleId=link[2];
+   const release=stripHtml(link[3])||("TVSubtitles "+subtitleId);
+   const subtitlePage=providerAbsolute(link[1],base);
+   const downloadPage=base+"/download-"+subtitleId+".html";
+   let downloadHtml="";
+   try{downloadHtml=await getProviderPage(downloadPage,host,subtitlePage);}catch{continue;}
+   const fragments=[...downloadHtml.matchAll(/var\s+s\d+\s*=\s*'([^']*)'/g)].map(item=>item[1]);
+   if(!fragments.length)continue;
+   const relative=fragments.join("");
+   const downloadUrl=providerAbsolute(relative,base);
+   if(!safeDownloadUrl(downloadUrl,host))continue;
+   output.push({language:lang,format:"zip",fileName:"tvsubtitles_"+subtitleId+".zip",
+    releaseName:release.slice(0,180),downloadUrl,pageUrl:subtitlePage,provider:"TVSubtitles",providerSource:"tvsubtitles"});
+   if(output.length>=20)break;
+  }
+  if(output.length)break;
+ }
+ return output;
+}
+
 async function searchBollyNook(args:SearchArgs):Promise<JsonMap[]>{
  if(args.mediaType!=="movie")return [];
  const base="https://www.bollynook.com",host="bollynook.com";
@@ -527,12 +692,32 @@ function selectExternalArchive(files:Record<string,Uint8Array>,season:number,epi
 }
 async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  const provider=String(body.provider??"").toLowerCase();
- const host=provider==="isubtitles"?"isubtitles.org":provider==="bollynook"?"bollynook.com":"";
+ const host=provider==="isubtitles"?"isubtitles.org":
+   provider==="bollynook"?"bollynook.com":
+   provider==="subdl"?"subdl.com":
+   provider==="opensubtitles"?"opensubtitles.com":
+   provider==="gestdown"?"api.gestdown.info":
+   provider==="tvsubtitles"?"www.tvsubtitles.net":"";
  if(!host)return json({error:"Unsupported subtitle provider."},400);
  const url=safeDownloadUrl(body.downloadUrl,host);if(!url)return json({error:"Invalid provider download URL."},400);
+ if(provider==="subdl"&&!new URL(url).pathname.startsWith("/subtitle/"))
+   return json({error:"Invalid SubDL subtitle path."},400);
  const referer=safeDownloadUrl(body.pageUrl,host);
- const response=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36","Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})},signal:AbortSignal.timeout(20000)});
- if(!response.ok)return json({error:provider+" download HTTP "+response.status},502);
+ const headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+   "Accept":"application/zip,application/octet-stream,text/plain,*/*",...(referer?{"Referer":referer}:{})};
+ let response:Response|undefined;
+ for(let attempt=0;attempt<2;attempt++){
+   response=await fetch(url,{headers,signal:AbortSignal.timeout(20000)});
+   if(response.ok)break;
+   if(attempt===0&&response.status===429){
+     const retryAfter=Number(response.headers.get("retry-after")??"");
+     const waitMs=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,4000):1200;
+     await new Promise(resolve=>setTimeout(resolve,waitMs));
+     continue;
+   }
+   return json({error:provider+" download HTTP "+response.status},502);
+ }
+ if(!response?.ok)return json({error:provider+" download HTTP "+(response?.status??502)},502);
  const bytes=new Uint8Array(await response.arrayBuffer());
  if(bytes.length<16||bytes.length>10*1024*1024)return json({error:"Provider returned an empty or oversized subtitle."},502);
  let selected:Uint8Array,name="subtitle.srt";
@@ -545,7 +730,7 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
   if((bytes[0]===0x52&&bytes[1]===0x61)||(bytes[0]===0x37&&bytes[1]===0x7b))return json({error:"Provider archive format is not supported; trying another subtitle source."},422);
   selected=bytes;
  }
- if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},422);
+ if(selected.length<16||selected.length>5*1024*1024)return json({error:"Extracted subtitle is invalid or too large."},502);
  return json({contentBase64:base64Encode(selected),fileName:name,extension:name.split(".").pop()||"srt"});
 }
 
@@ -557,16 +742,22 @@ function subtitleCacheKey(args: SearchArgs): string {
 async function providerWithDeadline(task: Promise<JsonMap[]>, label: string,
   errors: string[], timeoutMs = 5200): Promise<JsonMap[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now();
   try {
-    return await Promise.race([
+    const results = await Promise.race([
       task,
       new Promise<JsonMap[]>((resolve) => {
         timer = setTimeout(() => {
           errors.push(label + " search timed out");
+          console.warn("FLIXORA provider timeout", label, timeoutMs);
           resolve([]);
         }, timeoutMs);
       }),
     ]);
+    console.info("FLIXORA provider result", label, {
+      resultCount: results.length, elapsedMs: Date.now() - startedAt,
+    });
+    return results;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -579,6 +770,98 @@ Deno.serve(async (request: Request) => {
     const body = await request.json() as JsonMap;
     if (body.action === "download_subsource") return await downloadSubSource(body);
     if (body.action === "download_provider_subtitle") return await downloadProviderSubtitle(body);
+    if (body.action === "search_last_resort") {
+      const tmdbId = Number(body.tmdbId ?? 0);
+      const title = String(body.title ?? "").trim().slice(0, 180);
+      const year = String(body.year ?? "").trim();
+      const mediaType = body.mediaType === "tv" ? "tv" : "movie";
+      const requested = String(body.languages ?? "EN").split(",")
+        .map(x => x.trim().toUpperCase()).filter(x => supportedLanguages.has(x));
+      const languages = [...new Set(requested)];
+      if (!languages.length) languages.push("EN");
+      const season = Math.max(0, Math.min(99, Number(body.season ?? 0) || 0));
+      const episode = Math.max(0, Math.min(999, Number(body.episode ?? 0) || 0));
+      if ((!Number.isInteger(tmdbId) || tmdbId <= 0) && !title)
+        return json({error: "A valid TMDB ID or title is required."}, 400);
+      if (mediaType === "tv" && (!season || !episode))
+        return json({error: "Season and episode are required for TV subtitles."}, 400);
+      const openKey = Deno.env.get("OPENSUBTITLES_API_KEY")?.trim() ?? "";
+      const providerErrors: string[] = [];
+      if (!openKey) {
+        return json({subtitles: [], resultCount: 0, searchedProviders: 0,
+          providerErrors: ["OpenSubtitles is not configured"], fallbackOnly: true});
+      }
+      const args: SearchArgs = {
+        apiKey: openKey, tmdbId, title, year, mediaType, languages, season, episode, providerErrors
+      };
+      // Spend the low-quota OpenSubtitles allowance only after every primary
+      // provider candidate was tried and none produced a usable subtitle.
+      const subtitles = await searchOpenSubtitles(args);
+      return json({subtitles, resultCount: subtitles.length, searchedProviders: 1,
+        providerErrors, fallbackOnly: true});
+    }
+    if (body.action === "search_title_fallback") {
+      const title = String(body.title ?? "").trim().slice(0, 180);
+      const year = String(body.year ?? "").trim();
+      const mediaType = body.mediaType === "tv" ? "tv" : "movie";
+      const requested = String(body.languages ?? "EN").split(",")
+        .map(x => x.trim().toUpperCase()).filter(x => supportedLanguages.has(x));
+      const languages = [...new Set(requested)];
+      if (!languages.length) languages.push("EN");
+      const season = Math.max(0, Math.min(99, Number(body.season ?? 0) || 0));
+      const episode = Math.max(0, Math.min(999, Number(body.episode ?? 0) || 0));
+      if (!title) return json({error:"A valid title is required."},400);
+      if (mediaType === "tv" && (!season || !episode))
+        return json({error:"Season and episode are required for TV subtitles."},400);
+      const subdlKey = Deno.env.get("SUBDL_API_KEY")?.trim() ?? "";
+      const subsourceKey = Deno.env.get("SUBSOURCE_API_KEY")?.trim() ?? "";
+      const providerErrors: string[] = [];
+      const args: SearchArgs = {apiKey:"",tmdbId:0,title,year,mediaType,languages,season,episode,providerErrors};
+      const tasks: Promise<JsonMap[]>[] = [];
+      if (subdlKey) tasks.push(providerWithDeadline((async () => {
+        try {
+          let found = await searchSubDL({...args,apiKey:subdlKey});
+          if (!found.length && year) found = await searchSubDL({...args,apiKey:subdlKey},true,true);
+          return found;
+        } catch (error) {
+          providerErrors.push("SubDL title fallback failed");
+          console.warn("FLIXORA SubDL title fallback failed",error);
+          return [];
+        }
+      })(),"SubDL title fallback",providerErrors));
+      if (subsourceKey) tasks.push(providerWithDeadline((async () => {
+        try { return await searchSubSource(args,subsourceKey); }
+        catch (error) {
+          providerErrors.push("SubSource title fallback failed");
+          console.warn("FLIXORA SubSource title fallback failed",error);
+          return [];
+        }
+      })(),"SubSource title fallback",providerErrors));
+      tasks.push(providerWithDeadline((async () => {
+        try { return await searchISubtitles(args); }
+        catch (error) {
+          providerErrors.push("iSubtitles title fallback failed");
+          console.warn("FLIXORA iSubtitles title fallback failed",error);
+          return [];
+        }
+      })(),"iSubtitles title fallback",providerErrors,10500));
+      if (mediaType === "tv") {
+        tasks.push(providerWithDeadline((async () => {
+          try { return await searchGestdown(args); }
+          catch (error) { providerErrors.push("Gestdown title fallback failed"); console.warn("FLIXORA Gestdown title fallback failed",error); return []; }
+        })(),"Gestdown title fallback",providerErrors,10500));
+      }
+      if (mediaType === "movie") tasks.push(providerWithDeadline((async () => {
+        try { return await searchBollyNook(args); }
+        catch (error) {
+          providerErrors.push("BollyNook title fallback failed");
+          console.warn("FLIXORA BollyNook title fallback failed",error);
+          return [];
+        }
+      })(),"BollyNook title fallback",providerErrors,10500));
+      const subtitles = capAndDedupe((await Promise.all(tasks)).flat());
+      return json({subtitles,resultCount:subtitles.length,searchedProviders:tasks.length,providerErrors,titleFallback:true});
+    }
     const tmdbId = Number(body.tmdbId ?? 0);
     const title = String(body.title ?? "").trim().slice(0, 180);
     const year = String(body.year ?? "").trim();
@@ -627,6 +910,12 @@ Deno.serve(async (request: Request) => {
       try { return await searchISubtitles(baseArgs); }
       catch (error) { providerErrors.push("iSubtitles request failed"); console.warn("FLIXORA iSubtitles failed",error); return []; }
     })(), "iSubtitles", providerErrors, 10500));
+    if(mediaType==="tv") {
+      tasks.push(providerWithDeadline((async () => {
+        try { return await searchGestdown(baseArgs); }
+        catch (error) { providerErrors.push("Gestdown request failed"); console.warn("FLIXORA Gestdown failed",error); return []; }
+      })(),"Gestdown",providerErrors,10500));
+    }
     if(mediaType==="movie") tasks.push(providerWithDeadline((async () => {
       try { return await searchBollyNook(baseArgs); }
       catch (error) { providerErrors.push("BollyNook request failed"); console.warn("FLIXORA BollyNook failed",error); return []; }

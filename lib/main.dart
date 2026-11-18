@@ -14124,6 +14124,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Some network streams publish subtitle tracks after playback starts.
+      if (value.subtitle.any((track) => track.id != 'auto' && track.id != 'no')) {
+        unawaited(_activateEmbeddedSubtitleIfAvailable());
+      }
       // Re-apply the user's audio sync preference when a new media exposes
       // its tracks. This only changes the active Player's audio-delay property.
       if (_audioDelay.abs() >= 0.01) {
@@ -16318,10 +16322,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final isSubSource = provider == 'subsource';
     final isISubtitles = provider == 'isubtitles';
     final isBollyNook = provider == 'bollynook';
-    final isProviderDownload = isSubSource || isISubtitles || isBollyNook;
+    final isGestdown = provider == 'gestdown';
+    final isTVSubtitles = provider == 'tvsubtitles';
     final isSubDl = uri?.host == 'dl.subdl.com';
     final isOpenSubtitles = uri != null &&
         (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
+    final isProviderDownload = isSubSource || isISubtitles || isBollyNook ||
+        isGestdown || isTVSubtitles || isSubDl || isOpenSubtitles;
     if (isSubSource) {
       final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
       if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
@@ -16335,6 +16342,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (uri == null || uri.scheme != 'https' ||
           !(uri.host == 'bollynook.com' || uri.host == 'www.bollynook.com')) {
         throw StateError('BollyNook returned an invalid download link.');
+      }
+    } else if (isGestdown) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'api.gestdown.info' || !uri.path.startsWith('/')) {
+        throw StateError('Gestdown returned an invalid download link.');
+      }
+    } else if (isTVSubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'www.tvsubtitles.net') {
+        throw StateError('TVSubtitles returned an invalid download link.');
       }
     } else if (uri == null || uri.scheme != 'https' ||
         !(isSubDl || isOpenSubtitles) ||
@@ -16450,6 +16467,54 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return cachedFile;
   }
 
+  Future<bool> _activateEmbeddedSubtitleIfAvailable() async {
+    if (_isDisposed || widget.localFilePath != null ||
+        _subtitleManuallySelected || _automaticSubtitleLoading ||
+        _automaticEnglishTrack != null) return false;
+    final embeddedTracks = _tracks.subtitle
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .toList(growable: false);
+    if (embeddedTracks.isEmpty) return false;
+    final orderedTracks = <SubtitleTrack>[
+      ...embeddedTracks.where(_isBanglaSubtitleTrack),
+      ...embeddedTracks.where(_isEnglishSubtitleTrack),
+      ...embeddedTracks.where((track) =>
+          !_isBanglaSubtitleTrack(track) && !_isEnglishSubtitleTrack(track)),
+    ];
+    for (final track in orderedTracks) {
+      if (_isDisposed || _subtitleManuallySelected) return false;
+      try {
+        await _player.setSubtitleTrack(track);
+        final native = _player.platform;
+        if (native is NativePlayer) {
+          await native.setProperty('sub-visibility', 'yes');
+        }
+        await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (_isDisposed) return false;
+        final activeId = _player.state.track.subtitle.id;
+        if (activeId != track.id) {
+          debugPrint('FLIXORA embedded subtitle not active: requested=${track.id}, active=$activeId');
+          continue;
+        }
+        if (mounted) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _subtitleVisibilityEnabled = true;
+            _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+            _automaticSubtitleMessage =
+                'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
+          });
+        }
+        debugPrint('FLIXORA embedded subtitle activated: id=${track.id}, language=${track.language}');
+        return true;
+      } catch (error) {
+        debugPrint('FLIXORA embedded subtitle selection failed for ${track.id}: $error');
+      }
+    }
+    return false;
+  }
+
   Future<void> _ensureAutomaticEnglishSubtitle({
     bool searchProviders = false,
     String? searchTitle,
@@ -16465,40 +16530,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
     var embeddedTrackSelected = false;
     try {
-      // Keep embedded subtitles active while explicit searches discover other languages.
-      for (var attempt = 0; attempt < 8; attempt++) {
-        final embeddedTracks = _tracks.subtitle
-            .where((track) => track.id != 'auto' && track.id != 'no')
-            .toList(growable: false);
-        if (embeddedTracks.isNotEmpty) {
-          final track = embeddedTracks.firstWhere(
-            _isBanglaSubtitleTrack,
-            orElse: () => embeddedTracks.firstWhere(
-              _isEnglishSubtitleTrack,
-              orElse: () => embeddedTracks.first,
-            ),
-          );
-          if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
-          try {
-            await _player.setSubtitleTrack(track);
-            final native = _player.platform;
-            if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-            await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-            embeddedTrackSelected = true;
-            if (mounted && !_isDisposed) {
-              setState(() {
-                _automaticEnglishTrack = track;
-                _subtitleVisibilityEnabled = true;
-                _automaticSubtitleMessage =
-                    'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
-              });
-            }
-          } catch (error) {
-            debugPrint('FLIXORA embedded subtitle selection failed: $error');
-          }
-          break;
-        }
-        if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
+      // Wait for stream metadata; the track listener retries if it arrives later.
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+        embeddedTrackSelected = await _activateEmbeddedSubtitleIfAvailable();
+        if (embeddedTrackSelected) break;
+        if (attempt < 11) await Future.delayed(const Duration(milliseconds: 250));
       }
 
       final client = supabaseClient;
@@ -16542,7 +16579,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         ].join('|').toLowerCase();
         if (code.isNotEmpty) unique.putIfAbsent(identity, () => option);
       }
-      final available = unique.values.toList()
+      var available = unique.values.toList()
         ..sort((a, b) {
           int priority(Map<String, dynamic> option) {
             final code = (option['language'] ?? '').toString().toLowerCase();
@@ -16552,15 +16589,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           }
           return priority(a).compareTo(priority(b));
         });
-      if (available.isEmpty) throw StateError('No subtitles were found for this title and episode.');
+      Future<List<Map<String, dynamic>>> searchTitleFallbackOptions() async {
+        final fallbackTitle = searchTitle?.trim().isNotEmpty == true ? searchTitle!.trim() : widget.movie.title;
+        final fallbackResponse = await client.functions.invoke('flixora-subtitles', body: {
+          'action': 'search_title_fallback', 'tmdbId': 0, 'title': fallbackTitle,
+          'year': widget.movie.year,
+          'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+          'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+          if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+            'season': _selectedSeasonNumber, 'episode': _selectedEpisodeNumber,
+          },
+        }).timeout(const Duration(seconds: 18));
+        final payload = fallbackResponse.data;
+        final raw = payload is Map ? payload['subtitles'] : null;
+        return raw is List ? raw.whereType<Map>().map((x) => Map<String,dynamic>.from(x))
+          .where((x) => (x['downloadUrl'] ?? '').toString().isNotEmpty).toList(growable:false)
+          : <Map<String,dynamic>>[];
+      }
+      if (available.isEmpty) {
+        try { available = await searchTitleFallbackOptions(); }
+        catch (error) { debugPrint('FLIXORA title fallback search failed: $error'); }
+      }
       if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
-      if (mounted && !_isDisposed) {
+      if (available.isNotEmpty && mounted && !_isDisposed) {
         setState(() {
           _automaticSubtitleOptions = available;
           _automaticSubtitleMessage = '${available.length} language(s) available';
         });
       }
-      if ((embeddedTrackSelected && searchProviders) || _subtitleManuallySelected) return;
+      // Keep a working embedded track active; users may still manually
+      // search and select an external subtitle from the existing panel.
+      if (embeddedTrackSelected || _subtitleManuallySelected) return;
 
       // Prefer Bangla, then English, then other available languages.
       // Try every candidate for the preferred language so one expired or
@@ -16596,6 +16655,76 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         } catch (error) {
           lastDownloadError = error;
           debugPrint('FLIXORA subtitle candidate failed: $error');
+        }
+      }
+      // If primary providers returned listings but every file failed to
+      // download/validate, make one final request to the quota-limited
+      // provider. This avoids spending its small allowance on normal searches.
+      if (file == null) {
+        try {
+          final fallbackOptions = await searchTitleFallbackOptions();
+          final tried = orderedOptions.map((x) =>
+            '${(x['provider'] ?? '').toString().toLowerCase()}|${x['downloadUrl'] ?? ''}').toSet();
+          for (final option in fallbackOptions) {
+            final key = '${(option['provider'] ?? '').toString().toLowerCase()}|${option['downloadUrl'] ?? ''}';
+            if (tried.contains(key)) continue;
+            if (requestToken != _automaticSubtitleRequestToken || _subtitleManuallySelected || _isDisposed) return;
+            try { file = await _downloadAutomaticSubtitle(option); selected = option; break; }
+            catch (error) { lastDownloadError = error; debugPrint('FLIXORA title-fallback candidate failed: $error'); }
+          }
+        } catch (error) { lastDownloadError = error; debugPrint('FLIXORA title-fallback search failed: $error'); }
+      }
+      final alreadyTriedOpenSubtitles = orderedOptions.any((option) =>
+          (option['provider'] ?? '').toString().toLowerCase() == 'opensubtitles');
+      if (file == null && !alreadyTriedOpenSubtitles) {
+        try {
+          final fallbackTitle = searchTitle?.trim().isNotEmpty == true
+              ? searchTitle!.trim()
+              : widget.movie.title;
+          final isAlternateTitle =
+              fallbackTitle.toLowerCase() != widget.movie.title.trim().toLowerCase();
+          final fallbackResponse = await client.functions.invoke(
+            'flixora-subtitles',
+            body: {
+              'action': 'search_last_resort',
+              'tmdbId': isAlternateTitle ? 0 : widget.movie.tmdbId,
+              'title': fallbackTitle,
+              'year': isAlternateTitle ? '' : widget.movie.year,
+              'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries)
+                  ? 'tv'
+                  : 'movie',
+              'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+              if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+                'season': _selectedSeasonNumber,
+                'episode': _selectedEpisodeNumber,
+              },
+            },
+          ).timeout(const Duration(seconds: 16));
+          final fallbackPayload = fallbackResponse.data;
+          final fallbackRaw = fallbackPayload is Map ? fallbackPayload['subtitles'] : null;
+          final fallbackOptions = fallbackRaw is List
+              ? fallbackRaw.whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .where((item) =>
+                      (item['provider'] ?? '').toString().toLowerCase() == 'opensubtitles' &&
+                      (item['downloadUrl'] ?? '').toString().isNotEmpty)
+                  .toList(growable: false)
+              : <Map<String, dynamic>>[];
+          for (final option in fallbackOptions) {
+            if (requestToken != _automaticSubtitleRequestToken ||
+                _subtitleManuallySelected || _isDisposed) return;
+            try {
+              file = await _downloadAutomaticSubtitle(option);
+              selected = option;
+              break;
+            } catch (error) {
+              lastDownloadError = error;
+              debugPrint('FLIXORA last-resort subtitle download failed: $error');
+            }
+          }
+        } catch (error) {
+          lastDownloadError = error;
+          debugPrint('FLIXORA last-resort subtitle search failed: $error');
         }
       }
       if (file == null || selected == null) {
