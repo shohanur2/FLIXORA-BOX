@@ -20,4 +20,5 @@ class PictureInPictureService {
       // Older installed builds do not have the native bridge yet.
     }
   }
+
 }
