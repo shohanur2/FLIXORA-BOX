@@ -24,6 +24,16 @@ class MainActivity : FlutterActivity() {
                     pipEnabled = call.argument<Boolean>("enabled") ?: false
                     result.success(true)
                 }
+                "enter" -> {
+                    if (!pipEnabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                        result.success(false)
+                    } else {
+                        val params = PictureInPictureParams.Builder()
+                            .setAspectRatio(Rational(16, 9))
+                            .build()
+                        result.success(enterPictureInPictureMode(params))
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
