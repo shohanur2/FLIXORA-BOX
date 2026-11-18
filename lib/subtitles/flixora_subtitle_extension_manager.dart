@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// GitHub-hosted registry for remote Stremio subtitle add-ons.
 /// Only HTTPS subtitle resources are queried; add-on executable code is never downloaded.
@@ -69,6 +71,12 @@ class FlixoraSubtitleExtensionResult {
   final String label;
 }
 
+class _ExtensionHttpFailure implements Exception {
+  const _ExtensionHttpFailure(this.statusCode, {this.retryAfterSeconds = 0});
+  final int statusCode;
+  final int retryAfterSeconds;
+}
+
 class FlixoraSubtitleExtensionManager {
   FlixoraSubtitleExtensionManager({http.Client? client, Uri? registryUrl})
       : _client = client ?? http.Client(),
@@ -81,6 +89,36 @@ class FlixoraSubtitleExtensionManager {
 
   final http.Client _client;
   final Uri registryUrl;
+
+  static const String _cooldownPrefix = 'flixora_subtitle_extension_cooldown_';
+
+  Future<bool> _isCoolingDown(String extensionId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final until = prefs.getInt('$_cooldownPrefix$extensionId') ?? 0;
+    if (until <= DateTime.now().millisecondsSinceEpoch) {
+      if (until != 0) await prefs.remove('$_cooldownPrefix$extensionId');
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _coolDown(String extensionId, Duration duration) async {
+    final prefs = await SharedPreferences.getInstance();
+    final until = DateTime.now().add(duration).millisecondsSinceEpoch;
+    await prefs.setInt('$_cooldownPrefix$extensionId', until);
+  }
+
+  Duration _cooldownFor(_ExtensionHttpFailure failure) {
+    if (failure.statusCode == 429) {
+      final seconds = failure.retryAfterSeconds.clamp(60, 21600);
+      return Duration(seconds: seconds);
+    }
+    if (failure.statusCode == 401 || failure.statusCode == 403) {
+      return const Duration(minutes: 30);
+    }
+    if (failure.statusCode >= 500) return const Duration(minutes: 3);
+    return Duration.zero;
+  }
 
   Future<List<FlixoraSubtitleExtension>> loadExtensions() async {
     _requireHttps(registryUrl);
@@ -130,6 +168,7 @@ class FlixoraSubtitleExtensionManager {
     final results = <FlixoraSubtitleExtensionResult>[];
 
     for (final extension in extensions) {
+      if (await _isCoolingDown(extension.id)) continue;
       if (extension.types.isNotEmpty && !extension.types.contains(type)) continue;
       if (extension.languages.isNotEmpty && requested.isNotEmpty &&
           !extension.languages.any(requested.contains)) continue;
@@ -143,7 +182,12 @@ class FlixoraSubtitleExtensionManager {
         final response = await _client.get(endpoint,
             headers: const {'Accept': 'application/json'})
             .timeout(const Duration(seconds: 12));
-        if (response.statusCode != 200) continue;
+        if (response.statusCode != 200) {
+          throw _ExtensionHttpFailure(
+            response.statusCode,
+            retryAfterSeconds: int.tryParse(response.headers['retry-after'] ?? '') ?? 0,
+          );
+        }
         final payload = jsonDecode(utf8.decode(response.bodyBytes));
         if (payload is! Map || payload['subtitles'] is! List) continue;
 
@@ -171,7 +215,16 @@ class FlixoraSubtitleExtensionManager {
             label: (item['label'] ?? item['name'] ?? extension.name).toString(),
           ));
         }
-      } catch (error) {
+      } on _ExtensionHttpFailure catch (failure) {
+        final cooldown = _cooldownFor(failure);
+        if (cooldown > Duration.zero) {
+          await _coolDown(extension.id, cooldown);
+        }
+        continue;
+      } on TimeoutException {
+        await _coolDown(extension.id, const Duration(minutes: 2));
+        continue;
+      } catch (_) {
         // Per-extension failover: a failed add-on cannot block the next one.
         continue;
       }
@@ -186,7 +239,10 @@ class FlixoraSubtitleExtensionManager {
         headers: const {'Accept': 'application/json'})
         .timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {
-      throw StateError('Add-on manifest HTTP ${response.statusCode}.');
+      throw _ExtensionHttpFailure(
+        response.statusCode,
+        retryAfterSeconds: int.tryParse(response.headers['retry-after'] ?? '') ?? 0,
+      );
     }
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
     if (decoded is! Map ||
