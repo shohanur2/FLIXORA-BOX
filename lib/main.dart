@@ -13451,9 +13451,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         try {
           await _player.open(
             Media(url, httpHeaders: _headersForQuality(candidate)),
-            // Start playback as soon as the stream is opened; audio track
-            // selection below remains unchanged.
-            play: true,
+            play: false,
           );
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
