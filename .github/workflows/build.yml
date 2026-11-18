@@ -189,12 +189,25 @@ jobs:
           replacements = [
               ("let mut cap_keys: Vec<(String, String)> = Vec::new();",
                "let mut cap_keys: Vec<(String, String, i64)> = Vec::new();"),
-              ("self.load_captions(&cap_keys, &mut subtitles).await",
-               "self.load_captions(&cap_keys, &mut subtitles).await"),
               ("cap_keys: &mut Vec<(String, String)>,",
                "cap_keys: &mut Vec<(String, String, i64)>,"),
-              ("                    },\n                ));",
-               "                    },\n                    ep,\n                ));"),
+              ("""                cap_keys.push((
+                      sid.to_string(),
+                      if first_stream_id.is_empty() {
+                          format!("{sid}|{se}|{ep}")
+                      } else {
+                          first_stream_id
+                      },
+                  ));""",
+               """                cap_keys.push((
+                      sid.to_string(),
+                      if first_stream_id.is_empty() {
+                          format!("{sid}|{se}|{ep}")
+                      } else {
+                          first_stream_id
+                      },
+                      ep,
+                  ));"""),
           ]
           for old, new in replacements:
               if old not in h5_content:
