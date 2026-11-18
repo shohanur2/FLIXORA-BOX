@@ -5488,6 +5488,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
 
+      if (selectedMovie.isMovieBox &&
+          !_hasCompletedLocalDownload(selectedMovie)) {
+        unawaited(MovieBoxService.prewarm(
+          selectedMovie.toMovieBoxMap(),
+          isSeries: selectedMovie.movieBoxIsSeries,
+        ));
+      }
       await _openResolvedPlayer(selectedMovie, movie);
     } finally {
       _endTitleOpening();
