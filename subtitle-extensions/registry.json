@@ -46,6 +46,21 @@
         "movie",
         "series"
       ]
+    },
+    {
+      "id": "com.serhat.strelingo",
+      "name": "Strelingo Dual Subtitles (English + Bengali)",
+      "manifestUrl": "https://strelingo.pronouncetube.com/%7B%22mainLang%22%3A%22English%20%5Beng%5D%22%2C%22transLang%22%3A%22Bengali%20%5Bben%5D%22%7D/manifest.json",
+      "enabled": true,
+      "priority": 12,
+      "languages": [
+        "en",
+        "bn"
+      ],
+      "types": [
+        "movie",
+        "series"
+      ]
     }
   ]
 }
