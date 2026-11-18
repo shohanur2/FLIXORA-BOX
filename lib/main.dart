@@ -13203,7 +13203,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       for (var attempt = 0; attempt < 2; attempt++) {
         Map<String, dynamic> result;
         try {
-          result = await MovieBoxService.streams(
+          result = await MovieBoxService.streamsFast(
             detail,
             season: season,
             episode: episode,
@@ -13302,7 +13302,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           requestToken,
           playerConfiguration: playerConfiguration,
         );
-        if (opened) return;
+        if (opened) {
+          unawaited(_enrichMovieBoxStreamsInBackground(
+            detail,
+            season: season,
+            episode: episode,
+            requestToken: requestToken,
+          ));
+          return;
+        }
         if (attempt == 1) {
           throw StateError('Fresh MovieBox links were also unavailable.');
         }
@@ -13323,6 +13331,85 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         setState(() => _loadingQualities = false);
         if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
+    }
+  }
+
+  Future<void> _enrichMovieBoxStreamsInBackground(
+    Map<String, dynamic> detail, {
+    required int season,
+    required int episode,
+    required int requestToken,
+  }) async {
+    try {
+      final result = await MovieBoxService.streams(
+        detail,
+        season: season,
+        episode: episode,
+        isSeries: widget.movie.movieBoxIsSeries,
+      ).timeout(const Duration(seconds: 30));
+      if (!mounted || _isDisposed ||
+          requestToken != _movieBoxPlaybackRequestToken) return;
+
+      final links = (result['links'] as List? ?? const [])
+          .whereType<Map>()
+          .map((link) => Map<String, dynamic>.from(link))
+          .where((link) {
+            final uri = Uri.tryParse((link['url'] ?? '').toString());
+            return uri != null &&
+                (uri.scheme == 'http' || uri.scheme == 'https') &&
+                uri.host.isNotEmpty;
+          }).toList(growable: false);
+      if (links.isEmpty) return;
+
+      final subtitles = _extractMovieBoxSubtitleItems(result);
+      final languages = <String>[];
+      for (final link in links) {
+        final language = _movieBoxVariant(link);
+        if (language.isNotEmpty && !languages.contains(language)) {
+          languages.add(language);
+        }
+        final url = (link['url'] ?? '').toString();
+        final rawHeaders = link['headers'];
+        if (url.isNotEmpty && rawHeaders is Map) {
+          _movieBoxHeadersByUrl[url] = Map<String, String>.from(
+            rawHeaders.map((key, value) =>
+                MapEntry(key.toString(), value.toString())),
+          );
+        }
+      }
+      final selectedLanguage = _selectedMovieBoxLanguage != null &&
+              languages.contains(_selectedMovieBoxLanguage)
+          ? _selectedMovieBoxLanguage!
+          : (languages.contains('Original') ? 'Original' : languages.first);
+      final options = _prioritizeMovieBoxQualities(
+        links.where((link) => _movieBoxVariant(link) == selectedLanguage)
+            .map((link) {
+          final headers = link['headers'] is Map
+              ? Map<String, String>.from((link['headers'] as Map).map(
+                  (key, value) => MapEntry(key.toString(), value.toString())))
+              : <String, String>{};
+          return <String, String>{
+            'quality': (link['label'] ?? 'Original').toString(),
+            'video_url': (link['url'] ?? '').toString(),
+            'headers': jsonEncode(headers),
+          };
+        }).where((item) => item['video_url']!.isNotEmpty),
+      );
+      if (!mounted || _isDisposed ||
+          requestToken != _movieBoxPlaybackRequestToken) return;
+      setState(() {
+        _movieBoxAllLinks = links;
+        _movieBoxSubtitles = subtitles;
+        _automaticSubtitleOptions = _movieBoxSubtitleOptions(subtitles);
+        _movieBoxLanguages = languages;
+        _selectedMovieBoxLanguage = selectedLanguage;
+        if (options.isNotEmpty) _availableQualities = options;
+      });
+      if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
+    } catch (error) {
+      // Playback is already running; optional language/subtitle enrichment
+      // must never interrupt or replace the active stream.
+      debugPrint('MovieBox background enrichment unavailable: $error');
     }
   }
 
