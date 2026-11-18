@@ -9388,6 +9388,12 @@ MD : SHOHANUR ISLAM SHRABON
 
 Founder & Developer of FLIXORA
 
+COMMUNITY & PROMOTION TEAM
+
+Sakib Shorno
+
+Mubin Dewan
+
 Thank you for being a part of FLIXORA. Your support motivates us to keep improving and building a better entertainment experience.
 
 FLIXORA
