@@ -102,6 +102,26 @@ class FlixoraSubtitleExtensionManager {
     return true;
   }
 
+  static Future<void> markExtensionHttpFailure(
+    String extensionId, {
+    required int statusCode,
+    int retryAfterSeconds = 0,
+  }) async {
+    final duration = statusCode == 429
+        ? Duration(seconds: retryAfterSeconds.clamp(60, 21600))
+        : (statusCode == 401 || statusCode == 403)
+            ? const Duration(minutes: 30)
+            : statusCode >= 500
+                ? const Duration(minutes: 3)
+                : Duration.zero;
+    if (duration <= Duration.zero) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      '$_cooldownPrefix$extensionId',
+      DateTime.now().add(duration).millisecondsSinceEpoch,
+    );
+  }
+
   Future<void> _coolDown(String extensionId, Duration duration) async {
     final prefs = await SharedPreferences.getInstance();
     final until = DateTime.now().add(duration).millisecondsSinceEpoch;
