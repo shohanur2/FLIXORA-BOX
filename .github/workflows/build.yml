@@ -348,6 +348,7 @@ jobs:
           PY
 
           python3 "$GITHUB_WORKSPACE/scripts/patch_sparkbox_short_tv.py" /tmp/SparkBoxCore
+          python3 "$GITHUB_WORKSPACE/scripts/patch_sparkbox_fast_stream.py" /tmp/SparkBoxCore
 
           cd /tmp/SparkBoxCore
           cargo test --workspace --locked
