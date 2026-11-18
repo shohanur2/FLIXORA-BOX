@@ -14728,8 +14728,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
 
     try {
-      // Send the seek request immediately; the slider already commits only
-      // once on release, so an extra delay only makes seeking feel slower.
+      await Future.delayed(const Duration(milliseconds: 120));
       if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
       await _player.seek(target);
     } catch (error) {
@@ -14794,10 +14793,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('demuxer-readahead-secs', '60');
-        await platformPlayer.setProperty('cache-secs', '60');
-        await platformPlayer.setProperty('demuxer-max-bytes', '192MiB');
-        await platformPlayer.setProperty('demuxer-max-back-bytes', '64MiB');
+        await platformPlayer.setProperty('demuxer-readahead-secs', '45');
+        await platformPlayer.setProperty('cache-secs', '45');
+        await platformPlayer.setProperty('demuxer-max-bytes', '128MiB');
+        await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
         await platformPlayer.setProperty('cache-pause-wait', '1.0');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
