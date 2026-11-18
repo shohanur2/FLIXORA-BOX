@@ -17086,20 +17086,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 builder: (sheetContext, updateSheet) {
                   final results = _automaticSubtitleOptions.where((option) {
                     final code = (option['language'] ?? '').toString().toLowerCase();
-                    final release = (option['releaseName'] ?? '').toString().toLowerCase();
-                    final file = (option['fileName'] ?? '').toString().toLowerCase();
                     final languageOk = selectedLanguage == 'all' || code == selectedLanguage ||
                       (selectedLanguage == 'bn' && code == 'ben') ||
                       (selectedLanguage == 'en' && code == 'eng') ||
                       (selectedLanguage == 'hi' && code == 'hin');
                     return languageOk;
                   }).toList(growable: false);
-
-                  Future<void> search() async {
-                    if (_automaticSubtitleLoading) return;
-                    // Search only filters the already-loaded MovieBox subtitle list locally.
-                    updateSheet(() => message = 'MovieBox subtitle list updated.');
-                  }
 
                   return Material(
                     color: Colors.transparent,
