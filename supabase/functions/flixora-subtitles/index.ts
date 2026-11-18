@@ -709,7 +709,7 @@ async function downloadProviderSubtitle(body:JsonMap):Promise<Response>{
  for(let attempt=0;attempt<2;attempt++){
    response=await fetch(url,{headers,signal:AbortSignal.timeout(20000)});
    if(response.ok)break;
-   if(attempt===0&&(response.status===429||response.status>=500)){
+   if(attempt===0&&response.status===429){
      const retryAfter=Number(response.headers.get("retry-after")??"");
      const waitMs=Number.isFinite(retryAfter)&&retryAfter>0?Math.min(retryAfter*1000,4000):1200;
      await new Promise(resolve=>setTimeout(resolve,waitMs));
