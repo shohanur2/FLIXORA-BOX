@@ -18718,7 +18718,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       Colors.black.withValues(alpha: 0.7),
                       Colors.transparent,
                       Colors.transparent,
-                      Colors.black87,
+                      Colors.transparent,
                     ],
                     stops: [0, 0.28, 0.62, 1],
                   ),
