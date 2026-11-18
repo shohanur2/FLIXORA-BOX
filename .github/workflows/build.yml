@@ -192,22 +192,22 @@ jobs:
               ("cap_keys: &mut Vec<(String, String)>,",
                "cap_keys: &mut Vec<(String, String, i64)>,"),
               ("""                cap_keys.push((
-                      sid.to_string(),
-                      if first_stream_id.is_empty() {
-                          format!("{sid}|{se}|{ep}")
-                      } else {
-                          first_stream_id
-                      },
-                  ));""",
+                    sid.to_string(),
+                    if first_stream_id.is_empty() {
+                        format!("{sid}|{se}|{ep}")
+                    } else {
+                        first_stream_id
+                    },
+                ));""",
                """                cap_keys.push((
-                      sid.to_string(),
-                      if first_stream_id.is_empty() {
-                          format!("{sid}|{se}|{ep}")
-                      } else {
-                          first_stream_id
-                      },
-                      ep,
-                  ));"""),
+                    sid.to_string(),
+                    if first_stream_id.is_empty() {
+                        format!("{sid}|{se}|{ep}")
+                    } else {
+                        first_stream_id
+                    },
+                    ep,
+                ));"""),
           ]
           for old, new in replacements:
               if old not in h5_content:
