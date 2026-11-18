@@ -2756,9 +2756,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return result;
   }
 
+  final Stopwatch _startupTotalWatch = Stopwatch();
+  final Stopwatch _startupPlayerConfigWatch = Stopwatch();
+  final Map<String, String> _startupStageResults = <String, String>{};
+  bool _startupDiagnosticSummaryShown = false;
+
+  void _recordStartupStage(String stage, Stopwatch watch, {String result = 'ok'}) {
+    watch.stop();
+    final value = '${watch.elapsedMilliseconds}ms ($result)';
+    _startupStageResults[stage] = value;
+    debugPrint('FLIXORA_STARTUP_DIAGNOSTIC stage=$stage value=$value');
+  }
+
+  void _showStartupDiagnosticSummary({required String outcome}) {
+    if (_startupDiagnosticSummaryShown || !mounted) return;
+    _startupDiagnosticSummaryShown = true;
+    final total = _startupTotalWatch.elapsedMilliseconds;
+    final details = _startupStageResults.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join(' | ');
+    final report = 'FLIXORA_STARTUP_DIAGNOSTIC outcome=$outcome total_player_ms=$total $details';
+    debugPrint(report);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Playback diagnostic ($outcome)\nPlayer: ${total}ms\n$details',
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+        ),
+        duration: const Duration(seconds: 8),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    _startupTotalWatch.start();
     WidgetsBinding.instance.addObserver(this);
     final authClient = supabaseClient;
     if (authClient != null) {
@@ -12902,6 +12937,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     try {
       final rawItem = widget.movie.toMovieBoxMap();
+      final detailWatch = Stopwatch()..start();
       final detailFuture = MovieBoxService.playDetail(
         rawItem,
         forceRefresh: forceRefreshDetail,
@@ -12914,7 +12950,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       // The detail response is required for stream resolution; season metadata
       // is only needed for the selector. Start resolving the selected stream
       // as soon as the required detail is ready instead of waiting for both.
-      _movieBoxDetail = Map<String, dynamic>.from(await detailFuture as Map);
+      try {
+        _movieBoxDetail = Map<String, dynamic>.from(await detailFuture as Map);
+        _recordStartupStage('detail_api', detailWatch);
+      } catch (error) {
+        _recordStartupStage(
+          'detail_api',
+          detailWatch,
+          result: error.toString().contains('TimeoutException') ? 'timeout' : 'error',
+        );
+        rethrow;
+      }
       if (_isDisposed) return;
 
       // Movie playback has no episode selection to restore. Skip the
@@ -13042,6 +13088,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         return;
       }
       debugPrint('MovieBox playback preparation failed: $error');
+      _startupStageResults['failure_elapsed'] =
+          '${_startupTotalWatch.elapsedMilliseconds}ms';
+      _showStartupDiagnosticSummary(outcome: 'failed');
       if (mounted && !_isDisposed && !_initialized) {
         setState(() {
           _errorMessage = 'Unable to load this video right now. Please retry.';
@@ -13202,6 +13251,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       for (var attempt = 0; attempt < 2; attempt++) {
         Map<String, dynamic> result;
+        final streamWatch = Stopwatch()..start();
         try {
           result = await MovieBoxService.streams(
             detail,
@@ -13210,7 +13260,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             isSeries: widget.movie.movieBoxIsSeries,
             forceRefresh: attempt > 0,
           ).timeout(const Duration(seconds: 12));
+          _recordStartupStage('stream_api_attempt_${attempt + 1}', streamWatch);
         } catch (error) {
+          _recordStartupStage(
+            'stream_api_attempt_${attempt + 1}',
+            streamWatch,
+            result: error.toString().contains('TimeoutException') ? 'timeout' : 'error',
+          );
           if (attempt == 0) {
             debugPrint('MovieBox stream request failed; refreshing once: $error');
             continue;
@@ -13309,6 +13365,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
     } catch (error) {
       debugPrint('MovieBox stream resolution failed: $error');
+      _startupStageResults['failure_elapsed'] =
+          '${_startupTotalWatch.elapsedMilliseconds}ms';
+      _showStartupDiagnosticSummary(outcome: 'stream_failed');
       if (mounted && !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
@@ -13363,7 +13422,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       // Resolve MovieBox stream metadata while MPV network settings are
       // applied. Wait only immediately before opening the native stream.
-      if (playerConfiguration != null) await playerConfiguration;
+      if (playerConfiguration != null) {
+        try {
+          await playerConfiguration;
+          _recordStartupStage('mpv_configuration', _startupPlayerConfigWatch);
+        } catch (error) {
+          _recordStartupStage('mpv_configuration', _startupPlayerConfigWatch, result: 'error');
+          rethrow;
+        }
+      }
       if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
         return false;
       }
@@ -13382,10 +13449,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           continue;
         }
 
+        final openWatch = Stopwatch()..start();
         try {
           await _player.open(
             Media(url, httpHeaders: _headersForQuality(candidate)),
             play: true,
+          );
+          _recordStartupStage(
+            'mpv_open_${candidate['quality'] ?? 'unknown'}',
+            openWatch,
           );
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
@@ -13416,6 +13488,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _prewarmNextMovieBoxEpisode();
           return true;
         } catch (error) {
+          _recordStartupStage(
+            'mpv_open_${candidate['quality'] ?? 'unknown'}',
+            openWatch,
+            result: 'error',
+          );
           lastError = error;
           try {
             await _player.stop();
@@ -13568,6 +13645,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _prepareAndInitializePlayer() async {
+    // Diagnostic-only timing: measure the existing MPV configuration without
+    // changing any player settings or startup behavior.
+    _startupPlayerConfigWatch
+      ..reset()
+      ..start();
     // Start MPV network configuration immediately and overlap it with source
     // and quality resolution. It is awaited only before the native player opens.
     final playerConfiguration = _configureVolumeBoost();
@@ -13949,6 +14031,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     _playingSubscription = _player.stream.playing.listen((value) {
       if (!mounted || _isDisposed) return;
+      if (value && !_startupDiagnosticSummaryShown) {
+        _startupStageResults['first_playing_event'] =
+            '${_startupTotalWatch.elapsedMilliseconds}ms from player screen open';
+        _showStartupDiagnosticSummary(outcome: 'playing');
+      }
 
       setState(() {
         _isPlaying = value;
