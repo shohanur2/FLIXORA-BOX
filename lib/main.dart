@@ -5471,53 +5471,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// Opens a player for a title that has already been resolved to the
-  /// canonical Admin/TMDB record. The caller owns the tap lock.
-  Future<Movie?> _resolvePublishedAdminFallback(Movie movie) async {
-    final client = supabaseClient;
-    if (client == null) return null;
-
-    try {
-      dynamic response;
-      if (movie.sourceId > 0) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('id', movie.sourceId)
-            .eq('is_published', true)
-            .limit(1);
-      } else if (movie.tmdbId > 0) {
-        response = await client
-            .from('movies')
-            .select()
-            .eq('tmdb_id', movie.tmdbId)
-            .eq('media_type', movie.mediaType)
-            .eq('is_published', true)
-            .order('created_at', ascending: false)
-            .limit(1);
-      } else {
-        final matches = await _findAdminRowsByTitleYear(client, movie);
-        response = matches
-            .where((row) => row is Map && row['is_published'] == true)
-            .toList(growable: false);
-      }
-
-      if (response is! List || response.isEmpty) return null;
-      final row = Map<String, dynamic>.from(response.first as Map);
-      if (row['is_published'] != true) return null;
-
-      final playable = await FlixoraMovieService.mapPlayableRows(
-        client,
-        [row],
-      );
-      if (playable.isEmpty || !playable.first.hasPlayableVideoUrl) return null;
-      return playable.first.withFallbackMetadata(movie);
-    } catch (error) {
-      debugPrint('Published Admin fallback lookup failed: $error');
-      return null;
-    }
-  }
-
   void _pushPlayerRoute(WidgetBuilder builder) {
     final navigator = Navigator.of(context);
     final previousRoute = _activePlayerRoute;
