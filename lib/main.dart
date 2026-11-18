@@ -12992,6 +12992,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final rawItem = widget.movie.toMovieBoxMap();
       final detailFuture = MovieBoxService.playDetail(rawItem)
           .timeout(const Duration(seconds: 18));
+      // Read the remembered episode in parallel with the network requests so
+      // local preferences never add another serial wait to video startup.
+      final savedSelectionFuture = widget.movie.movieBoxIsSeries
+          ? _readLastEpisodeSelection()
+          : Future<List<int>?>.value(null);
       final seasonsFuture = widget.movie.movieBoxIsSeries
           ? MovieBoxService.seasons(widget.movie.movieBoxId)
               .timeout(const Duration(seconds: 18))
@@ -13005,9 +13010,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
       // Movie playback has no episode selection to restore. Skip the
       // preferences read so stream resolution can start immediately.
-      final savedSelection = widget.movie.movieBoxIsSeries
-          ? await _readLastEpisodeSelection()
-          : null;
+      final savedSelection = await savedSelectionFuture;
       var targetSeason = savedSelection?[0] ?? 1;
       var targetEpisode = savedSelection?[1] ?? 1;
 
