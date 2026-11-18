@@ -13283,7 +13283,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             episode: episode,
             isSeries: widget.movie.movieBoxIsSeries,
             forceRefresh: attempt > 0,
-          ).timeout(Duration(seconds: startup ? 12 : 15));
+          ).timeout(const Duration(seconds: 15));
         } catch (error) {
           if (attempt == 0) {
             debugPrint('MovieBox stream request failed; refreshing once: $error');
@@ -13461,11 +13461,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             Media(url, httpHeaders: _headersForQuality(candidate)),
             play: false,
           );
-          if (startup) {
-            await openRequest.timeout(const Duration(seconds: 15));
-          } else {
-            await openRequest;
-          }
+          await openRequest;
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
           }
@@ -14749,15 +14745,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await platformPlayer.setProperty('cache-pause', 'yes');
         await platformPlayer.setProperty('demuxer-readahead-secs', '45');
         await platformPlayer.setProperty('cache-secs', '45');
-        await platformPlayer.setProperty('demuxer-max-bytes', '128MiB');
+        await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
         await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
-        await platformPlayer.setProperty('cache-pause-wait', '1.0');
+        await platformPlayer.setProperty('cache-pause-wait', '1.5');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
-        // Drop only late video-output frames so video can stay synchronized
-        // with audio when decoding/rendering briefly falls behind.
-        await platformPlayer.setProperty('framedrop', 'vo');
         // Keep libmpv subtitle output enabled for embedded and external tracks.
         await platformPlayer.setProperty('sub-visibility', 'yes');
       }
