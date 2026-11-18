@@ -16395,10 +16395,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
     // Do not include expiring signed download URLs in the cache key.
     // The same release should reuse its validated local subtitle after relaunch.
+    // Deduplicate equivalent releases across independent extensions. The
+    // media/language cache prefix already isolates each movie or episode.
     final releaseIdentity = [
-      option['provider'] ?? '',
-      option['providerSource'] ?? '',
-      option['subsourceId'] ?? '',
       option['releaseName'] ?? '',
       option['fileName'] ?? '',
     ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
@@ -16464,6 +16463,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           'User-Agent': 'FLIXORA Subtitle Client/1.0',
         }).timeout(const Duration(seconds: 25));
       }
+    }
+    if (isExtension && download.statusCode != 200) {
+      await FlixoraSubtitleExtensionManager.markExtensionHttpFailure(
+        (option['providerSource'] ?? '').toString(),
+        statusCode: download.statusCode,
+        retryAfterSeconds: int.tryParse(download.headers['retry-after'] ?? '') ?? 0,
+      );
     }
     if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
         download.bodyBytes.length > 10 * 1024 * 1024) {
