@@ -17218,7 +17218,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                       Padding(
                                         padding: const EdgeInsets.symmetric(vertical: 18),
                                         child: Text(
-                                          _automaticSubtitleLoading ? 'Finding available languages…' :
+                                          (_automaticSubtitleLoading && !widget.movie.isMovieBox) ? 'Finding available languages…' :
                                             (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No MovieBox subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
                                           textAlign: TextAlign.center,
                                           style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
