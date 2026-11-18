@@ -16600,7 +16600,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 decoration: BoxDecoration(
                   color: selected
                       ? playerGold.withValues(alpha: 0.13)
-                      : const Color(0xFF141414),
+                      : const Color(0x33141414),
                   borderRadius: BorderRadius.circular(13),
                   border: Border.all(
                     color: selected
@@ -17510,17 +17510,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       ),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: compact ? Colors.black.withValues(alpha: 0.42) : null,
-          gradient: compact
-              ? null
-              : LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    const Color(0xD9101117),
-                    Colors.black.withValues(alpha: 0.76),
-                  ],
-                ),
+          color: Colors.transparent,
+          gradient: null,
           borderRadius: BorderRadius.circular(compact ? 12 : 18),
           border: Border.all(color: const Color(0x2EFFFFFF)),
         ),
