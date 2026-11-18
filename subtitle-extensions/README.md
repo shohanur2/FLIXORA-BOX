@@ -1,62 +1,21 @@
-# FLIXORA Subtitle Extensions
+# FLIXORA MovieBox Subtitle Integration
 
-GitHub is the source of truth for FLIXORA subtitle add-on discovery and registry updates. This repository is independent of the FLIXORA Admin Panel.
+FLIXORA uses the MovieBox/WeFeed subtitle metadata returned with the selected MovieBox stream.
 
-## Enabled add-ons
+## Runtime flow
 
-The registry currently includes:
-- **OpenSubtitles v3** — official Stremio subtitle add-on manifest: `https://opensubtitles-v3.strem.io/manifest.json`
-- **Strelingo** — bilingual English + Bengali Stremio add-on; returns one merged subtitle track: `https://strelingo.pronouncetube.com`
-- **SubSense** — multi-source subtitle aggregator: `https://subsense.nepiraw.com`
-- **Subtitle Search Engine** — public Stremio add-on manifest: `https://subtitles.website/stremio/manifest.json`
+1. The existing MovieBox playback request resolves the selected movie or episode.
+2. The MovieBox stream response supplies its `subtitles` list (normalized from MovieBox's subtitle list).
+3. FLIXORA displays those returned subtitle choices in the existing Subtitle panel.
+4. Selecting a MovieBox subtitle activates its supplied subtitle URL through the existing player subtitle path.
+5. The Download Subtitle panel lists the same MovieBox results and downloads/applies a selected subtitle through FLIXORA's existing subtitle validation and local cache.
 
-Extensions are queried for English and Bengali subtitle results. Strelingo is configured for English+Bengali and its combined language label is recognized as one bilingual subtitle file. SubSense aggregates multiple upstream sources; optional sources may still require user API keys. Availability depends on each add-on's catalogue, language coverage, uptime, and rate limits. HTTP 429 responses are treated as an add-on failure and FLIXORA continues to the next enabled extension.
+## Scope
 
-## Protocol
+- MovieBox-provided subtitles are the primary and only automatic online subtitle source for MovieBox titles.
+- No IMDb lookup, Stremio extension search, or third-party subtitle-provider search is used for MovieBox titles.
+- Existing embedded subtitle tracks and manual subtitle import remain available.
+- Existing Subtitle panel design is preserved.
+- This integration does not change playback, stream selection, Audio, Buffering, general video downloads, or any non-subtitle feature.
 
-- Registry: `registry.json`
-- Protocol: Stremio Add-on Protocol, subtitle resource only
-- Manifest: the configured public HTTPS manifest URL
-- Subtitle endpoint: `/subtitles/{type}/{id}.json`
-- Movie ID: IMDb ID, e.g. `tt0133093`
-- Series episode ID: IMDb ID plus season and episode, e.g. `tt0944947:1:1`
-- Expected response: `{ "subtitles": [{ "id": "...", "url": "https://...", "lang": "en", "label": "..." }] }`
-
-## Registry entry
-
-```json
-{
-  "id": "unique.addon.id",
-  "name": "Human readable name",
-  "manifestUrl": "https://verified-addon.example/manifest.json",
-  "enabled": true,
-  "priority": 100,
-  "languages": ["en", "bn"],
-  "types": ["movie", "series"]
-}
-```
-
-## Runtime and safety contract
-
-- FLIXORA fetches this registry from GitHub and validates entries and manifests.
-- Require HTTPS for registry, manifest, and subtitle URLs.
-- Accept only add-ons that declare the subtitle resource and supported movie/series types.
-- Ignore catalog, stream, meta, player, library, and other capabilities.
-- Send only the IMDb media identifier and minimum episode context needed by the subtitle protocol.
-- Never send account data, playback history, or unrelated personal information to add-ons.
-- Treat add-on metadata and subtitle payloads as untrusted input.
-- Validate downloaded subtitle content and formats before passing it to FLIXORA's existing subtitle loader.
-- An add-on failure must not stop other enabled add-ons.
-- Do not download or execute arbitrary Dart, JavaScript, Python, or native code from GitHub.
-- Keep manual subtitle import and embedded subtitle selection available.
-- Keep the existing Subtitle Panel appearance and every non-subtitle feature unchanged.
-
-## Subtitle format and dual-language reference
-
-- [Cleedek Subtitle Overlay](https://github.com/Cleedek/subtitle-overlay) is used as a technical reference for multi-format subtitle handling, legacy text encodings, and dual-language presentation concepts. Its browser-extension runtime is not embedded in FLIXORA; FLIXORA continues to use its native Flutter/libmpv subtitle pipeline.
-- [Strelingo](https://github.com/Serkali-sudo/strelingo-addon) provides the Stremio-compatible merged English+Bengali subtitle source.
-
-## Protocol references
-
-- [Stremio Add-on Protocol](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/protocol.md)
-- [Stremio subtitle response](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/subtitles.md)
+MovieBox can only return subtitles that are available for the selected title/episode in its upstream catalogue. If the MovieBox response contains no subtitle entries, FLIXORA cannot fabricate additional MovieBox subtitles; manual subtitle import remains available.
