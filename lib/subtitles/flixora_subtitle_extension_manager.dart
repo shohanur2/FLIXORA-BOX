@@ -185,18 +185,26 @@ class FlixoraSubtitleExtensionManager {
     final requested = languages.map(_normalizeLanguage)
         .where((value) => value.isNotEmpty).toSet();
     final extensions = await loadExtensions();
-    final results = <FlixoraSubtitleExtensionResult>[];
 
-    for (final extension in extensions) {
-      if (await _isCoolingDown(extension.id)) continue;
-      if (extension.types.isNotEmpty && !extension.types.contains(type)) continue;
+    // Query independent add-ons concurrently. Sequential manifest + subtitle
+    // requests could consume the whole player timeout before later add-ons run.
+    final batches = await Future.wait(extensions.map((extension) async {
+      if (await _isCoolingDown(extension.id)) {
+        return const <FlixoraSubtitleExtensionResult>[];
+      }
+      if (extension.types.isNotEmpty && !extension.types.contains(type)) {
+        return const <FlixoraSubtitleExtensionResult>[];
+      }
       if (extension.languages.isNotEmpty && requested.isNotEmpty &&
-          !extension.languages.any(requested.contains)) continue;
+          !extension.languages.any(requested.contains)) {
+        return const <FlixoraSubtitleExtensionResult>[];
+      }
       try {
         final manifest = await _loadManifest(extension);
-        if (!_supportsSubtitleResource(manifest, type, id)) continue;
+        if (!_supportsSubtitleResource(manifest, type, id)) {
+          return const <FlixoraSubtitleExtensionResult>[];
+        }
 
-        // Stremio's series subtitle id format is IMDb-ID:season:episode.
         final resourceId = type == 'series' ? '$id:$season:$episode' : id;
         final endpoint = _subtitleEndpoint(extension.manifestUrl, type, resourceId);
         final response = await _client.get(endpoint,
@@ -209,8 +217,11 @@ class FlixoraSubtitleExtensionManager {
           );
         }
         final payload = jsonDecode(utf8.decode(response.bodyBytes));
-        if (payload is! Map || payload['subtitles'] is! List) continue;
+        if (payload is! Map || payload['subtitles'] is! List) {
+          return const <FlixoraSubtitleExtensionResult>[];
+        }
 
+        final results = <FlixoraSubtitleExtensionResult>[];
         for (final raw in payload['subtitles'] as List) {
           if (raw is! Map) continue;
           final item = Map<String, dynamic>.from(raw);
@@ -240,21 +251,23 @@ class FlixoraSubtitleExtensionManager {
             label: (item['label'] ?? item['name'] ?? extension.name).toString(),
           ));
         }
+        return results;
       } on _ExtensionHttpFailure catch (failure) {
         final cooldown = _cooldownFor(failure);
         if (cooldown > Duration.zero) {
           await _coolDown(extension.id, cooldown);
         }
-        continue;
+        return const <FlixoraSubtitleExtensionResult>[];
       } on TimeoutException {
         await _coolDown(extension.id, const Duration(minutes: 2));
-        continue;
+        return const <FlixoraSubtitleExtensionResult>[];
       } catch (_) {
-        // Per-extension failover: a failed add-on cannot block the next one.
-        continue;
+        // One add-on's failure cannot block the other independent add-ons.
+        return const <FlixoraSubtitleExtensionResult>[];
       }
-    }
-    return results;
+    }));
+
+    return batches.expand((batch) => batch).toList(growable: false);
   }
 
   Future<Map<String, dynamic>> _loadManifest(
