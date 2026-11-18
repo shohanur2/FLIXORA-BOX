@@ -47,7 +47,9 @@ const String authRedirectUrl =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
-  unawaited(FlixoraNotificationService.initialize());
+  unawaited(FlixoraNotificationService.initialize().catchError((Object error) {
+    debugPrint('FLIXORA download notification initialization failed: $error');
+  }));
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
