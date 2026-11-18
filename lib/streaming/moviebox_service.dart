@@ -171,8 +171,9 @@ class MovieBoxService {
   }
 
   static Future<Map<String, dynamic>> playDetail(
-    Map<String, dynamic> item,
-  ) {
+    Map<String, dynamic> item, {
+    bool forceRefresh = false,
+  }) {
     final id = _subjectId(item);
     if (id.isEmpty) {
       return _retry(
@@ -181,6 +182,7 @@ class MovieBoxService {
         maxAttempts: 2,
       );
     }
+    if (forceRefresh) _playDetailCache.remove(id);
     return _remember(
       _playDetailCache,
       id,
