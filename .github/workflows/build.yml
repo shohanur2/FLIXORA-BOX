@@ -191,7 +191,7 @@ jobs:
           if old_sig not in h5_content:
               raise SystemExit("SparkBoxCore play_once subtitle signature changed.")
           h5_content = h5_content.replace(old_sig, "cap_keys: &mut Vec<(String, String, i64, i64, String)>,", 1)
-          push_pattern = re.compile(r"cap_keys\\.push\\(\\(\\s*sid\\.to_string\\(\\),\\s*if first_stream_id\\.is_empty\\(\\) \\{\\s*format!\\(\\\"\\{sid\\}\\|\\{se\\}\\|\\{ep\\}\\\"\\)\\s*\\} else \\{\\s*first_stream_id\\s*\\},\\s*\\)\\);", re.S)
+          push_pattern = re.compile(r"cap_keys\.push\(\(\s*sid\.to_string\(\),\s*if first_stream_id\.is_empty\(\) \{\s*format!\("\{sid\}\|\{se\}\|\{ep\}"\)\s*\} else \{\s*first_stream_id\s*\},\s*\)\);", re.S)
           push_replacement = """cap_keys.push((
                       sid.to_string(),
                       if first_stream_id.is_empty() {
@@ -208,7 +208,7 @@ jobs:
               raise SystemExit("SparkBoxCore cap_keys.push context changed; refusing an unsafe patch.")
 
           caption_start = h5_content.find("    /// External subtitle tracks for the resolved (subjectId, streamId) pairs,")
-          caption_end = h5_content.find("\\n}\\n\\n/// Dart-style", caption_start)
+          caption_end = h5_content.find("\n}\n\n/// Dart-style", caption_start)
           if caption_start < 0 or caption_end < 0:
               raise SystemExit("SparkBoxCore caption loader changed; review the subtitle patch.")
           caption_impl = r'''    /// MovieBox-native captions plus title/episode-scoped subtitle search.
