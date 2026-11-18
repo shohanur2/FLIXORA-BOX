@@ -17659,11 +17659,43 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                         _startHideTimer();
                       },
                     ),
-                    compactAction(
-                      tooltip: 'Subtitles',
-                      icon: Icons.subtitles_rounded,
-                      color: playerGoldLight,
-                      onPressed: _showSubtitleTracks,
+                    Tooltip(
+                      message: 'Subtitles / Closed Captions',
+                      child: OutlinedButton(
+                        onPressed: _showSubtitleTracks,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: playerGoldLight,
+                          backgroundColor: Colors.black.withValues(alpha: 0.42),
+                          side: BorderSide(
+                            color: playerGold.withValues(alpha: 0.68),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          minimumSize: const Size(42, 38),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.closed_caption_rounded, size: 16),
+                            SizedBox(width: 4),
+                            Text(
+                              'CC',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                   compactAction(
