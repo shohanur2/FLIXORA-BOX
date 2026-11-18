@@ -201,7 +201,7 @@ class FlixoraSubtitleExtensionManager {
         final endpoint = _subtitleEndpoint(extension.manifestUrl, type, resourceId);
         final response = await _client.get(endpoint,
             headers: const {'Accept': 'application/json'})
-            .timeout(const Duration(seconds: 12));
+            .timeout(const Duration(seconds: 25));
         if (response.statusCode != 200) {
           throw _ExtensionHttpFailure(
             response.statusCode,
@@ -219,11 +219,16 @@ class FlixoraSubtitleExtensionManager {
               subtitleUrl.host.isEmpty || subtitleUrl.userInfo.isNotEmpty) {
             continue;
           }
-          final language = _normalizeLanguage(
-            (item['lang'] ?? '').toString(),
-          );
+          final rawLanguage = (item['lang'] ?? '').toString();
+          final languageParts = rawLanguage.split('+')
+              .map(_normalizeLanguage).where((value) => value.isNotEmpty).toSet();
+          final isDualLanguage = languageParts.length > 1 &&
+              requested.isNotEmpty && requested.every(languageParts.contains);
+          final language = isDualLanguage
+              ? requested.first
+              : _normalizeLanguage(rawLanguage);
           if (language.isEmpty ||
-              (requested.isNotEmpty && !requested.contains(language))) {
+              (!isDualLanguage && requested.isNotEmpty && !requested.contains(language))) {
             continue;
           }
           results.add(FlixoraSubtitleExtensionResult(
@@ -311,7 +316,8 @@ class FlixoraSubtitleExtensionManager {
   static String _normalizeLanguage(String value) {
     final code = value.trim().toLowerCase().split(RegExp('[-_]')).first;
     const aliases = <String, String>{
-      'eng': 'en', 'ben': 'bn', 'beng': 'bn', 'hin': 'hi', 'urd': 'ur',
+      'eng': 'en', 'english': 'en', 'ben': 'bn', 'beng': 'bn',
+      'bengali': 'bn', 'bangla': 'bn', 'hin': 'hi', 'hindi': 'hi', 'urd': 'ur',
       'ara': 'ar', 'spa': 'es', 'fre': 'fr', 'fra': 'fr',
       'ger': 'de', 'deu': 'de', 'por': 'pt', 'rus': 'ru',
       'jpn': 'ja', 'kor': 'ko', 'chi': 'zh', 'zho': 'zh',
