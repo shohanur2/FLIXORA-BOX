@@ -61,6 +61,7 @@ Future<void> flixoraFirebaseMessagingBackgroundHandler(
   );
 }
 
+// Handles FLIXORA topic push notifications and local download-complete alerts.
 class FlixoraNotificationService {
   FlixoraNotificationService._();
 
