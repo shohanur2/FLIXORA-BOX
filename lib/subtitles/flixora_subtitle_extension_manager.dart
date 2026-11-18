@@ -236,7 +236,7 @@ class FlixoraSubtitleExtensionManager {
           final isDualLanguage = languageParts.length > 1 &&
               requested.isNotEmpty && requested.every(languageParts.contains);
           final language = isDualLanguage
-              ? requested.first
+              ? 'bn+en'
               : _normalizeLanguage(rawLanguage);
           if (language.isEmpty ||
               (!isDualLanguage && requested.isNotEmpty && !requested.contains(language))) {
