@@ -13356,11 +13356,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           throw StateError('No HLS, DASH or MP4 streams were returned for this episode.');
         }
 
-        final subtitles = (result['subtitles'] as List? ?? const [])
-            .whereType<Map>()
-            .map((item) => Map<String, dynamic>.from(item))
-            .where((item) => (item['url'] ?? '').toString().isNotEmpty)
-            .toList(growable: false);
+        // MovieBox/WeFeed subtitle metadata is not consistent across
+        // client/API versions. Normalize the supported list containers here
+        // instead of requiring one exact "subtitles" + "url" shape.
+        final subtitles = _extractMovieBoxSubtitleItems(result);
         final languages = <String>[];
         _movieBoxHeadersByUrl.clear();
         for (final link in links) {
@@ -16602,8 +16601,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       subtitle['languageName'],
       subtitle['langName'],
       subtitle['lanName'],
+      subtitle['language_name'],
+      subtitle['lang_name'],
+      subtitle['lan_name'],
       subtitle['label'],
       subtitle['name'],
+      subtitle['fileName'],
+      subtitle['filename'],
     ].firstWhere(
       (value) => value != null && value.toString().trim().isNotEmpty,
       orElse: () => '',
@@ -16681,20 +16685,116 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return 'und';
   }
 
+  List<Map<String, dynamic>> _extractMovieBoxSubtitleItems(
+    Map<String, dynamic> response,
+  ) {
+    const listKeys = <String>{
+      'subtitles',
+      'subtitle',
+      'subTitleList',
+      'subtitleList',
+      'subtitle_list',
+      'subtitle_list_data',
+      'captions',
+      'captionList',
+      'caption_list',
+      'externalSubtitles',
+      'external_subtitles',
+    };
+    const nestedKeys = <String>{
+      'data',
+      'result',
+      'results',
+      'stream',
+      'playInfo',
+      'play_info',
+      'payload',
+      'response',
+    };
+
+    List<Map<String, dynamic>> asSubtitleMaps(dynamic value) {
+      if (value is! List) return const <Map<String, dynamic>>[];
+      return value
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    }
+
+    List<Map<String, dynamic>>? find(dynamic value, int depth) {
+      if (depth > 5 || value is! Map) return null;
+      final map = Map<String, dynamic>.from(value);
+      for (final entry in map.entries) {
+        if (listKeys.contains(entry.key.toString())) {
+          final items = asSubtitleMaps(entry.value);
+          if (items.isNotEmpty) return items;
+          if (entry.value is Map) {
+            final nested = find(entry.value, depth + 1);
+            if (nested != null && nested.isNotEmpty) return nested;
+          }
+        }
+      }
+      for (final key in nestedKeys) {
+        final child = map[key];
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      // Some wrappers place the play-info object under an unlabelled key.
+      for (final child in map.values) {
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      return null;
+    }
+
+    final items = find(response, 0) ?? const <Map<String, dynamic>>[];
+    return items.where((item) => _movieBoxSubtitleUrl(item).isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String _movieBoxSubtitleUrl(Map<String, dynamic> subtitle) {
+    const urlKeys = <String>[
+      'url',
+      'downloadUrl',
+      'download_url',
+      'subtitleUrl',
+      'subtitle_url',
+      'fileUrl',
+      'file_url',
+      'captionUrl',
+      'caption_url',
+      'srtUrl',
+      'vttUrl',
+      'src',
+      'link',
+      'path',
+    ];
+    for (final key in urlKeys) {
+      final value = subtitle[key];
+      final candidate = value is Map
+          ? (value['url'] ?? value['uri'] ?? value['link'] ?? '').toString().trim()
+          : (value ?? '').toString().trim();
+      if (candidate.isEmpty) continue;
+      final uri = Uri.tryParse(candidate);
+      if (uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty) {
+        return candidate;
+      }
+    }
+    return '';
+  }
+
   List<Map<String, dynamic>> _movieBoxSubtitleOptions([List<Map<String, dynamic>>? source]) {
     final subtitles = source ?? _movieBoxSubtitles;
     final options = <Map<String, dynamic>>[];
     for (var index = 0; index < subtitles.length; index++) {
       final subtitle = subtitles[index];
-      final url = <dynamic>[
-        subtitle['url'],
-        subtitle['downloadUrl'],
-        subtitle['subtitleUrl'],
-        subtitle['fileUrl'],
-      ].firstWhere(
-        (value) => value != null && value.toString().trim().isNotEmpty,
-        orElse: () => '',
-      ).toString().trim();
+      final url = _movieBoxSubtitleUrl(subtitle);
       final uri = Uri.tryParse(url);
       if (uri == null ||
           (uri.scheme != 'https' && uri.scheme != 'http') ||
@@ -16707,6 +16807,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               subtitle['filename'] ??
               subtitle['file_name'] ??
               subtitle['releaseName'] ??
+              subtitle['title'] ??
               (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
           .toString()
           .trim();
