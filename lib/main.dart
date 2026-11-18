@@ -11986,8 +11986,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   double _subtitleOutlineSize = 1.5;
   double _subtitleShadowOffset = 1;
   bool _automaticSubtitleLoading = false;
+  bool _subtitleVisibilityEnabled = true;
+  String _selectedSubtitleLanguageCode = '';
   bool _subtitleManuallySelected = false;
-  String? _automaticSubtitlePath;
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
   List<Map<String, dynamic>> _automaticSubtitleOptions = [];
@@ -12370,6 +12371,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _loadingTvEpisodes = false;
         _loadingQualities = true;
         _tvEpisodeError = null;
+        // Clear subtitle links from the previous episode while resolving the next one.
+        _movieBoxSubtitles = [];
+        _automaticSubtitleOptions = [];
+        _automaticSubtitleMessage = 'Loading available subtitles…';
         _errorMessage = null;
       });
       _miniPlayerOverlayRevision.value++;
@@ -13321,11 +13326,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           throw StateError('No HLS, DASH or MP4 streams were returned for this episode.');
         }
 
-        final subtitles = (result['subtitles'] as List? ?? const [])
-            .whereType<Map>()
-            .map((item) => Map<String, dynamic>.from(item))
-            .where((item) => (item['url'] ?? '').toString().isNotEmpty)
-            .toList(growable: false);
+        // Normalize MovieBox/WeFeed subtitle metadata across API response shapes.
+        final subtitles = _extractMovieBoxSubtitleItems(result);
         final languages = <String>[];
         _movieBoxHeadersByUrl.clear();
         for (final link in links) {
@@ -13374,6 +13376,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         setState(() {
           _movieBoxAllLinks = links;
           _movieBoxSubtitles = subtitles;
+          _automaticSubtitleOptions = _movieBoxSubtitleOptions(subtitles);
           _movieBoxLanguages = languages;
           _selectedMovieBoxLanguage = selectedLanguage;
           _availableQualities = options;
@@ -13428,7 +13431,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
-    _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
@@ -13508,7 +13510,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           await _restoreResumePosition();
           _subtitleManuallySelected = false;
           _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
@@ -14096,6 +14097,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           _selectedAudioTrackIndex = 0;
         }
       });
+      // Some network streams publish subtitle tracks after playback starts.
+      if (value.subtitle.any((track) => track.id != 'auto' && track.id != 'no')) {
+        unawaited(_activateEmbeddedSubtitleIfAvailable());
+      }
       // Re-apply the user's audio sync preference when a new media exposes
       // its tracks. This only changes the active Player's audio-delay property.
       if (_audioDelay.abs() >= 0.01) {
@@ -14183,7 +14188,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
-    _automaticSubtitlePath = null;
     _automaticSubtitleMessage = null;
     _subtitleManuallySelected = false;
     _tracks = Tracks(
@@ -14279,7 +14283,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (!mounted || _isDisposed) return;
           _subtitleManuallySelected = false;
           _automaticEnglishTrack = null;
-          _automaticSubtitlePath = null;
           _automaticSubtitleMessage = null;
           unawaited(_ensureAutomaticEnglishSubtitle());
           _startHideTimer();
@@ -15070,33 +15073,60 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _selectMovieBoxSubtitle(Map<String, dynamic> subtitle) async {
-    final url = (subtitle['url'] ?? '').toString().trim();
-    if (url.isEmpty) return;
-    final uri = Uri.tryParse(url);
-    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty) {
+    final options = _movieBoxSubtitleOptions([subtitle]);
+    if (options.isEmpty) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This subtitle link is unavailable.')),
+        );
+      }
       return;
     }
+    final option = options.first;
+    final url = (option['downloadUrl'] ?? '').toString();
+    final language = (option['language'] ?? 'und').toString();
+    final release = (option['releaseName'] ?? 'Subtitle').toString();
     await _selectSubtitleTrack(SubtitleTrack.uri(
       url,
-      title: (subtitle['label'] ?? 'MovieBox subtitle').toString(),
-      language: (subtitle['label'] ?? '').toString(),
+      title: '${_subtitleLanguageName(language)} · $release',
+      language: language,
     ));
   }
 
+  Future<void> _activateSubtitleTrack(SubtitleTrack track) async {
+    if (_isDisposed) throw StateError('The video player is no longer active.');
+    await _player.setSubtitleTrack(track);
+    final native = _player.platform;
+    if (native is NativePlayer) {
+      await native.setProperty('sub-visibility', 'yes');
+      await native.setProperty('sub-ass-override', 'force');
+    }
+    await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+    // Allow the native player to publish the selected external/embedded track.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    if (_isDisposed) throw StateError('The video player was closed while loading subtitles.');
+    final activeId = _player.state.track.subtitle.id;
+    if (track.id != 'auto' && track.id != 'no' && activeId != track.id) {
+      debugPrint('FLIXORA subtitle activation mismatch: requested=${track.id}, active=$activeId');
+      throw StateError('Subtitle file was added but the player did not activate its track.');
+    }
+  }
+
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
-    _subtitleManuallySelected = true;
     try {
-      await _player.setSubtitleTrack(track);
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-      if (mounted && !_isDisposed) Navigator.of(context).maybePop();
+      await _activateSubtitleTrack(track);
+      _subtitleManuallySelected = true;
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+        _subtitleVisibilityEnabled = track.id != 'no';
+        _automaticEnglishTrack = track;
+        _automaticSubtitleMessage = 'Subtitle track active';
+      });
+      Navigator.of(context).maybePop();
       _startHideTimer();
-    } catch (error) {
-      if (mounted && !_isDisposed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not change subtitle track: $error')),
-        );
-      }
+    } catch (_) {
+      // Keep subtitle activation feedback silent; do not show internal player errors to visitors.
     }
   }
 
@@ -15104,9 +15134,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       final prefs = await SharedPreferences.getInstance();
       final storedSubtitleFontSize = prefs.getDouble('flixora_sub_font_size') ?? 20;
-      _subtitleFontSize = storedSubtitleFontSize > 36
-          ? 20
-          : storedSubtitleFontSize.clamp(12, 36).toDouble();
+      _subtitleFontSize = storedSubtitleFontSize.clamp(12, 60).toDouble();
       _subtitleTextColor = prefs.getString('flixora_sub_text_color') ?? '#FFFFFF';
       _subtitleBackgroundColor = prefs.getString('flixora_sub_background_color') ?? '#000000';
       _subtitleBackgroundOpacity = prefs.getDouble('flixora_sub_background_opacity') ?? 0.24;
@@ -15165,15 +15193,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final backgroundRgb = int.parse(backgroundHex, radix: 16);
     final backgroundAlpha = (_subtitleBackgroundOpacity * 255)
         .round().clamp(0, 255).toInt();
-    final screenHeight = MediaQuery.sizeOf(context).height;
-    final bottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+    final screenSize = MediaQuery.sizeOf(context);
+    final screenHeight = screenSize.height;
+    final requestedBottomPadding = (screenHeight * (1 - _subtitlePosition / 100) - 10.0)
         .clamp(8.0, screenHeight * 0.85).toDouble();
+    // When landscape controls are visible, reserve space above the seek bar.
+    // This only moves the subtitle overlay; it does not alter any controls.
+    final landscapeControlsClearance =
+        (screenHeight * 0.22 - 10.0).clamp(54.0, 102.0).toDouble();
+    final bottomPadding = screenSize.width > screenSize.height &&
+            _showControls &&
+            requestedBottomPadding < landscapeControlsClearance
+        ? landscapeControlsClearance
+        : requestedBottomPadding;
 
     return SubtitleViewConfiguration(
       visible: true,
       style: TextStyle(
         fontFamily: 'Arial',
-        fontSize: _subtitleFontSize.clamp(12, 36).toDouble(),
+        fontSize: _subtitleFontSize.clamp(12, 60).toDouble(),
         color: _subtitleColorFromHex(_subtitleTextColor),
         backgroundColor: Color((backgroundAlpha << 24) | backgroundRgb),
         fontWeight: FontWeight.w600,
@@ -15211,7 +15249,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.90,
       ),
-      backgroundColor: playerPanel,
+      backgroundColor: playerPanel.withValues(alpha: 0.48),
       builder: (sheetContext) {
         var fontSize = _subtitleFontSize;
         var textColor = _subtitleTextColor;
@@ -15268,8 +15306,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       const SizedBox(height: 4),
                       const Text('Font: Arial', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12)),
                       sectionLabel('TEXT SIZE'),
-                      sliderRow(label: 'Font size', value: fontSize, min: 12, max: 36,
-                        divisions: 24, display: '${fontSize.round()}',
+                      sliderRow(label: 'Font size', value: fontSize, min: 12, max: 60,
+                        divisions: 48, display: '${fontSize.round()}',
                         onChanged: (v) => updateSheet(() => fontSize = v)),
                       sectionLabel('TEXT COLOUR'),
                       DropdownButtonFormField<String>(
@@ -15444,40 +15482,67 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         type: FileType.custom,
         allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'],
         allowMultiple: false,
-        withData: false,
+        withData: true,
       );
       if (result == null || result.files.isEmpty) return;
       final picked = result.files.single;
       final path = picked.path;
-      if (path == null || path.isEmpty) throw StateError('Could not access the selected subtitle file.');
-      final file = File(path);
-      if (!await file.exists()) throw StateError('The selected subtitle file is not available.');
-      final length = await file.length();
-      if (length < 8 || length > 10 * 1024 * 1024) {
+      final sourceFile = path == null || path.isEmpty ? null : File(path);
+      final bytes = picked.bytes ??
+          (sourceFile != null && await sourceFile.exists()
+              ? await sourceFile.readAsBytes()
+              : null);
+      if (bytes == null) {
+        throw StateError('Android could not read the selected subtitle. Please select the file again.');
+      }
+      if (bytes.length < 8 || bytes.length > 10 * 1024 * 1024) {
         throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
       }
-      final bytes = await file.readAsBytes();
-      final content = utf8.decode(bytes, allowMalformed: true);
       final ext = picked.extension?.toLowerCase() ?? '';
-      if (!content.contains('-->') && !content.contains(r'{\\an') &&
-          !content.contains('<tt') && ext != 'sub') {
-        throw StateError('This file does not look like a supported subtitle.');
+      final decodedText = _decodeSubtitleText(bytes);
+      final detectedExtension = _detectSubtitleExtension(decodedText, ext);
+      if (detectedExtension == 'sub') {
+        throw StateError('MicroDVD .sub subtitles are not supported reliably. Please use SRT or ASS.');
       }
-      final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it)(?:[._ -]|$)',
+      final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
+
+      // Keep imported subtitles in app-private storage. File-picker paths can
+      // be temporary content-provider paths on Android and may expire later.
+      final support = await getApplicationSupportDirectory();
+      final importDir = Directory('${support.path}/flixora_subtitles/imported');
+      if (!await importDir.exists()) {
+        await importDir.create(recursive: true);
+      }
+      final safeName = picked.name.replaceAll(
+        RegExp(r'[^A-Za-z0-9._-]'),
+        '_',
+      );
+      final baseName = safeName.contains('.')
+          ? safeName.substring(0, safeName.lastIndexOf('.'))
+          : safeName;
+      final storedFile = File(
+        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
+      );
+      await storedFile.writeAsBytes(normalizedBytes, flush: true);
+
+      final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it|nl|pl|th|id|ms|fa)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
       final language = match?.group(1)?.toLowerCase() ?? 'external';
-      final track = SubtitleTrack.uri(Uri.file(file.path).toString(),
+      final track = SubtitleTrack.uri(Uri.file(storedFile.path).toString(),
           title: picked.name, language: language);
+      await _activateSubtitleTrack(track);
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
       if (mounted && !_isDisposed) {
+        setState(() {
+          _selectedSubtitleLanguageCode = language;
+          _subtitleVisibilityEnabled = true;
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage = 'Imported and loaded: ${picked.name}';
+        });
         Navigator.of(context).maybePop();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Subtitle imported: ${picked.name}')));
+          SnackBar(content: Text('Subtitle loaded: ${picked.name}')));
       }
     } catch (error) {
       if (mounted && !_isDisposed) {
@@ -16080,6 +16145,14 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
 
+  bool _isBanglaSubtitleTrack(SubtitleTrack track) {
+    final language = (track.language ?? '').toLowerCase();
+    final title = (track.title ?? '').toLowerCase();
+    return language == 'bn' || language == 'ben' ||
+        language.contains('bangla') || language.contains('bengali') ||
+        title.contains('বাংলা');
+  }
+
   bool _isEnglishSubtitleTrack(SubtitleTrack track) {
     final language = (track.language ?? '').toLowerCase();
     final title = (track.title ?? '').toLowerCase();
@@ -16100,8 +16173,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return '${language.isEmpty ? 'en' : language}_${widget.movie.mediaType}_${_automaticSubtitleMediaId()}$episode';
   }
 
+  int _stableSubtitleCacheHash(String value) {
+    var hash = 0x811c9dc5;
+    for (final unit in value.codeUnits) {
+      hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+    }
+    return hash;
+  }
+
   String _subtitleLanguageName(String code) {
     const names = <String, String>{
+      'bn+en': 'বাংলা + English',
       'en': 'English', 'eng': 'English',
       'bn': 'বাংলা', 'ben': 'বাংলা',
       'hi': 'Hindi', 'hin': 'Hindi',
@@ -16123,185 +16205,677 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       'id': 'Indonesian', 'ind': 'Indonesian',
       'ms': 'Malay', 'may': 'Malay', 'msa': 'Malay',
       'fa': 'Persian', 'per': 'Persian', 'fas': 'Persian',
+      'ta': 'Tamil', 'tam': 'Tamil',
+      'te': 'Telugu', 'tel': 'Telugu',
+      'kn': 'Kannada', 'kan': 'Kannada',
+      'ml': 'Malayalam', 'mal': 'Malayalam',
+      'vi': 'Vietnamese', 'vie': 'Vietnamese',
+      'tl': 'Filipino', 'tgl': 'Filipino',
+      'uk': 'Ukrainian', 'ukr': 'Ukrainian',
+      'el': 'Greek', 'ell': 'Greek',
+      'he': 'Hebrew', 'heb': 'Hebrew',
+      'sv': 'Swedish', 'swe': 'Swedish',
+      'no': 'Norwegian', 'nor': 'Norwegian',
+      'da': 'Danish', 'dan': 'Danish',
+      'fi': 'Finnish', 'fin': 'Finnish',
+      'cs': 'Czech', 'ces': 'Czech', 'cze': 'Czech',
+      'hu': 'Hungarian', 'hun': 'Hungarian',
+      'ro': 'Romanian', 'ron': 'Romanian', 'rum': 'Romanian',
+      'bg': 'Bulgarian', 'bul': 'Bulgarian',
+      'hr': 'Croatian', 'hrv': 'Croatian',
+      'sr': 'Serbian', 'srp': 'Serbian',
+      'sk': 'Slovak', 'slk': 'Slovak', 'slo': 'Slovak',
+      'sl': 'Slovenian', 'slv': 'Slovenian',
+      'et': 'Estonian', 'est': 'Estonian',
+      'lv': 'Latvian', 'lav': 'Latvian',
+      'lt': 'Lithuanian', 'lit': 'Lithuanian',
     };
-    final key = code.trim().toLowerCase().split(RegExp('[-_]')).first;
+    final normalized = code.trim().toLowerCase().replaceAll('_', '-');
+    final key = normalized.split(RegExp('[-_]')).first;
     return names[key] ?? (code.isEmpty ? 'Unknown language' : code.toUpperCase());
+  }
+
+  String _subtitleExtensionForOption(Map<String, dynamic> option) {
+    const supported = <String>{'srt','ass','ssa','vtt','sub','smi','ttml','scc','lrc','rt','sup'};
+    const aliases = <String, String>{
+      'subrip':'srt','webvtt':'vtt','advanced substation alpha':'ass',
+      'substation alpha':'ssa','microdvd':'sub','sami':'smi','timed text':'ttml',
+      'realtext':'rt',
+    };
+    String normalize(dynamic raw) {
+      final value = (raw ?? '').toString().trim().toLowerCase();
+      if (value.isEmpty) return '';
+      final filename = value.split('?').first.split('#').first;
+      final match = RegExp(r'\.([a-z0-9]{2,8})$').firstMatch(filename);
+      final token = (match?.group(1) ??
+          value.replaceFirst(RegExp(r'^\.'), '').split(RegExp(r'[\s(/]')).first).trim();
+      return aliases[token] ?? token;
+    }
+    for (final value in <dynamic>[option['format'], option['fileName'], option['downloadUrl']]) {
+      final extension = normalize(value);
+      if (supported.contains(extension)) return extension;
+    }
+    return 'srt';
+  }
+
+  String _decodeSubtitleText(List<int> bytes) {
+    if (bytes.isEmpty) return '';
+    // Subtitle packs frequently use UTF-16 LE/BE despite the .srt extension.
+    if (bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+      final units = <int>[];
+      for (var i = 2; i + 1 < bytes.length; i += 2) {
+        units.add(bytes[i] | (bytes[i + 1] << 8));
+      }
+      return String.fromCharCodes(units);
+    }
+    if (bytes.length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+      final units = <int>[];
+      for (var i = 2; i + 1 < bytes.length; i += 2) {
+        units.add((bytes[i] << 8) | bytes[i + 1]);
+      }
+      return String.fromCharCodes(units);
+    }
+    // Some subtitle files are UTF-16 without a BOM. Detect the common
+    // ASCII-timestamp pattern by checking which byte lane contains NULs.
+    if (bytes.length >= 8 && bytes.length.isEven) {
+      var evenZeros = 0;
+      var oddZeros = 0;
+      final samplePairs = (bytes.length ~/ 2).clamp(1, 512);
+      for (var i = 0; i < samplePairs * 2; i += 2) {
+        if (bytes[i] == 0) evenZeros++;
+        if (bytes[i + 1] == 0) oddZeros++;
+      }
+      final threshold = (samplePairs * 0.30).ceil();
+      if (oddZeros >= threshold || evenZeros >= threshold) {
+        final littleEndian = oddZeros > evenZeros;
+        final units = <int>[];
+        for (var i = 0; i + 1 < bytes.length; i += 2) {
+          units.add(littleEndian
+              ? bytes[i] | (bytes[i + 1] << 8)
+              : (bytes[i] << 8) | bytes[i + 1]);
+        }
+        return String.fromCharCodes(units).replaceAll('\u0000', '');
+      }
+    }
+    var start = bytes.length >= 3 &&
+            bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
+        ? 3
+        : 0;
+    final text = utf8.decode(bytes.sublist(start), allowMalformed: true);
+    return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
+  }
+
+  String _detectSubtitleExtension(String source, String preferred) {
+    final text = source.replaceFirst('\uFEFF', '').trim();
+    final lower = text.toLowerCase();
+    if (text.isEmpty) throw StateError('The downloaded subtitle file is empty.');
+    if (lower.startsWith('<!doctype html') || lower.startsWith('<html') ||
+        lower.startsWith('{') ||
+        (lower.startsWith('[') && !lower.startsWith('[script info]'))) {
+      throw StateError('The provider returned a web page or data response, not a subtitle file.');
+    }
+    if (lower.startsWith('webvtt')) return 'vtt';
+    if (lower.contains('[script info]') || lower.contains('[v4+ styles]') || lower.contains(r'{\an')) {
+      if (!lower.contains('[events]') || !lower.contains('dialogue:')) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return preferred == 'ssa' ? 'ssa' : 'ass';
+    }
+    if (lower.contains('<sami') || lower.contains('<sync')) return 'smi';
+    if (lower.contains('<tt') || lower.contains('<ttml')) return 'ttml';
+    if (text.contains('-->')) {
+      final hasCueTime = RegExp(
+        r'^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
+        multiLine: true,
+      ).hasMatch(text);
+      if (!hasCueTime) {
+        throw StateError('The selected subtitle has no valid SRT/VTT cue timestamps.');
+      }
+      return lower.contains('webvtt') ? 'vtt' : 'srt';
+    }
+    if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(text) || lower.contains('[subtitle]')) return 'sub';
+    if (RegExp(r'^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]', multiLine: true).hasMatch(text)) return 'lrc';
+    if (RegExp(r'^\s*\d{2}:\d{2}:\d{2};\d{2}', multiLine: true).hasMatch(text) || lower.contains('scenarist_scc')) return 'scc';
+    if (lower.contains('<time') || lower.contains('<window')) return 'rt';
+    if (preferred == 'sub' || preferred == 'smi' || preferred == 'ttml' ||
+        preferred == 'scc' || preferred == 'lrc' || preferred == 'rt' ||
+        preferred == 'ass' || preferred == 'ssa' || preferred == 'srt' || preferred == 'vtt') {
+      return preferred;
+    }
+    throw StateError('Unsupported subtitle format: $preferred');
   }
 
   Future<File> _downloadAutomaticSubtitle(Map<String, dynamic> option) async {
     final languageCode = (option['language'] ?? 'en').toString().toLowerCase();
     final downloadUrl = (option['downloadUrl'] ?? '').toString();
     final uri = Uri.tryParse(downloadUrl);
-    if (uri == null || uri.scheme != 'https' ||
-        uri.host != 'dl.subdl.com' || !uri.path.startsWith('/subtitle/')) {
-      throw StateError('Subtitle provider returned an invalid file.');
+    final provider = (option['provider'] ?? '').toString().toLowerCase();
+    final isSubSource = provider == 'subsource';
+    final isISubtitles = provider == 'isubtitles';
+    final isBollyNook = provider == 'bollynook';
+    final isGestdown = provider == 'gestdown';
+    final isTVSubtitles = provider == 'tvsubtitles';
+    final isSubDl = uri?.host == 'dl.subdl.com';
+    final isOpenSubtitles = uri != null &&
+        (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
+    final isMovieBoxSubtitle = provider == 'moviebox';
+    final isProviderDownload = (isSubSource || isISubtitles || isBollyNook ||
+        isGestdown || isTVSubtitles || isSubDl || isOpenSubtitles);
+    if (isMovieBoxSubtitle) {
+      if (uri == null || uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+        throw StateError('MovieBox returned an invalid HTTPS subtitle link.');
+      }
+    } else if (isSubSource) {
+      final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
+      if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
+    } else if (isISubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          !(uri.host == 'isubtitles.org' || uri.host == 'www.isubtitles.org') ||
+          !uri.path.startsWith('/download/')) {
+        throw StateError('iSubtitles returned an invalid download link.');
+      }
+    } else if (isBollyNook) {
+      if (uri == null || uri.scheme != 'https' ||
+          !(uri.host == 'bollynook.com' || uri.host == 'www.bollynook.com')) {
+        throw StateError('BollyNook returned an invalid download link.');
+      }
+    } else if (isGestdown) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'api.gestdown.info' || !uri.path.startsWith('/')) {
+        throw StateError('Gestdown returned an invalid download link.');
+      }
+    } else if (isTVSubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'www.tvsubtitles.net') {
+        throw StateError('TVSubtitles returned an invalid download link.');
+      }
+    } else if (uri == null || uri.scheme != 'https' ||
+        !(isSubDl || isOpenSubtitles) ||
+        (isSubDl && !uri.path.startsWith('/subtitle/'))) {
+      throw StateError('Subtitle provider returned an invalid file link.');
     }
-    final extension = (option['format'] ?? 'srt')
-        .toString().toLowerCase().replaceAll('.', '');
-    if (!['srt', 'ass', 'ssa', 'vtt', 'sub'].contains(extension)) {
-      throw StateError('Unsupported subtitle format.');
-    }
+
+    final preferredExtension = _subtitleExtensionForOption(option);
     final support = await getApplicationSupportDirectory();
     final cacheDir = Directory('${support.path}/flixora_subtitles');
     if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
-    final cacheBase = _automaticSubtitleCacheKey(languageCode);
-    final cachedFile = File('${cacheDir.path}/$cacheBase.$extension');
-    if (await cachedFile.exists() && await cachedFile.length() > 16) return cachedFile;
-
-    final download = await http.get(uri).timeout(const Duration(seconds: 20));
-    if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
-        download.bodyBytes.length > 10 * 1024 * 1024) {
-      throw StateError('Could not download the selected subtitle.');
-    }
-    if (download.bodyBytes.length >= 2 &&
-        download.bodyBytes[0] == 0x50 && download.bodyBytes[1] == 0x4b) {
-      throw StateError('Subtitle provider returned an archive, not a subtitle file.');
-    }
-    final subtitleText = utf8.decode(download.bodyBytes, allowMalformed: true);
-    if (subtitleText.trim().isEmpty ||
-        (!subtitleText.contains('-->') && !subtitleText.contains('{\\an') &&
-         !subtitleText.contains('<tt'))) {
-      throw StateError('Downloaded file is not valid text subtitles.');
-    }
-    await cachedFile.writeAsBytes(download.bodyBytes, flush: true);
-    return cachedFile;
-  }
-
-  Future<void> _ensureAutomaticEnglishSubtitle() async {
-    if (_isDisposed || widget.localFilePath != null || !_playerIsOnline ||
-        _automaticSubtitleLoading || _subtitleManuallySelected) return;
-    final requestToken = ++_automaticSubtitleRequestToken;
-    if (_automaticSubtitleMediaId() <= 0 && widget.movie.title.trim().isEmpty) return;
-    setState(() {
-      _automaticSubtitleLoading = true;
-      _automaticSubtitleMessage = 'Finding available subtitles…';
-    });
-    try {
-      // Prefer an embedded subtitle track if the stream exposes one.
-      for (var attempt = 0; attempt < 8; attempt++) {
-        final embeddedTracks = _tracks.subtitle
-            .where((track) => track.id != 'auto' && track.id != 'no')
-            .toList(growable: false);
-        if (embeddedTracks.isNotEmpty) {
-          final track = embeddedTracks.firstWhere(
-            _isEnglishSubtitleTrack, orElse: () => embeddedTracks.first);
-          if (requestToken != _automaticSubtitleRequestToken ||
-              _subtitleManuallySelected || _isDisposed) return;
-          await _player.setSubtitleTrack(track);
-          final native = _player.platform;
-          if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-          await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-          if (mounted && !_isDisposed) {
-            setState(() {
-              _automaticEnglishTrack = track;
-              _automaticSubtitleMessage =
-                  'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
-            });
-          }
-          return;
+    // Do not include expiring signed download URLs in the cache key.
+    // The same release should reuse its validated local subtitle after relaunch.
+    // Deduplicate equivalent releases across independent extensions. The
+    // media/language cache prefix already isolates each movie or episode.
+    final releaseIdentity = [
+      option['releaseName'] ?? '',
+      option['fileName'] ?? '',
+      if ((option['releaseName'] ?? '').toString().isEmpty && (option['fileName'] ?? '').toString().isEmpty) uri?.path ?? '',
+    ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${_stableSubtitleCacheHash(releaseIdentity)}';
+    final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
+    if (await preferredCache.exists() && await preferredCache.length() > 16) {
+      try {
+        final cachedBytes = await preferredCache.readAsBytes();
+        if (preferredExtension == 'sup' ||
+            _detectSubtitleExtension(_decodeSubtitleText(cachedBytes), preferredExtension) == preferredExtension) {
+          return preferredCache;
         }
-        if (attempt < 7) await Future.delayed(const Duration(milliseconds: 250));
-      }
+      } catch (_) {}
+      await preferredCache.delete();
+    }
 
+    late http.Response download;
+    if (isProviderDownload) {
       final client = supabaseClient;
       if (client == null) throw StateError('Subtitle service is unavailable.');
-      final response = await client.functions.invoke(
+      final result = await client.functions.invoke(
         'flixora-subtitles',
         body: {
-          'tmdbId': widget.movie.tmdbId,
-          'title': widget.movie.title,
-          'year': widget.movie.year,
+          'action': isSubSource ? 'download_subsource' : 'download_provider_subtitle',
+          'provider': provider,
+          if (isSubSource) 'subtitleId': option['subsourceId'],
+          if (!isSubSource) 'downloadUrl': downloadUrl,
+          if (!isSubSource) 'pageUrl': option['pageUrl'] ?? '',
+          'releaseName': option['releaseName'] ?? '',
+          'language': languageCode,
           'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
-          'languages': 'EN,BN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
           if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
             'season': _selectedSeasonNumber,
             'episode': _selectedEpisodeNumber,
           },
         },
-      ).timeout(const Duration(seconds: 18));
-      final payload = response.data;
-      if (payload is! Map) throw StateError('No subtitles were found.');
-      final raw = payload['subtitles'];
-      final options = raw is List
-          ? raw.whereType<Map>().map((item) => Map<String, dynamic>.from(item))
-              .where((item) => (item['downloadUrl'] ?? '').toString().isNotEmpty)
-              .toList(growable: false)
-          : <Map<String, dynamic>>[];
-      final unique = <String, Map<String, dynamic>>{};
-      for (final option in options) {
-        final code = (option['language'] ?? '').toString().toLowerCase();
-        if (code.isNotEmpty) unique.putIfAbsent(code, () => option);
+      ).timeout(const Duration(seconds: 35));
+      final payload = result.data;
+      if (payload is! Map || (payload['contentBase64'] ?? '').toString().isEmpty) {
+        final message = payload is Map
+            ? (payload['error'] ?? 'Subtitle provider download failed.')
+            : 'Subtitle provider download failed.';
+        throw StateError(message.toString());
       }
-      final available = unique.values.toList(growable: false);
-      if (available.isEmpty) throw StateError('No subtitles were found for this title.');
-      if (requestToken != _automaticSubtitleRequestToken ||
-          _subtitleManuallySelected || _isDisposed) return;
-      final selected = available.firstWhere(
-        (option) => (option['language'] ?? '').toString().toLowerCase() == 'en',
-        orElse: () => available.first,
-      );
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _automaticSubtitleOptions = available;
-          _automaticSubtitleMessage = '${available.length} language(s) available';
-        });
-      }
-      final file = await _downloadAutomaticSubtitle(selected);
-      if (requestToken != _automaticSubtitleRequestToken ||
-          _subtitleManuallySelected || _isDisposed) return;
-      final code = (selected['language'] ?? 'en').toString().toLowerCase();
-      final track = SubtitleTrack.uri(
-        Uri.file(file.path).toString(),
-        title: _subtitleLanguageName(code), language: code);
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _automaticSubtitlePath = file.path;
-          _automaticEnglishTrack = track;
-          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} downloaded and ready';
-        });
-      }
-    } catch (error) {
-      debugPrint('FLIXORA automatic subtitles: $error');
-      if (mounted && !_isDisposed &&
-          requestToken == _automaticSubtitleRequestToken) {
-        setState(() {
-          _automaticSubtitleMessage = error.toString().contains('503') ||
-                  error.toString().contains('not configured')
-              ? 'Subtitle service needs API setup'
-              : 'No subtitles found';
-        });
-      }
-    } finally {
-      if (mounted && !_isDisposed &&
-          requestToken == _automaticSubtitleRequestToken) {
-        setState(() => _automaticSubtitleLoading = false);
+      final bytes = base64Decode(payload['contentBase64'].toString());
+      download = http.Response.bytes(bytes, 200, headers: {
+        'content-type': 'application/octet-stream',
+      });
+    } else {
+      download = await http.get(uri!, headers: const {
+        'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+        'User-Agent': 'FLIXORA Subtitle Client/1.0',
+      }).timeout(const Duration(seconds: 25));
+      if (isMovieBoxSubtitle && download.request?.url.scheme != 'https') throw StateError('MovieBox subtitle download redirected to an insecure URL.');
+      // Providers may briefly rate-limit a valid subtitle link. Respect their
+      // Retry-After hint once, then let the caller fall back to another result.
+      if (download.statusCode == 429) {
+        final retryAfter = int.tryParse(download.headers['retry-after'] ?? '');
+        final waitSeconds = (retryAfter ?? 2).clamp(1, 8).toInt();
+        await Future<void>.delayed(Duration(seconds: waitSeconds));
+        download = await http.get(uri, headers: const {
+          'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+          'User-Agent': 'FLIXORA Subtitle Client/1.0',
+        }).timeout(const Duration(seconds: 25));
       }
     }
+    if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
+        download.bodyBytes.length > 10 * 1024 * 1024) {
+      throw StateError('Could not download the selected subtitle (HTTP ${download.statusCode}).');
+    }
+    final bytes = download.bodyBytes;
+    if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) {
+      throw StateError('The provider returned a ZIP archive instead of an unpacked subtitle file.');
+    }
+    final contentType = (download.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('text/html') || contentType.contains('application/json')) {
+      throw StateError('The provider returned an error page, not a subtitle file.');
+    }
+    final isPgs = preferredExtension == 'sup' &&
+        bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x47;
+    final subtitleText = _decodeSubtitleText(bytes);
+    final actualExtension = isPgs ? 'sup' : _detectSubtitleExtension(subtitleText, preferredExtension);
+    if (actualExtension == 'sup' && !isPgs) {
+      throw StateError('The PGS subtitle data is incomplete or invalid.');
+    }
+    final cachedFile = File('${cacheDir.path}/${cacheBase}.$actualExtension');
+    if (await cachedFile.exists()) await cachedFile.delete();
+    if (actualExtension == 'sup') {
+      await cachedFile.writeAsBytes(bytes, flush: true);
+    } else {
+      await cachedFile.writeAsString(
+        subtitleText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
+        encoding: utf8,
+        flush: true,
+      );
+    }
+    return cachedFile;
   }
 
+  Future<bool> _activateEmbeddedSubtitleIfAvailable() async {
+    if (_isDisposed || widget.localFilePath != null ||
+        _subtitleManuallySelected || _automaticSubtitleLoading ||
+        _automaticEnglishTrack != null) return false;
+    final embeddedTracks = _tracks.subtitle
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .toList(growable: false);
+    if (embeddedTracks.isEmpty) return false;
+    final orderedTracks = <SubtitleTrack>[
+      ...embeddedTracks.where(_isBanglaSubtitleTrack),
+      ...embeddedTracks.where(_isEnglishSubtitleTrack),
+      ...embeddedTracks.where((track) =>
+          !_isBanglaSubtitleTrack(track) && !_isEnglishSubtitleTrack(track)),
+    ];
+    for (final track in orderedTracks) {
+      if (_isDisposed || _subtitleManuallySelected) return false;
+      try {
+        await _player.setSubtitleTrack(track);
+        final native = _player.platform;
+        if (native is NativePlayer) {
+          await native.setProperty('sub-visibility', 'yes');
+        }
+        await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (_isDisposed) return false;
+        final activeId = _player.state.track.subtitle.id;
+        if (activeId != track.id) {
+          debugPrint('FLIXORA embedded subtitle not active: requested=${track.id}, active=$activeId');
+          continue;
+        }
+        if (mounted) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _subtitleVisibilityEnabled = true;
+            _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+            _automaticSubtitleMessage =
+                'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
+          });
+        }
+        debugPrint('FLIXORA embedded subtitle activated: id=${track.id}, language=${track.language}');
+        return true;
+      } catch (error) {
+        debugPrint('FLIXORA embedded subtitle selection failed for ${track.id}: $error');
+      }
+    }
+    return false;
+  }
+
+  String _movieBoxSubtitleLanguage(Map<String, dynamic> subtitle) {
+    // WeFeed has returned multiple metadata shapes across MovieBox releases.
+    // Prefer ISO language codes, then display-name fields such as lanName.
+    final rawValue = <dynamic>[
+      subtitle['language'],
+      subtitle['lang'],
+      subtitle['lan'],
+      subtitle['languageCode'],
+      subtitle['langCode'],
+      subtitle['lanCode'],
+      subtitle['languageName'],
+      subtitle['langName'],
+      subtitle['lanName'],
+      subtitle['language_name'],
+      subtitle['lang_name'],
+      subtitle['lan_name'],
+      subtitle['label'],
+      subtitle['name'],
+      subtitle['fileName'],
+      subtitle['filename'],
+    ].firstWhere(
+      (value) => value != null && value.toString().trim().isNotEmpty,
+      orElse: () => '',
+    );
+    final raw = (rawValue is Map
+            ? (rawValue['code'] ?? rawValue['lang'] ?? rawValue['name'] ?? '')
+            : rawValue)
+        .toString()
+        .trim()
+        .toLowerCase();
+    final parts = raw
+        .split(RegExp(r'[+/,;|]'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+    String normalize(String value) {
+      final token = value
+          .split(RegExp(r'[-_\\s]'))
+          .firstWhere((part) => part.isNotEmpty, orElse: () => value)
+          .toLowerCase();
+      const aliases = <String, String>{
+        'english': 'en', 'eng': 'en', 'en': 'en',
+        'bengali': 'bn', 'bangla': 'bn', 'ben': 'bn', 'beng': 'bn', 'bn': 'bn',
+        'hindi': 'hi', 'hin': 'hi', 'hi': 'hi',
+        'urdu': 'ur', 'urd': 'ur', 'ur': 'ur',
+        'arabic': 'ar', 'ara': 'ar', 'ar': 'ar',
+        'japanese': 'ja', 'jpn': 'ja', 'ja': 'ja',
+        'korean': 'ko', 'kor': 'ko', 'ko': 'ko',
+        'chinese': 'zh', 'chi': 'zh', 'zho': 'zh', 'zh': 'zh',
+        'spanish': 'es', 'spa': 'es', 'es': 'es',
+        'french': 'fr', 'fre': 'fr', 'fra': 'fr', 'fr': 'fr',
+        'german': 'de', 'ger': 'de', 'deu': 'de', 'de': 'de',
+        'portuguese': 'pt', 'por': 'pt', 'pt': 'pt',
+        'russian': 'ru', 'rus': 'ru', 'ru': 'ru',
+        'turkish': 'tr', 'tur': 'tr', 'tr': 'tr',
+        'italian': 'it', 'ita': 'it', 'it': 'it',
+        'dutch': 'nl', 'nld': 'nl', 'nl': 'nl',
+        'polish': 'pl', 'pol': 'pl', 'pl': 'pl',
+        'thai': 'th', 'tha': 'th', 'th': 'th',
+        'indonesian': 'id', 'ind': 'id', 'id': 'id',
+        'malay': 'ms', 'may': 'ms', 'msa': 'ms', 'ms': 'ms',
+        'persian': 'fa', 'per': 'fa', 'fas': 'fa', 'fa': 'fa',
+        'tamil': 'ta', 'tam': 'ta', 'ta': 'ta',
+        'telugu': 'te', 'tel': 'te', 'te': 'te',
+        'kannada': 'kn', 'kan': 'kn', 'kn': 'kn',
+        'malayalam': 'ml', 'mal': 'ml', 'ml': 'ml',
+        'vietnamese': 'vi', 'vie': 'vi', 'vi': 'vi',
+        'filipino': 'tl', 'tagalog': 'tl', 'tgl': 'tl', 'tl': 'tl',
+        'ukrainian': 'uk', 'ukr': 'uk', 'uk': 'uk',
+        'greek': 'el', 'ell': 'el', 'el': 'el',
+        'hebrew': 'he', 'heb': 'he', 'he': 'he',
+        'swedish': 'sv', 'swe': 'sv', 'sv': 'sv',
+        'norwegian': 'no', 'nor': 'no', 'no': 'no',
+        'danish': 'da', 'dan': 'da', 'da': 'da',
+        'finnish': 'fi', 'fin': 'fi', 'fi': 'fi',
+        'czech': 'cs', 'ces': 'cs', 'cze': 'cs', 'cs': 'cs',
+        'hungarian': 'hu', 'hun': 'hu', 'hu': 'hu',
+        'romanian': 'ro', 'ron': 'ro', 'rum': 'ro', 'ro': 'ro',
+        'bulgarian': 'bg', 'bul': 'bg', 'bg': 'bg',
+        'croatian': 'hr', 'hrv': 'hr', 'hr': 'hr',
+        'serbian': 'sr', 'srp': 'sr', 'sr': 'sr',
+        'slovak': 'sk', 'slk': 'sk', 'slo': 'sk', 'sk': 'sk',
+        'slovenian': 'sl', 'slv': 'sl', 'sl': 'sl',
+        'estonian': 'et', 'est': 'et', 'et': 'et',
+        'latvian': 'lv', 'lav': 'lv', 'lv': 'lv',
+        'lithuanian': 'lt', 'lit': 'lt', 'lt': 'lt',
+      };
+      return aliases[token] ?? token;
+    }
+    final normalized = parts.map(normalize).toSet().toList(growable: false);
+    if (normalized.length > 1 && normalized.contains('bn') && normalized.contains('en')) {
+      return 'bn+en';
+    }
+    if (normalized.isNotEmpty) return normalized.first;
+    return 'und';
+  }
+
+  List<Map<String, dynamic>> _extractMovieBoxSubtitleItems(
+    Map<String, dynamic> response,
+  ) {
+    const listKeys = <String>{
+      'subtitles',
+      'subtitle',
+      'subTitleList',
+      'subtitleList',
+      'subtitle_list',
+      'subtitle_list_data',
+      'captions',
+      'captionList',
+      'caption_list',
+      'externalSubtitles',
+      'external_subtitles',
+    };
+    const nestedKeys = <String>{
+      'data',
+      'result',
+      'results',
+      'stream',
+      'playInfo',
+      'play_info',
+      'payload',
+      'response',
+    };
+
+    List<Map<String, dynamic>> asSubtitleMaps(dynamic value) {
+      if (value is! List) return const <Map<String, dynamic>>[];
+      return value
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    }
+
+    List<Map<String, dynamic>>? find(dynamic value, int depth) {
+      if (depth > 5 || value is! Map) return null;
+      final map = Map<String, dynamic>.from(value);
+      for (final entry in map.entries) {
+        if (listKeys.contains(entry.key.toString())) {
+          final items = asSubtitleMaps(entry.value);
+          if (items.isNotEmpty) return items;
+          if (entry.value is Map) {
+            final nested = find(entry.value, depth + 1);
+            if (nested != null && nested.isNotEmpty) return nested;
+          }
+        }
+      }
+      for (final key in nestedKeys) {
+        final child = map[key];
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      // Some wrappers place the play-info object under an unlabelled key.
+      for (final child in map.values) {
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      return null;
+    }
+
+    final items = find(response, 0) ?? const <Map<String, dynamic>>[];
+    return items.where((item) => _movieBoxSubtitleUrl(item).isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String _movieBoxSubtitleUrl(Map<String, dynamic> subtitle) {
+    const urlKeys = <String>[
+      'url',
+      'downloadUrl',
+      'download_url',
+      'subtitleUrl',
+      'subtitle_url',
+      'fileUrl',
+      'file_url',
+      'captionUrl',
+      'caption_url',
+      'srtUrl',
+      'vttUrl',
+      'src',
+      'link',
+      'path',
+    ];
+    for (final key in urlKeys) {
+      final value = subtitle[key];
+      final candidate = value is Map
+          ? (value['url'] ?? value['uri'] ?? value['link'] ?? '').toString().trim()
+          : (value ?? '').toString().trim();
+      if (candidate.isEmpty) continue;
+      final uri = Uri.tryParse(candidate);
+      if (uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty) {
+        return candidate;
+      }
+    }
+    return '';
+  }
+
+  List<Map<String, dynamic>> _movieBoxSubtitleOptions([List<Map<String, dynamic>>? source]) {
+    final subtitles = source ?? _movieBoxSubtitles;
+    final options = <Map<String, dynamic>>[];
+    for (var index = 0; index < subtitles.length; index++) {
+      final subtitle = subtitles[index];
+      final url = _movieBoxSubtitleUrl(subtitle);
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty) {
+        continue;
+      }
+      final language = _movieBoxSubtitleLanguage(subtitle);
+      final fileName = (subtitle['fileName'] ??
+              subtitle['filename'] ??
+              subtitle['file_name'] ??
+              subtitle['releaseName'] ??
+              subtitle['title'] ??
+              (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
+          .toString()
+          .trim();
+      final releaseName = (subtitle['releaseName'] ??
+              subtitle['name'] ??
+              subtitle['title'] ??
+              subtitle['label'] ??
+              fileName)
+          .toString()
+          .trim()
+          .replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA');
+      final format = (subtitle['format'] ??
+              (fileName.contains('.') ? fileName.split('.').last : 'srt'))
+          .toString()
+          .toLowerCase();
+      options.add(<String, dynamic>{
+        'provider': 'moviebox',
+        'providerSource': 'moviebox',
+        'language': language,
+        'releaseName': releaseName.isEmpty
+            ? '${_subtitleLanguageName(language)} · Subtitle ${index + 1}'
+            : releaseName,
+        'fileName': fileName,
+        'downloadUrl': url,
+        'format': format,
+        'movieBoxSubtitle': subtitle,
+        'movieBoxIndex': index,
+      });
+    }
+    options.sort((a, b) {
+      int priority(Map<String, dynamic> option) {
+        final code = (option['language'] ?? '').toString();
+        return code == 'bn' ? 0 : (code == 'bn+en' ? 1 : (code == 'en' ? 2 : 3));
+      }
+      return priority(a).compareTo(priority(b));
+    });
+    return options;
+  }
+
+  Future<void> _ensureAutomaticEnglishSubtitle() async {
+    if (_isDisposed || widget.localFilePath != null || !_playerIsOnline || _automaticSubtitleLoading || _subtitleManuallySelected) return;
+    final requestToken = ++_automaticSubtitleRequestToken;
+    if (mounted) setState(() { _automaticSubtitleLoading = true; _automaticSubtitleMessage = 'Loading available subtitles…'; });
+    try {
+      var embeddedTrackSelected = false;
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+        embeddedTrackSelected = await _activateEmbeddedSubtitleIfAvailable();
+        if (embeddedTrackSelected) break;
+        if (attempt < 11) await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+      final available = widget.movie.isMovieBox ? _movieBoxSubtitleOptions() : <Map<String,dynamic>>[];
+      if (mounted && !_isDisposed) setState(() {
+        _automaticSubtitleOptions = available;
+        _automaticSubtitleMessage = available.isNotEmpty ? available.length.toString() + ' subtitle(s) available' : (widget.movie.isMovieBox ? 'No subtitles were returned for this title or episode.' : (embeddedTrackSelected ? 'Embedded subtitle track is active' : 'No embedded subtitle tracks are available. You can import a subtitle file.'));
+      });
+    } catch (error) {
+      debugPrint('FLIXORA MovieBox subtitles: $error');
+      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() { _automaticSubtitleMessage = 'Subtitles could not be loaded. You can import a subtitle file.'; });
+    } finally {
+      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() => _automaticSubtitleLoading = false);
+    }
+  }
   Future<void> _selectAutomaticSubtitleLanguage(Map<String, dynamic> option) async {
     final code = (option['language'] ?? 'en').toString().toLowerCase();
     try {
-      final file = await _downloadAutomaticSubtitle(option);
+      // Keep the chosen language, but try its other provider/release results
+      // if the selected link is expired or rate-limited.
+      final candidates = <Map<String, dynamic>>[
+        option,
+        ..._automaticSubtitleOptions.where((candidate) =>
+            (candidate['language'] ?? '').toString().toLowerCase() == code &&
+            (candidate['downloadUrl'] ?? '') != (option['downloadUrl'] ?? '')),
+      ];
+      File? file;
+      Object? lastDownloadError;
+      for (final candidate in candidates) {
+        try {
+          file = await _downloadAutomaticSubtitle(candidate);
+          break;
+        } catch (error) {
+          lastDownloadError = error;
+          debugPrint('FLIXORA subtitle language fallback failed: $error');
+        }
+      }
+      if (file == null) {
+        throw StateError(
+          'No usable ${_subtitleLanguageName(code)} subtitle could be downloaded. ${lastDownloadError ?? ''}',
+        );
+      }
       if (!mounted || _isDisposed) return;
       final track = SubtitleTrack.uri(
         Uri.file(file.path).toString(),
         title: _subtitleLanguageName(code), language: code);
       _subtitleManuallySelected = true;
       _automaticSubtitleRequestToken++;
-      await _player.setSubtitleTrack(track);
-      final native = _player.platform;
-      if (native is NativePlayer) await native.setProperty('sub-visibility', 'yes');
-      await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+      await _activateSubtitleTrack(track);
       if (mounted && !_isDisposed) {
         setState(() {
-          _automaticSubtitlePath = file.path;
+          _selectedSubtitleLanguageCode = code;
+          _subtitleVisibilityEnabled = true;
           _automaticEnglishTrack = track;
-          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} selected';
+          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} track active';
         });
         Navigator.of(context).maybePop();
         _startHideTimer();
@@ -16314,146 +16888,616 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
   }
 
-  Future<void> _selectAutomaticEnglishSubtitle() async {
-    if (_automaticEnglishTrack != null) {
-      await _selectSubtitleTrack(_automaticEnglishTrack!);
-      return;
+  Future<void> _setSubtitleVisibility(bool enabled) async {
+    try {
+      final currentTrack = _player.state.track.subtitle;
+      final selectedTrack = enabled
+          ? (_automaticEnglishTrack ??
+              (currentTrack.id != 'no' ? currentTrack : SubtitleTrack.auto()))
+          : SubtitleTrack.no();
+
+      // Apply visibility through the player track API on every platform,
+      // then mirror it to libmpv on Android so the switch always controls
+      // the active subtitle track as well as native subtitle rendering.
+      await _player.setSubtitleTrack(selectedTrack);
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', enabled ? 'yes' : 'no');
+      }
+
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        if (enabled && selectedTrack.id != 'auto' && selectedTrack.id != 'no') {
+          _automaticEnglishTrack = selectedTrack;
+        }
+        _subtitleVisibilityEnabled = enabled;
+      });
+    } catch (error) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not change subtitle visibility: $error')),
+        );
+      }
     }
-    if (_automaticSubtitlePath != null) {
-      await _selectSubtitleTrack(SubtitleTrack.uri(
-        _automaticSubtitlePath!, title: 'Subtitle', language: 'en'));
-      return;
-    }
-    Navigator.of(context).pop();
-    await _ensureAutomaticEnglishSubtitle();
+  }
+
+  String _subtitleTrackDisplayName(SubtitleTrack track) {
+    final language = (track.language ?? '').trim();
+    final title = (track.title ?? '').trim();
+    final generic = RegExp(r'^(subtitle|subtitles?|track)\s*#?\s*\d*$',
+        caseSensitive: false);
+    if (language.isNotEmpty) return _subtitleLanguageName(language);
+    if (title.isNotEmpty && !generic.hasMatch(title)) return title;
+    return 'Other language';
+  }
+
+
+  void _showSubtitleDelaySettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel.withValues(alpha: 0.48),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        side: BorderSide(color: Color(0x66D6AD45)),
+      ),
+      builder: (sheetContext) {
+        var delay = _subtitleDelay;
+        return StatefulBuilder(
+          builder: (context, updateSheet) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Subtitle Delay',
+                            style: TextStyle(
+                              color: playerGoldLight,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, color: playerWhite),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'Adjust subtitle timing to match the dialogue.',
+                      style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                    ),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Text(
+                        '${delay >= 0 ? '+' : ''}${delay.toStringAsFixed(1)} s',
+                        style: const TextStyle(
+                          color: playerGoldLight,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Slider(
+                      value: delay.clamp(-10.0, 10.0).toDouble(),
+                      min: -10,
+                      max: 10,
+                      divisions: 200,
+                      activeColor: playerGold,
+                      inactiveColor: const Color(0x55FFFFFF),
+                      onChanged: (value) => updateSheet(() => delay = value),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: const [
+                        Text('-10s Earlier', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                        Text('10s Later', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: playerGoldLight,
+                              side: const BorderSide(color: playerGold),
+                            ),
+                            onPressed: () => updateSheet(() => delay = 0),
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: playerGold,
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: () async {
+                              final applied = await _applySubtitleDelay(delay);
+                              if (!applied || !mounted || _isDisposed) return;
+                              await _saveSubtitlePreferences();
+                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                              _startHideTimer();
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
   }
 
   void _showSubtitleTracks() {
-    final subtitleTracks = _tracks.subtitle;
-
-    showModalBottomSheet(
+    _cancelHideTimer();
+    showGeneralDialog<void>(
       context: context,
-      backgroundColor: playerPanel,
-      builder: (context) {
+      barrierDismissible: true,
+      barrierLabel: 'Close subtitles',
+      barrierColor: Colors.black.withValues(alpha: 0.16),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        final landscape = screen.width >= screen.height;
+        final panelWidth = landscape
+            ? (screen.width * 0.44).clamp(340.0, 500.0).toDouble()
+            : screen.width * 0.94;
+        final panelHeight = landscape ? screen.height * 0.94 : screen.height * 0.78;
         return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
+          child: Align(
+            alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
             child: SizedBox(
-              height: MediaQuery.of(context).size.height * 0.75,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Subtitles',
-                  style: TextStyle(
-                    color: playerWhite,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ListTile(
-                  leading: Icon(_automaticSubtitleLoading ? Icons.downloading_rounded : Icons.auto_awesome_rounded, color: playerGold),
-                  title: const Text('FLIXORA Subtitles', style: TextStyle(color: playerWhite)),
-                  subtitle: Text(_automaticSubtitleMessage ?? 'Find subtitles in multiple languages automatically',
-                    style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
-                  trailing: _automaticSubtitleLoading
-                      ? const SizedBox(width: 18, height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: playerGold))
-                      : const Icon(Icons.chevron_right, color: playerGoldLight),
-                  onTap: _selectAutomaticEnglishSubtitle,
-                ),
-                ..._automaticSubtitleOptions.map((option) {
-                  final code = (option['language'] ?? '').toString();
-                  final release = (option['releaseName'] ?? '').toString();
-                  return ListTile(
-                    leading: const Icon(Icons.subtitles_rounded, color: playerGoldLight),
-                    title: Text(_subtitleLanguageName(code), style: const TextStyle(color: playerWhite)),
-                    subtitle: release.isEmpty ? null : Text(release, maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
-                    onTap: () => _selectAutomaticSubtitleLanguage(option),
-                  );
-                }),
-                ListTile(
-                  leading: const Icon(
-                    Icons.subtitles_off,
-                    color: playerGold,
-                  ),
-                  title: const Text(
-                    'Off',
-                    style: TextStyle(color: playerWhite),
-                  ),
-                  onTap: () {
-                    _subtitleManuallySelected = true;
-                    _automaticSubtitleRequestToken++;
-                    _selectSubtitleTrack(SubtitleTrack.no());
-                  },
-                ),
-                ..._movieBoxSubtitles.map((subtitle) {
-                  final label = (subtitle['label'] ?? 'External subtitle').toString();
-                  return ListTile(
-                    leading: const Icon(Icons.subtitles, color: playerGoldLight),
-                    title: Text(label, style: const TextStyle(color: playerWhite)),
-                    onTap: () => _selectMovieBoxSubtitle(subtitle),
-                  );
-                }),
-                ...subtitleTracks.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final track = entry.value;
-                  final title = track.title?.trim() ?? '';
-                  final language = track.language?.trim() ?? '';
-                  final label = title.isNotEmpty
-                      ? title
-                      : language.isNotEmpty
-                          ? _subtitleLanguageName(language)
-                          : 'Subtitle track ${index + 1}';
-                  return ListTile(
-                    leading: const Icon(
-                      Icons.subtitles,
-                      color: playerGold,
+              width: panelWidth,
+              height: panelHeight,
+              child: StatefulBuilder(
+                builder: (sheetContext, updateSheet) {
+                  final embedded = _tracks.subtitle
+                      .where((track) => track.id != 'auto' && track.id != 'no')
+                      .toList(growable: false);
+                  final entries = <String, Map<String, dynamic>>{};
+                  for (final track in embedded) {
+                    final code = (track.language ?? '').trim().toLowerCase();
+                    if (code.isNotEmpty) {
+                      entries.putIfAbsent(code, () => {
+                        'kind': 'embedded', 'language': code, 'track': track,
+                        'releaseName': _subtitleTrackDisplayName(track),
+                      });
+                    }
+                  }
+                  if (!widget.movie.isMovieBox) {
+                    for (final option in _automaticSubtitleOptions) {
+                      final code = (option['language'] ?? '').toString().toLowerCase();
+                      if (code.isNotEmpty) entries.putIfAbsent(code, () => {...option, 'kind': 'automatic'});
+                    }
+                  }
+                  final movieBoxOptions = _movieBoxSubtitleOptions();
+                  for (var index = 0; index < movieBoxOptions.length; index++) {
+                    final option = movieBoxOptions[index];
+                    final code = (option['language'] ?? 'und').toString();
+                    final subtitle = option['movieBoxSubtitle'] as Map<String, dynamic>;
+                    entries['moviebox:' + index.toString() + ':' + code] = {...option, 'kind':'moviebox','language':code,'subtitle':subtitle};
+                  }
+
+                  Future<void> choose(Map<String, dynamic> item) async {
+                    final code = (item['language'] ?? '').toString().toLowerCase();
+                    if (item['kind'] == 'embedded' && item['track'] is SubtitleTrack) {
+                      await _selectSubtitleTrack(item['track'] as SubtitleTrack);
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else if (item['kind'] == 'moviebox' && item['subtitle'] is Map) {
+                      await _selectMovieBoxSubtitle(Map<String, dynamic>.from(item['subtitle'] as Map));
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else {
+                      await _selectAutomaticSubtitleLanguage(item);
+                    }
+                    if (sheetContext.mounted) updateSheet(() {});
+                  }
+
+                  Widget row(String title, String code, VoidCallback onTap, {
+                    bool selected = false, String? detail, Widget? trailing,
+                  }) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 7),
+                      decoration: BoxDecoration(
+                        color: selected ? playerGold.withValues(alpha: 0.12) : const Color(0x33141414),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: selected ? playerGold : const Color(0x25FFFFFF)),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 1),
+                        title: Text(title, style: TextStyle(
+                          color: selected ? playerGoldLight : playerWhite,
+                          fontSize: 14, fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                        )),
+                        subtitle: detail == null || detail.isEmpty ? null : Text(
+                          detail, maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Color(0x88FFFFFF), fontSize: 10),
+                        ),
+                        trailing: trailing ?? (selected
+                          ? const Icon(Icons.check_rounded, color: playerGoldLight)
+                          : const Icon(Icons.circle_outlined, color: Color(0x55FFFFFF))),
+                        onTap: onTap,
+                      ),
+                    );
+                  }
+
+                  return Material(
+                    color: Colors.transparent,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0x66101010),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.48)),
+                          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 28)],
+                        ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(17, 13, 12, 8),
+                              child: Row(
+                                children: [
+                                  const Expanded(child: Text('Subtitle', style: TextStyle(
+                                    color: playerWhite, fontSize: 21, fontWeight: FontWeight.w800,
+                                  ))),
+                                  Switch.adaptive(
+                                    value: _subtitleVisibilityEnabled,
+                                    activeThumbColor: Colors.black,
+                                    activeTrackColor: playerGold,
+                                    inactiveThumbColor: Colors.white70,
+                                    inactiveTrackColor: const Color(0xFF454545),
+                                    onChanged: (value) async {
+                                      await _setSubtitleVisibility(value);
+                                      if (sheetContext.mounted) updateSheet(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 1, color: Color(0x28FFFFFF)),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(15, 12, 15, 10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    const Text('Choose language', style: TextStyle(
+                                      color: Color(0x99FFFFFF), fontSize: 11,
+                                    )),
+                                    const SizedBox(height: 9),
+                                    if (entries.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 18),
+                                        child: Text(
+                                          (_automaticSubtitleLoading && !widget.movie.isMovieBox) ? 'Finding available languages…' :
+                                            (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                        ),
+                                      )
+                                    else
+                                      ...entries.entries.map((entry) {
+                                        final item = entry.value;
+                                        final code = entry.key;
+                                        final active = _selectedSubtitleLanguageCode.toLowerCase() == code &&
+                                            _subtitleVisibilityEnabled;
+                                        return row(
+                                          _subtitleLanguageName((item['language'] ?? code).toString()), code,
+                                          () => choose(item),
+                                          selected: active,
+                                          detail: (item['releaseName'] ?? '').toString(),
+                                        );
+                                      }),
+                                    const SizedBox(height: 8),
+                                    row('Import subtitle file', 'import', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _importSubtitleFile();
+                                    }, detail: 'Load a subtitle from your device',
+                                      trailing: const Icon(Icons.file_upload_outlined, color: playerGoldLight)),
+                                    row('Add subtitle URL', 'external', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _addExternalSubtitle();
+                                    }, detail: 'Load a subtitle from a web URL',
+                                      trailing: const Icon(Icons.link_rounded, color: playerGoldLight)),
+                                    row('Download Subtitle', 'download', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleDownloadPanel();
+                                    }, detail: 'Browse available subtitles',
+                                      trailing: const Icon(Icons.download_rounded, color: playerGoldLight)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const Divider(height: 1, color: Color(0x28FFFFFF)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                              child: Row(
+                                children: [
+                                  Expanded(child: TextButton.icon(
+                                    onPressed: () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleStyleSettings();
+                                    },
+                                    icon: const Icon(Icons.palette_outlined, size: 17),
+                                    label: const Text('Style'),
+                                    style: TextButton.styleFrom(foregroundColor: playerGoldLight),
+                                  )),
+                                  Container(width: 1, height: 23, color: const Color(0x33FFFFFF)),
+                                  Expanded(child: TextButton.icon(
+                                    onPressed: () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleDelaySettings();
+                                    },
+                                    icon: const Icon(Icons.sync_alt_rounded, size: 17),
+                                    label: const Text('Delay'),
+                                    style: TextButton.styleFrom(foregroundColor: playerGoldLight),
+                                  )),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                    title: Text(
-                      label,
-                      style: const TextStyle(color: playerWhite),
-                    ),
-                    onTap: () => _selectSubtitleTrack(track),
                   );
-                }),
-                ListTile(
-                  leading: const Icon(Icons.tune_rounded, color: playerGoldLight),
-                  title: const Text('Subtitle Appearance', style: TextStyle(color: playerWhite)),
-                  subtitle: const Text(
-                    'Arial · Size · Colour · Background · Sync',
-                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-                  ),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showSubtitleStyleSettings();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.file_open_rounded, color: playerGold),
-                  title: const Text('Import Subtitle File', style: TextStyle(color: playerWhite)),
-                  subtitle: const Text('Choose a subtitle downloaded to your phone',
-                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
-                  onTap: _importSubtitleFile,
-                ),
-                ListTile(
-                  leading: const Icon(Icons.link_rounded, color: playerGoldLight),
-                  title: const Text('Add Subtitle URL', style: TextStyle(color: playerWhite)),
-                  onTap: _addExternalSubtitle,
-                ),
-              ],
-                ),
+                },
               ),
             ),
           ),
         );
       },
-    );
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slide = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        return FadeTransition(opacity: animation, child: SlideTransition(position: slide, child: child));
+      },
+    ).whenComplete(_startHideTimer);
+    if (_automaticSubtitleOptions.isEmpty && !_automaticSubtitleLoading) {
+      _ensureAutomaticEnglishSubtitle();
+    }
+  }
+
+  void _showSubtitleDownloadPanel() {
+    _cancelHideTimer();
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close subtitle downloads',
+      barrierColor: Colors.black.withValues(alpha: 0.62),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        final landscape = screen.width >= screen.height;
+        final panelWidth = landscape
+            ? (screen.width * 0.46).clamp(360.0, 540.0).toDouble()
+            : screen.width * 0.95;
+        final panelHeight = landscape ? screen.height * 0.94 : screen.height * 0.84;
+        var selectedLanguage = 'all';
+        var downloading = '';
+        var message = _automaticSubtitleMessage ?? '';
+        var subtitleRefreshStarted = false;
+        return SafeArea(
+          child: Align(
+            alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
+            child: SizedBox(
+              width: panelWidth,
+              height: panelHeight,
+              child: StatefulBuilder(
+                builder: (sheetContext, updateSheet) {
+                  if (widget.movie.isMovieBox && !subtitleRefreshStarted) {
+                    subtitleRefreshStarted = true;
+                    unawaited(() async {
+                      if (_automaticSubtitleOptions.isEmpty &&
+                          !_automaticSubtitleLoading) {
+                        await _ensureAutomaticEnglishSubtitle();
+                      } else {
+                        for (var attempt = 0;
+                            attempt < 50 && _automaticSubtitleLoading;
+                            attempt++) {
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 100),
+                          );
+                        }
+                      }
+                      if (sheetContext.mounted) updateSheet(() {});
+                    }());
+                  }
+                  final languages = <Map<String, String>>[
+                    {'code': 'all', 'label': 'All'},
+                  ];
+                  final seenLanguages = <String>{'all'};
+                  for (final option in _automaticSubtitleOptions) {
+                    final code = (option['language'] ?? '')
+                        .toString()
+                        .trim()
+                        .toLowerCase();
+                    if (code.isEmpty || !seenLanguages.add(code)) continue;
+                    languages.add({
+                      'code': code,
+                      'label': _subtitleLanguageName(code),
+                    });
+                  }
+                  final results = _automaticSubtitleOptions.where((option) {
+                    final code = (option['language'] ?? '').toString().toLowerCase();
+                    final languageOk = selectedLanguage == 'all' || code == selectedLanguage ||
+                      (selectedLanguage == 'bn' && code == 'ben') ||
+                      (selectedLanguage == 'en' && code == 'eng') ||
+                      (selectedLanguage == 'hi' && code == 'hin');
+                    return languageOk;
+                  }).toList(growable: false);
+
+                  return Material(
+                    color: Colors.transparent,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xF20A0A0A),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.48)),
+                          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 28)],
+                        ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(13, 12, 12, 10),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    onPressed: () => Navigator.of(sheetContext).pop(),
+                                    icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
+                                  ),
+                                  const Expanded(child: Text('Download Subtitle', style: TextStyle(
+                                    color: playerWhite, fontSize: 19, fontWeight: FontWeight.w800,
+                                  ))),
+                                ],
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  widget.movie.isMovieBox ? 'Available subtitles' : 'Available subtitle tracks',
+                                  style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              height: 42,
+                              child: ListView.separated(
+                                padding: const EdgeInsets.symmetric(horizontal: 14),
+                                scrollDirection: Axis.horizontal,
+                                itemCount: languages.length,
+                                separatorBuilder: (_, __) => const SizedBox(width: 7),
+                                itemBuilder: (context, index) {
+                                  final item = languages[index];
+                                  final active = selectedLanguage == item['code'];
+                                  return ChoiceChip(
+                                    label: Text(item['label']!),
+                                    selected: active,
+                                    showCheckmark: false,
+                                    selectedColor: playerGold,
+                                    backgroundColor: const Color(0xFF202020),
+                                    side: BorderSide(color: active ? playerGoldLight : const Color(0x22FFFFFF)),
+                                    labelStyle: TextStyle(
+                                      color: active ? Colors.black : playerWhite,
+                                      fontSize: 11, fontWeight: FontWeight.w700,
+                                    ),
+                                    onSelected: (_) => updateSheet(() => selectedLanguage = item['code']!),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            if (_automaticSubtitleLoading) const LinearProgressIndicator(
+                              minHeight: 2, color: playerGold, backgroundColor: Color(0x22FFFFFF),
+                            ),
+                            Expanded(
+                              child: results.isEmpty
+                                  ? Center(child: Padding(
+                                      padding: const EdgeInsets.all(22),
+                                      child: Text(
+                                        _automaticSubtitleLoading ? 'Loading available subtitles…' :
+                                          (message.isNotEmpty ? message : 'No subtitles are available for this title or episode.'),
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                      ),
+                                    ))
+                                  : ListView.separated(
+                                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 18),
+                                      itemCount: results.length,
+                                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x20FFFFFF)),
+                                      itemBuilder: (context, index) {
+                                        final option = results[index];
+                                        final code = (option['language'] ?? '').toString();
+                                        final release = (option['releaseName'] ?? option['fileName'] ?? 'Subtitle release').toString();
+                                        final identity = code + '_' + release;
+                                        final busy = downloading == identity;
+                                        return Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 11),
+                                          child: Row(
+                                            children: [
+                                              Expanded(child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(release, maxLines: 3, overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(color: playerWhite, fontSize: 13, fontWeight: FontWeight.w600)),
+                                                  const SizedBox(height: 4),
+                                                  Text(_subtitleLanguageName(code),
+                                                    style: const TextStyle(color: Color(0x88FFFFFF), fontSize: 10)),
+                                                ],
+                                              )),
+                                              const SizedBox(width: 8),
+                                              IconButton(
+                                                tooltip: 'Download and apply subtitle',
+                                                onPressed: downloading.isNotEmpty ? null : () async {
+                                                  updateSheet(() => downloading = identity);
+                                                  await _selectAutomaticSubtitleLanguage(option);
+                                                  if (mounted && !_isDisposed &&
+                                                      _selectedSubtitleLanguageCode == code &&
+                                                      _subtitleVisibilityEnabled &&
+                                                      (_automaticSubtitleMessage ?? '').contains('track active')) {
+                                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                                      content: Text(_subtitleLanguageName(code) + ' subtitle downloaded and applied.'),
+                                                    ));
+                                                  }
+                                                  if (sheetContext.mounted) updateSheet(() => downloading = '');
+                                                },
+                                                icon: busy ? const SizedBox(
+                                                  width: 19, height: 19,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, color: playerGoldLight),
+                                                ) : const Icon(Icons.file_download_outlined, color: playerGoldLight, size: 24),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slide = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        return FadeTransition(opacity: animation, child: SlideTransition(position: slide, child: child));
+      },
+    ).whenComplete(_startHideTimer);
   }
 
   Future<void> _loadApplicationBrightness() async {
