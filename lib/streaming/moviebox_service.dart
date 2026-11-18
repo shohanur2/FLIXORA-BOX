@@ -190,7 +190,7 @@ class MovieBoxService {
       () => _retry(
         () => SparkBoxCore.playDetail(item),
         isUsable: (value) => value.isNotEmpty,
-        maxAttempts: 2,
+        maxAttempts: 1,
       ),
     );
   }
