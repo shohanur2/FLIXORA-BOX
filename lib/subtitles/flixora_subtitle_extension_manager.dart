@@ -108,7 +108,7 @@ class FlixoraSubtitleExtensionManager {
     int retryAfterSeconds = 0,
   }) async {
     final duration = statusCode == 429
-        ? Duration(seconds: retryAfterSeconds.clamp(60, 21600))
+        ? Duration(seconds: retryAfterSeconds.clamp(60, 21600).toInt())
         : (statusCode == 401 || statusCode == 403)
             ? const Duration(minutes: 30)
             : statusCode >= 500
@@ -130,7 +130,7 @@ class FlixoraSubtitleExtensionManager {
 
   Duration _cooldownFor(_ExtensionHttpFailure failure) {
     if (failure.statusCode == 429) {
-      final seconds = failure.retryAfterSeconds.clamp(60, 21600);
+      final seconds = failure.retryAfterSeconds.clamp(60, 21600).toInt();
       return Duration(seconds: seconds);
     }
     if (failure.statusCode == 401 || failure.statusCode == 403) {
