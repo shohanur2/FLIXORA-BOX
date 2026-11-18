@@ -1,5 +1,6 @@
 import { unzipSync } from "npm:fflate@0.8.2";
 
+// Subtitle backend restored from the verified FLIXORA Build #1346 source.
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
