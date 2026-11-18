@@ -5315,12 +5315,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     // Start MovieBox and Admin resolution together. The previous sequential
     // flow waited for MovieBox search before even asking Supabase.
-    final movieBoxLookup = _searchMovieBoxMatch(requested)
-        .timeout(
-          const Duration(seconds: 5),
-          onTimeout: () => null,
-        )
-        .catchError((_) => null);
+    // A known Admin entry must be validated against Supabase directly.
+    // Searching MovieBox as well adds up to five seconds without changing the
+    // selected source, because the Admin source/publication state takes priority.
+    final movieBoxLookup = cachedAdmin != null || requested.isFlixora
+        ? Future<Movie?>.value(null)
+        : _searchMovieBoxMatch(requested)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => null,
+            )
+            .catchError((_) => null);
     final adminLookup = client == null
         ? Future<Movie?>.value(null)
         : _resolvePublishedAdminFallback(requested)
