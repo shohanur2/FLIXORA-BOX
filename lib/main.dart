@@ -34,6 +34,7 @@ import 'streaming/trending_movie_eligibility.dart';
 import 'player/picture_in_picture_service.dart';
 import 'player/playback_error_policy.dart';
 import 'services/catalog_visibility_service.dart';
+import 'services/notification_service.dart';
 
 SupabaseClient? supabaseClient;
 
@@ -46,6 +47,7 @@ const String authRedirectUrl =
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  unawaited(FlixoraNotificationService.initialize());
 
   if (supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty) {
     try {
@@ -2930,6 +2932,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _saveBoolSetting(String key, bool value, void Function(bool) update) async {
+    if (key == 'flixora_notifications') {
+      final enabled = value
+          ? await FlixoraNotificationService.enable()
+          : false;
+      if (!value) await FlixoraNotificationService.disable();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(key, enabled);
+      if (mounted) setState(() => update(enabled));
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(key, value);
     if (mounted) setState(() => update(value));
@@ -4934,6 +4946,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         onComplete: (path) async {
           completed = true;
           final fileSize = await File(path).length();
+          unawaited(FlixoraNotificationService.showDownloadComplete(
+            title: task.displayTitle,
+            uniqueId: downloadId,
+          ));
           if (!mounted) return;
           setState(() {
             task
