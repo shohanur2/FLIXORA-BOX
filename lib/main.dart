@@ -5488,13 +5488,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return;
       }
 
-      if (selectedMovie.isMovieBox &&
-          !_hasCompletedLocalDownload(selectedMovie)) {
-        unawaited(MovieBoxService.prewarm(
-          selectedMovie.toMovieBoxMap(),
-          isSeries: selectedMovie.movieBoxIsSeries,
-        ));
-      }
       await _openResolvedPlayer(selectedMovie, movie);
     } finally {
       _endTitleOpening();
@@ -13029,7 +13022,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         episode: widget.movie.movieBoxIsSeries ? targetEpisode : 0,
         openPlayer: true,
         playerConfiguration: playerConfiguration,
-        allowStartupRetry: allowStartupRetry,
       );
 
       if (widget.movie.movieBoxIsSeries) {
@@ -13239,7 +13231,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int episode,
     required bool openPlayer,
     Future<void>? playerConfiguration,
-    bool allowStartupRetry = false,
   }) async {
     if (openPlayer) {
       _bufferingRecoveryTimer?.cancel();
@@ -13389,17 +13380,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         }
       }
     } catch (error) {
-      if (allowStartupRetry && openPlayer && !_initialized &&
-          mounted && !_isDisposed &&
-          requestToken == _movieBoxPlaybackRequestToken) {
-        debugPrint('MovieBox initial stream failed; retrying with fresh playback details: $error');
-        await _prepareMovieBoxPlayback(
-          playerConfiguration: playerConfiguration,
-          forceRefreshDetail: true,
-          allowStartupRetry: false,
-        );
-        return;
-      }
       debugPrint('MovieBox stream resolution failed: $error');
       if (mounted && !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
