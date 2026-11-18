@@ -14,7 +14,7 @@ if 'pub(crate) async fn streams_fast_impl' not in source:
     ) -> Result<StreamsResult> {
         *self.last_note.lock().unwrap() = String::new();
         let mut subtitles: Vec<SubtitleLink> = Vec::new();
-        let mut cap_keys: Vec<(String, String)> = Vec::new();
+        let mut cap_keys: Vec<(String, String, i64, i64, String)> = Vec::new();
         let attempts: &[(i64, i64)] = if is_series { &[(se, ep)] } else { &[(0, 0), (1, 1)] };
         let mut links: Vec<StreamLink> = Vec::new();
         for (season, episode) in attempts {
