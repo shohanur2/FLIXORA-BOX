@@ -17231,7 +17231,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                         final active = _selectedSubtitleLanguageCode.toLowerCase() == code &&
                                             _subtitleVisibilityEnabled;
                                         return row(
-                                          _subtitleLanguageName(code), code,
+                                          _subtitleLanguageName((item['language'] ?? code).toString()), code,
                                           () => choose(item),
                                           selected: active,
                                           detail: (item['releaseName'] ?? '').toString(),
