@@ -14821,29 +14821,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     setState(() => _volume = volume);
   }
 
-  Future<void> _enterPictureInPicture() async {
-    if (_isDisposed) return;
-    if (!widget.enablePip || !_isPlaying) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Picture-in-picture is available while a video is playing.'),
-          ),
-        );
-      }
-      return;
-    }
-
-    final entered = await PictureInPictureService.enter();
-    if (!entered && mounted && !_isDisposed) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Picture-in-picture is not available on this device.'),
-        ),
-      );
-    }
-  }
-
   Future<void> _toggleMiniPlayer() async {
     if (_isDisposed) return;
     if (_isMiniPlayer) {
@@ -18238,7 +18215,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       tooltip: 'Picture-in-picture',
                       icon: Icons.picture_in_picture_alt_rounded,
                       color: playerGoldLight,
-                      onPressed: _enterPictureInPicture,
+                      onPressed: _toggleMiniPlayer,
                     ),
                   if (!compact) ...[
                     compactAction(
@@ -18455,7 +18432,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               child: IconButton(
                 tooltip: 'Picture-in-picture',
                 visualDensity: VisualDensity.compact,
-                onPressed: _enterPictureInPicture,
+                onPressed: _toggleMiniPlayer,
                 icon: Icon(
                   _isMiniPlayer
                       ? Icons.open_in_full_rounded
