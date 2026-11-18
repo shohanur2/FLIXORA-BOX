@@ -1,5 +1,21 @@
 {
   "schemaVersion": 1,
   "protocol": "stremio-addon-v1",
-  "addons": []
+  "addons": [
+    {
+      "id": "com.subtitles.website",
+      "name": "Subtitle Search Engine",
+      "manifestUrl": "https://subtitles.website/stremio/manifest.json",
+      "enabled": true,
+      "priority": 10,
+      "languages": [
+        "en",
+        "bn"
+      ],
+      "types": [
+        "movie",
+        "series"
+      ]
+    }
+  ]
 }
