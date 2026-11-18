@@ -16961,7 +16961,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                         padding: const EdgeInsets.symmetric(vertical: 18),
                                         child: Text(
                                           _automaticSubtitleLoading ? 'Finding available languages…' :
-                                            (_automaticSubtitleMessage ?? 'No tracks yet. Open Download Subtitle to search.'),
+                                            (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No MovieBox subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
                                           textAlign: TextAlign.center,
                                           style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
                                         ),
@@ -16993,7 +16993,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                     row('Download Subtitle', 'download', () {
                                       Navigator.of(sheetContext).pop();
                                       _showSubtitleDownloadPanel();
-                                    }, detail: 'Search by title, language and release',
+                                    }, detail: 'Browse available MovieBox subtitles',
                                       trailing: const Icon(Icons.download_rounded, color: playerGoldLight)),
                                   ],
                                 ),
@@ -17063,7 +17063,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ? (screen.width * 0.46).clamp(360.0, 540.0).toDouble()
             : screen.width * 0.95;
         final panelHeight = landscape ? screen.height * 0.94 : screen.height * 0.84;
-        var searchText = widget.movie.title;
         var selectedLanguage = 'all';
         var downloading = '';
         var message = _automaticSubtitleMessage ?? '';
@@ -17085,7 +17084,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               height: panelHeight,
               child: StatefulBuilder(
                 builder: (sheetContext, updateSheet) {
-                  final query = searchText.trim().toLowerCase();
                   final results = _automaticSubtitleOptions.where((option) {
                     final code = (option['language'] ?? '').toString().toLowerCase();
                     final release = (option['releaseName'] ?? '').toString().toLowerCase();
@@ -17094,8 +17092,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       (selectedLanguage == 'bn' && code == 'ben') ||
                       (selectedLanguage == 'en' && code == 'eng') ||
                       (selectedLanguage == 'hi' && code == 'hin');
-                    return languageOk && (query.isEmpty || release.contains(query) ||
-                      file.contains(query) || _subtitleLanguageName(code).toLowerCase().contains(query));
+                    return languageOk;
                   }).toList(growable: false);
 
                   Future<void> search() async {
@@ -17132,37 +17129,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                               ),
                             ),
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-                              child: Row(
-                                children: [
-                                  Expanded(child: TextFormField(
-                                    initialValue: searchText,
-                                    onChanged: (value) => searchText = value,
-                                    style: const TextStyle(color: playerWhite, fontSize: 13),
-                                    decoration: InputDecoration(
-                                      hintText: 'Search movie or episode',
-                                      hintStyle: const TextStyle(color: Color(0x77FFFFFF)),
-                                      prefixIcon: const Icon(Icons.search_rounded, color: playerGoldLight),
-                                      filled: true,
-                                      fillColor: const Color(0xFF1B1B1B),
-                                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(13),
-                                        borderSide: BorderSide.none,
-                                      ),
-                                    ),
-                                  )),
-                                  const SizedBox(width: 8),
-                                  FilledButton(
-                                    onPressed: _automaticSubtitleLoading ? null : search,
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: playerGold, foregroundColor: Colors.black,
-                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                    ),
-                                    child: const Text('Search', style: TextStyle(fontWeight: FontWeight.w800)),
-                                  ),
-                                ],
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  widget.movie.isMovieBox ? 'Available MovieBox subtitles' : 'Available subtitle tracks',
+                                  style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                ),
                               ),
                             ),
                             SizedBox(
@@ -17200,8 +17173,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                   ? Center(child: Padding(
                                       padding: const EdgeInsets.all(22),
                                       child: Text(
-                                        _automaticSubtitleLoading ? 'Searching subtitle providers…' :
-                                          (message.isNotEmpty ? message : 'No results yet. Tap Search to find subtitles.'),
+                                        _automaticSubtitleLoading ? 'Loading MovieBox subtitles…' :
+                                          (message.isNotEmpty ? message : 'No MovieBox subtitles are available for this title or episode.'),
                                         textAlign: TextAlign.center,
                                         style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
                                       ),
