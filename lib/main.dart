@@ -5282,51 +5282,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return matching.isEmpty ? <dynamic>[] : [matching.first];
   }
 
-  /// Resolve every entry point to the same Admin-managed movie record.
-  /// TMDB IDs are external IDs; video qualities are keyed by movies.id.
+  /// Resolve playback from the MovieBox catalogue only. Admin/Supabase
+  /// is intentionally not queried from the Visitor App playback path.
   Future<Movie?> _resolveMovieForOpening(Movie requested) async {
-    final client = supabaseClient;
     final cachedMovieBox = _cachedMovieBoxMatch(requested);
-    final cachedAdmin = _cachedFlixoraMatch(requested);
-
     if (cachedMovieBox != null && cachedMovieBox.isMovieBox) {
-      return CatalogSourcePolicy.preferMovieBox<Movie>(
-        movieBoxMatch: cachedMovieBox.withFallbackMetadata(
-          cachedAdmin ?? requested,
-        ),
-        publishedAdminFallback: null,
-      );
+      return cachedMovieBox.withFallbackMetadata(requested);
     }
 
     if (!_online) {
-      if (requested.isFlixora &&
-          !CatalogSourcePolicy.isAdminBlocked(
-            isAdmin: true,
-            visibilityKey: _catalogVisibilityKey(requested),
-            blockedKeys: _unpublishedCatalogKeys,
-          )) {
-        return requested;
-      }
-      if (cachedAdmin != null) return cachedAdmin;
-      if (!requested.isFlixora && requested.hasPlayableVideoUrl) {
+      if (requested.hasPlayableVideoUrl && !requested.isFlixora) {
         return requested;
       }
       return null;
     }
 
-    // Start the secondary Admin lookup in parallel, but never wait for it
-    // when MovieBox/WeFeed finds the primary playable match.
-    final adminLookup = client == null
-        ? Future<Movie?>.value(cachedAdmin)
-        : _resolvePublishedAdminFallback(requested)
-            .timeout(
-              const Duration(seconds: 5),
-              onTimeout: () => null,
-            )
-            .catchError((_) => null);
-
-    // MovieBox/WeFeed remains the primary source. Returning as soon as this
-    // lookup succeeds avoids adding Supabase latency to poster-to-playback.
     final movieBoxMatch = await _searchMovieBoxMatch(requested)
         .timeout(
           const Duration(seconds: 5),
@@ -5334,26 +5304,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         )
         .catchError((_) => null);
     if (movieBoxMatch != null && movieBoxMatch.isMovieBox) {
-      return CatalogSourcePolicy.preferMovieBox<Movie>(
-        movieBoxMatch: movieBoxMatch.withFallbackMetadata(
-          cachedAdmin ?? requested,
-        ),
-        publishedAdminFallback: null,
-      );
+      return movieBoxMatch.withFallbackMetadata(requested);
     }
 
-    // Admin/Supabase is consulted only as a fallback when MovieBox has no
-    // playable match.
-    final adminMatch = await adminLookup;
-    if (adminMatch != null) {
-      return CatalogSourcePolicy.preferMovieBox<Movie>(
-        movieBoxMatch: null,
-        publishedAdminFallback: adminMatch,
-      );
-    }
-
-    // A stale Admin card must not remain playable after its row is deleted
-    // or unpublished. Non-Admin direct sources remain valid fallbacks.
     if (requested.isFlixora) return null;
     if (requested.hasPlayableVideoUrl) return requested;
     return null;
@@ -5489,10 +5442,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
 
       if (selectedMovie.isMovieBox &&
+          !selectedMovie.movieBoxIsSeries &&
           !_hasCompletedLocalDownload(selectedMovie)) {
+        // For movies, pre-resolve the exact stream in parallel with player
+        // navigation. For series, avoid warming episode 1 when the visitor
+        // may be resuming a different saved episode.
         unawaited(MovieBoxService.prewarm(
           selectedMovie.toMovieBoxMap(),
-          isSeries: selectedMovie.movieBoxIsSeries,
+          isSeries: false,
         ));
       }
       await _openResolvedPlayer(selectedMovie, movie);
@@ -12995,7 +12952,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final detailFuture = MovieBoxService.playDetail(
         rawItem,
         forceRefresh: forceRefreshDetail,
-      ).timeout(const Duration(seconds: 18));
+      ).timeout(const Duration(seconds: 12));
       final seasonsFuture = widget.movie.movieBoxIsSeries
           ? MovieBoxService.seasons(widget.movie.movieBoxId)
               .timeout(const Duration(seconds: 18))
@@ -13214,8 +13171,27 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return label.split(' · ').first.trim();
   }
 
+  List<Map<String, String>> _prioritizeMovieBoxQualities(
+    Iterable<Map<String, String>> values,
+  ) {
+    // Keep 720p and lower. Unknown labels remain as last-resort sources;
+    // known 1080p/2K/4K options are intentionally not selected.
+    final options = values.where((item) {
+      final rank = VideoQualityService.rank(item['quality'] ?? '');
+      return rank <= 720;
+    }).toList(growable: false);
+    options.sort((a, b) {
+      final rankA = VideoQualityService.rank(a['quality'] ?? '');
+      final rankB = VideoQualityService.rank(b['quality'] ?? '');
+      if (rankA == 0 && rankB != 0) return 1;
+      if (rankB == 0 && rankA != 0) return -1;
+      return rankB.compareTo(rankA);
+    });
+    return options;
+  }
+
   List<Map<String, String>> _movieBoxOptionsForLanguage(String language) {
-    return _movieBoxAllLinks.where((link) {
+    final options = _movieBoxAllLinks.where((link) {
       return _movieBoxVariant(link) == language;
     }).map((link) {
       final headers = link['headers'] is Map
@@ -13230,7 +13206,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         'video_url': (link['url'] ?? '').toString(),
         'headers': jsonEncode(headers),
       };
-    }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+    }).where((item) => item['video_url']!.isNotEmpty);
+    return _prioritizeMovieBoxQualities(options);
   }
 
   Future<void> _loadMovieBoxStreams({
@@ -13290,7 +13267,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             episode: episode,
             isSeries: widget.movie.movieBoxIsSeries,
             forceRefresh: attempt > 0,
-          ).timeout(const Duration(seconds: 15));
+          ).timeout(const Duration(seconds: 12));
         } catch (error) {
           if (attempt == 0) {
             debugPrint('MovieBox stream request failed; refreshing once: $error');
@@ -13341,23 +13318,25 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 languages.contains(_selectedMovieBoxLanguage)
             ? _selectedMovieBoxLanguage!
             : (languages.contains('Original') ? 'Original' : languages.first);
-        final options = links.where((link) {
-          return _movieBoxVariant(link) == selectedLanguage;
-        }).map((link) {
-          final headers = link['headers'] is Map
-              ? Map<String, String>.from(
-                  (link['headers'] as Map).map(
-                    (key, value) =>
-                        MapEntry(key.toString(), value.toString()),
-                  ),
-                )
-              : <String, String>{};
-          return <String, String>{
-            'quality': (link['label'] ?? 'Original').toString(),
-            'video_url': (link['url'] ?? '').toString(),
-            'headers': jsonEncode(headers),
-          };
-        }).where((item) => item['video_url']!.isNotEmpty).toList(growable: false);
+        final options = _prioritizeMovieBoxQualities(
+          links.where((link) {
+            return _movieBoxVariant(link) == selectedLanguage;
+          }).map((link) {
+            final headers = link['headers'] is Map
+                ? Map<String, String>.from(
+                    (link['headers'] as Map).map(
+                      (key, value) =>
+                          MapEntry(key.toString(), value.toString()),
+                    ),
+                  )
+                : <String, String>{};
+            return <String, String>{
+              'quality': (link['label'] ?? 'Original').toString(),
+              'video_url': (link['url'] ?? '').toString(),
+              'headers': jsonEncode(headers),
+            };
+          }).where((item) => item['video_url']!.isNotEmpty),
+        );
         if (options.isEmpty) {
           throw StateError('No playable quality was returned for $selectedLanguage.');
         }
