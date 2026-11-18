@@ -13174,17 +13174,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   List<Map<String, String>> _prioritizeMovieBoxQualities(
     Iterable<Map<String, String>> values,
   ) {
-    // Keep 720p and lower. Unknown labels remain as last-resort sources;
-    // known 1080p/2K/4K options are intentionally not selected.
+    // Keep only explicitly identified 720p-and-lower sources. This avoids
+    // accidentally selecting an unlabelled high-resolution stream.
     final options = values.where((item) {
       final rank = VideoQualityService.rank(item['quality'] ?? '');
-      return rank <= 720;
+      return rank > 0 && rank <= 720;
     }).toList(growable: false);
     options.sort((a, b) {
       final rankA = VideoQualityService.rank(a['quality'] ?? '');
       final rankB = VideoQualityService.rank(b['quality'] ?? '');
-      if (rankA == 0 && rankB != 0) return 1;
-      if (rankB == 0 && rankA != 0) return -1;
       return rankB.compareTo(rankA);
     });
     return options;
