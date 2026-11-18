@@ -5313,28 +5313,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return null;
     }
 
-    // Start MovieBox and Admin resolution together. The previous sequential
-    // flow waited for MovieBox search before even asking Supabase.
-    final movieBoxLookup = _searchMovieBoxMatch(requested)
+    // MovieBox/WeFeed is the primary playback source. Resolve it first and
+    // avoid delaying its startup while a secondary Admin lookup is running.
+    final movieBoxMatch = await _searchMovieBoxMatch(requested)
         .timeout(
           const Duration(seconds: 5),
           onTimeout: () => null,
         )
         .catchError((_) => null);
-    final adminLookup = client == null
-        ? Future<Movie?>.value(null)
-        : _resolvePublishedAdminFallback(requested)
-            .timeout(
-              const Duration(seconds: 5),
-              onTimeout: () => null,
-            )
-            .catchError((_) => null);
-
-    final resolved = await Future.wait<Movie?>([
-      movieBoxLookup,
-      adminLookup,
-    ]);
-    final movieBoxMatch = resolved[0];
     if (movieBoxMatch != null && movieBoxMatch.isMovieBox) {
       return CatalogSourcePolicy.preferMovieBox<Movie>(
         movieBoxMatch: movieBoxMatch.withFallbackMetadata(
@@ -5344,9 +5330,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    // When Supabase is reachable, trust its publication result. Only use a
-    // cached Admin row when no Supabase client is configured at all.
-    final adminMatch = resolved[1] ?? (client == null ? cachedAdmin : null);
+    // Only check the secondary Admin source if the primary MovieBox lookup
+    // did not find a playable match.
+    final adminMatch = client == null
+        ? cachedAdmin
+        : await _resolvePublishedAdminFallback(requested)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => null,
+            )
+            .catchError((_) => null);
     if (adminMatch != null) {
       return CatalogSourcePolicy.preferMovieBox<Movie>(
         movieBoxMatch: null,
