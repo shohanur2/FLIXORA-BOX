@@ -74,8 +74,9 @@ class FlixoraSubtitleExtensionResult {
 class FlixoraSubtitleExtensionManager {
   FlixoraSubtitleExtensionManager({
     http.Client? client,
-    this.registryUrl = defaultRegistryUrl,
-  }) : _client = client ?? http.Client();
+    Uri? registryUrl,
+  })  : _client = client ?? http.Client(),
+        registryUrl = registryUrl ?? defaultRegistryUrl;
 
   static final Uri defaultRegistryUrl = Uri.parse(
     'https://raw.githubusercontent.com/shohanur2/FLIXORA-BOX/'
