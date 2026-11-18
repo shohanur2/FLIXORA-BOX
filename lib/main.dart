@@ -11777,6 +11777,7 @@ class MoviePlayerScreen extends StatefulWidget {
 }
 
 class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindingObserver {
+  // Temporary startup timing instrumentation for this diagnostic build only.
   final Stopwatch _startupTotalWatch = Stopwatch();
   final Stopwatch _startupPlayerConfigWatch = Stopwatch();
   final Map<String, String> _startupStageResults = <String, String>{};
