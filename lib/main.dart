@@ -4063,6 +4063,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // ignore: unused_element
   Future<void> _toggleFavourite(Movie movie) async {
     setState(() {
       if (_favourites.contains(movie.id)) {
@@ -5500,6 +5501,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  // ignore: unused_element
   Future<void> _playResolvedMovie(
     Movie selectedMovie,
     Movie requestedMovie,
@@ -16880,16 +16882,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _setSubtitleVisibility(bool enabled) async {
     try {
+      final currentTrack = _player.state.track.subtitle;
+      final selectedTrack = enabled
+          ? (_automaticEnglishTrack ??
+              (currentTrack.id != 'no' ? currentTrack : SubtitleTrack.auto()))
+          : SubtitleTrack.no();
+
+      // Apply visibility through the player track API on every platform,
+      // then mirror it to libmpv on Android so the switch always controls
+      // the active subtitle track as well as native subtitle rendering.
+      await _player.setSubtitleTrack(selectedTrack);
       final native = _player.platform;
       if (native is NativePlayer) {
         await native.setProperty('sub-visibility', enabled ? 'yes' : 'no');
-      } else {
-        await _player.setSubtitleTrack(
-          enabled ? (_automaticEnglishTrack ?? SubtitleTrack.auto()) : SubtitleTrack.no(),
-        );
       }
+
       if (!mounted || _isDisposed) return;
-      setState(() => _subtitleVisibilityEnabled = enabled);
+      setState(() {
+        if (enabled && selectedTrack.id != 'auto' && selectedTrack.id != 'no') {
+          _automaticEnglishTrack = selectedTrack;
+        }
+        _subtitleVisibilityEnabled = enabled;
+      });
     } catch (error) {
       if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
