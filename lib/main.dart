@@ -5480,7 +5480,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       }
 
+      final sourceResolutionWatch = Stopwatch()..start();
       final selectedMovie = await _resolveMovieForOpening(movie);
+      debugPrint(
+        'FLIXORA_STARTUP_METRIC source_resolution_ms=${sourceResolutionWatch.elapsedMilliseconds}',
+      );
       if (!mounted) return;
 
       if (selectedMovie == null) {
@@ -12989,6 +12993,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       });
     }
     try {
+      final movieBoxDetailWatch = Stopwatch()..start();
       final rawItem = widget.movie.toMovieBoxMap();
       final detailFuture = MovieBoxService.playDetail(rawItem)
           .timeout(const Duration(seconds: 18));
@@ -13006,6 +13011,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       // is only needed for the selector. Start resolving the selected stream
       // as soon as the required detail is ready instead of waiting for both.
       _movieBoxDetail = Map<String, dynamic>.from(await detailFuture as Map);
+      debugPrint(
+        'FLIXORA_STARTUP_METRIC moviebox_detail_resolution_ms=${movieBoxDetailWatch.elapsedMilliseconds}',
+      );
       if (_isDisposed) return;
 
       // Movie playback has no episode selection to restore. Skip the
@@ -13273,6 +13281,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
 
+    final movieBoxStreamWatch = Stopwatch()..start();
     try {
       for (var attempt = 0; attempt < 2; attempt++) {
         Map<String, dynamic> result;
@@ -13291,6 +13300,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           }
           rethrow;
         }
+        debugPrint(
+          'FLIXORA_STARTUP_METRIC moviebox_stream_resolution_ms=${movieBoxStreamWatch.elapsedMilliseconds}',
+        );
         if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) return;
 
         final rawLinks = result['links'] as List? ?? const [];
@@ -13414,6 +13426,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     Object? lastError;
 
     _isOpening = true;
+    final mpvStartupWatch = Stopwatch()..start();
+    final firstVideoParamsFuture = _player.stream.videoParams.first;
     _automaticSubtitleRequestToken++;
     _automaticSubtitleLoading = false;
     _automaticEnglishTrack = null;
@@ -14254,6 +14268,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   : _headersForQuality(candidate),
             ),
             play: false,
+          );
+          debugPrint(
+            'FLIXORA_STARTUP_METRIC mpv_open_ms=${mpvStartupWatch.elapsedMilliseconds}',
+          );
+          unawaited(
+            firstVideoParamsFuture.then((_) {
+              debugPrint(
+                'FLIXORA_STARTUP_METRIC video_params_ready_ms=${mpvStartupWatch.elapsedMilliseconds}',
+              );
+            }).catchError((Object _) {}),
           );
           if (!mounted || _isDisposed) return;
 
