@@ -191,7 +191,7 @@ jobs:
           h5_content = h5_content.replace(old_caption_call, new_caption_call, 1)
 
           caption_start = h5_content.find("    /// External subtitle tracks for the resolved (subjectId, streamId) pairs,")
-          caption_end = h5_content.find("\\n}\\n\\n/// Dart-style", caption_start)
+          caption_end = h5_content.find("\n}\n\n/// Dart-style", caption_start)
           if caption_start < 0 or caption_end < 0:
               raise SystemExit("SparkBoxCore caption loader changed; review the subtitle patch.")
           caption_impl = r'''    /// External MovieBox subtitles for the resolved subject and current episode.
