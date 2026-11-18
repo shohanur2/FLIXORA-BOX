@@ -14031,8 +14031,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         if (value && _errorMessage != null) _errorMessage = null;
       });
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
+      // Android system PiP is enabled only after the user first
+      // minimizes the video inside FLIXORA's own Player.
       unawaited(PictureInPictureService.setEnabled(
-        value && widget.enablePip,
+        value && widget.enablePip && _isMiniPlayer,
       ));
 
       if (value) {
@@ -14778,6 +14780,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
     _activeMiniPlayerState.value = this;
     _miniPlayerOverlayRevision.value++;
+    unawaited(PictureInPictureService.setEnabled(
+      _isPlaying && widget.enablePip && _isMiniPlayer,
+    ));
     _cancelHideTimer();
   }
 
@@ -14801,6 +14806,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       _showControls = true;
       _miniPlayerOffset = null;
     });
+    unawaited(PictureInPictureService.setEnabled(false));
     _miniPlayerOverlayRevision.value++;
     _startHideTimer();
   }
@@ -18168,11 +18174,45 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                         _startHideTimer();
                       },
                     ),
-                    compactAction(
-                      tooltip: 'Subtitles',
-                      icon: Icons.subtitles_rounded,
-                      color: playerGoldLight,
-                      onPressed: _showSubtitleTracks,
+                    Tooltip(
+                      message: 'Subtitles',
+                      child: OutlinedButton(
+                        onPressed: _showSubtitleTracks,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: playerGoldLight,
+                          backgroundColor: Colors.black.withValues(alpha: 0.38),
+                          side: BorderSide(
+                            color: playerGold.withValues(alpha: 0.68),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(54, 38),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.closed_caption_rounded,
+                              color: playerGoldLight,
+                              size: 18,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'CC',
+                              style: TextStyle(
+                                color: playerGoldLight,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                   compactAction(
