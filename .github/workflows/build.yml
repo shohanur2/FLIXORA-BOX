@@ -184,11 +184,22 @@ jobs:
           # same mobile endpoints as the reference MovieBox implementation.
           # The old code incorrectly sent a streamId as resourceId and hard-coded
           # episode=0, which returns an empty list for most titles/episodes.
-          old_caption_call = "        let _ = self.load_captions(&cap_keys, &mut subtitles).await;"
-          new_caption_call = "        let _ = self.load_captions(&cap_keys, &mut subtitles, ep).await;"
-          if old_caption_call not in h5_content:
-              raise SystemExit("SparkBoxCore caption call changed; review the subtitle patch.")
-          h5_content = h5_content.replace(old_caption_call, new_caption_call, 1)
+          # Carry the actual successful play attempt's episode number to the
+          # caption lookup (MovieBox movies can resolve through 0/0 or 1/1).
+          replacements = [
+              ("let mut cap_keys: Vec<(String, String)> = Vec::new();",
+               "let mut cap_keys: Vec<(String, String, i64)> = Vec::new();"),
+              ("self.load_captions(&cap_keys, &mut subtitles).await",
+               "self.load_captions(&cap_keys, &mut subtitles).await"),
+              ("cap_keys: &mut Vec<(String, String)>,",
+               "cap_keys: &mut Vec<(String, String, i64)>,"),
+              ("                    },\n                ));",
+               "                    },\n                    ep,\n                ));"),
+          ]
+          for old, new in replacements:
+              if old not in h5_content:
+                  raise SystemExit(f"SparkBoxCore subtitle context changed: {old[:70]}")
+              h5_content = h5_content.replace(old, new, 1)
 
           caption_start = h5_content.find("    /// External subtitle tracks for the resolved (subjectId, streamId) pairs,")
           caption_end = h5_content.find("\n}\n\n/// Dart-style", caption_start)
@@ -197,17 +208,16 @@ jobs:
           caption_impl = r'''    /// External MovieBox subtitles for the resolved subject and current episode.
           async fn load_captions(
               &self,
-              cap_keys: &[(String, String)],
+              cap_keys: &[(String, String, i64)],
               subtitles: &mut Vec<SubtitleLink>,
-              episode: i64,
           ) {
               let mut seen = std::collections::HashSet::new();
-              let keys: Vec<&(String, String)> = cap_keys
+              let keys: Vec<&(String, String, i64)> = cap_keys
                   .iter()
                   .filter(|key| seen.insert((*key).clone()))
                   .collect();
 
-              for (sid, stream_id) in keys {
+              for (sid, stream_id, episode) in keys {
                   // Stream captions are an additional source when a real stream id exists.
                   if !stream_id.is_empty() && !stream_id.contains('|') {
                       let path = format!(
