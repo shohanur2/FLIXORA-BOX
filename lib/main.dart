@@ -15231,12 +15231,12 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         .round().clamp(0, 255).toInt();
     final screenSize = MediaQuery.sizeOf(context);
     final screenHeight = screenSize.height;
-    final requestedBottomPadding = (screenHeight * (1 - _subtitlePosition / 100))
+    final requestedBottomPadding = (screenHeight * (1 - _subtitlePosition / 100) - 10.0)
         .clamp(8.0, screenHeight * 0.85).toDouble();
     // When landscape controls are visible, reserve space above the seek bar.
     // This only moves the subtitle overlay; it does not alter any controls.
     final landscapeControlsClearance =
-        (screenHeight * 0.22).clamp(64.0, 112.0).toDouble();
+        (screenHeight * 0.22 - 10.0).clamp(54.0, 102.0).toDouble();
     final bottomPadding = screenSize.width > screenSize.height &&
             _showControls &&
             requestedBottomPadding < landscapeControlsClearance
@@ -15285,7 +15285,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.90,
       ),
-      backgroundColor: playerPanel,
+      backgroundColor: playerPanel.withValues(alpha: 0.48),
       builder: (sheetContext) {
         var fontSize = _subtitleFontSize;
         var textColor = _subtitleTextColor;
@@ -16959,7 +16959,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     _cancelHideTimer();
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: playerPanel,
+      backgroundColor: playerPanel.withValues(alpha: 0.48),
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
@@ -17074,7 +17074,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close subtitles',
-      barrierColor: Colors.black.withValues(alpha: 0.58),
+      barrierColor: Colors.black.withValues(alpha: 0.16),
       transitionDuration: const Duration(milliseconds: 220),
       pageBuilder: (dialogContext, animation, secondaryAnimation) {
         final screen = MediaQuery.sizeOf(dialogContext);
@@ -17146,7 +17146,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     return Container(
                       margin: const EdgeInsets.only(bottom: 7),
                       decoration: BoxDecoration(
-                        color: selected ? playerGold.withValues(alpha: 0.12) : const Color(0x99141414),
+                        color: selected ? playerGold.withValues(alpha: 0.12) : const Color(0x33141414),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: selected ? playerGold : const Color(0x25FFFFFF)),
                       ),
@@ -17175,7 +17175,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       borderRadius: BorderRadius.circular(22),
                       child: Container(
                         decoration: BoxDecoration(
-                          color: const Color(0xE9101010),
+                          color: const Color(0x66101010),
                           borderRadius: BorderRadius.circular(22),
                           border: Border.all(color: playerGold.withValues(alpha: 0.48)),
                           boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 28)],
@@ -18088,17 +18088,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       ),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: compact ? Colors.black.withValues(alpha: 0.42) : null,
-          gradient: compact
-              ? null
-              : LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    const Color(0xD9101117),
-                    Colors.black.withValues(alpha: 0.76),
-                  ],
-                ),
+          color: Colors.transparent,
+          gradient: null,
           borderRadius: BorderRadius.circular(compact ? 12 : 18),
           border: Border.all(color: const Color(0x2EFFFFFF)),
         ),
@@ -18711,7 +18702,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       Colors.black.withValues(alpha: 0.7),
                       Colors.transparent,
                       Colors.transparent,
-                      Colors.black87,
+                      Colors.transparent,
                     ],
                     stops: [0, 0.28, 0.62, 1],
                   ),
