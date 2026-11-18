@@ -16557,7 +16557,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final raw = (subtitle['language'] ?? subtitle['lang'] ?? subtitle['label'] ?? subtitle['name'] ?? '').toString().trim().toLowerCase();
     final parts = raw.split(RegExp(r'[+/,;|]')).map((part) => part.trim()).where((part) => part.isNotEmpty).toList(growable: false);
     String normalize(String value) {
-      final token = value.split(RegExp(r'[-_\\s]')).firstWhere((part) => part.isNotEmpty, orElse: () => value).toLowerCase();
+      final token = value.split(RegExp(r'[-_\s]')).firstWhere((part) => part.isNotEmpty, orElse: () => value).toLowerCase();
       const aliases = <String, String>{'english':'en','eng':'en','en':'en','bengali':'bn','bangla':'bn','ben':'bn','beng':'bn','bn':'bn','hindi':'hi','hin':'hi','hi':'hi','urdu':'ur','urd':'ur','ur':'ur','arabic':'ar','ara':'ar','ar':'ar','japanese':'ja','jpn':'ja','ja':'ja','korean':'ko','kor':'ko','ko':'ko','chinese':'zh','chi':'zh','zho':'zh','zh':'zh'};
       return aliases[token] ?? token;
     }
