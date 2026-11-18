@@ -16233,6 +16233,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   String _subtitleLanguageName(String code) {
     const names = <String, String>{
+      'bn+en': 'বাংলা + English',
       'en': 'English', 'eng': 'English',
       'bn': 'বাংলা', 'ben': 'বাংলা',
       'hi': 'Hindi', 'hin': 'Hindi',
@@ -16638,7 +16639,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         ..sort((a, b) {
           int priority(Map<String, dynamic> option) {
             final code = (option['language'] ?? '').toString().toLowerCase();
-            return code == 'bn' ? 0 : (code == 'en' ? 1 : 2);
+            return code == 'bn+en' ? 0 : (code == 'bn' ? 1 : (code == 'en' ? 2 : 3));
           }
           return priority(a).compareTo(priority(b));
         });
