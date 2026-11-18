@@ -16299,6 +16299,28 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
       return String.fromCharCodes(units);
     }
+    // Some subtitle files are UTF-16 without a BOM. Detect the common
+    // ASCII-timestamp pattern by checking which byte lane contains NULs.
+    if (bytes.length >= 8 && bytes.length.isEven) {
+      var evenZeros = 0;
+      var oddZeros = 0;
+      final samplePairs = (bytes.length ~/ 2).clamp(1, 512);
+      for (var i = 0; i < samplePairs * 2; i += 2) {
+        if (bytes[i] == 0) evenZeros++;
+        if (bytes[i + 1] == 0) oddZeros++;
+      }
+      final threshold = (samplePairs * 0.30).ceil();
+      if (oddZeros >= threshold || evenZeros >= threshold) {
+        final littleEndian = oddZeros > evenZeros;
+        final units = <int>[];
+        for (var i = 0; i + 1 < bytes.length; i += 2) {
+          units.add(littleEndian
+              ? bytes[i] | (bytes[i + 1] << 8)
+              : (bytes[i] << 8) | bytes[i + 1]);
+        }
+        return String.fromCharCodes(units).replaceAll('\\u0000', '');
+      }
+    }
     var start = bytes.length >= 3 &&
             bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF
         ? 3
