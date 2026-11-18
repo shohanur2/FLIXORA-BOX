@@ -5313,8 +5313,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return null;
     }
 
-    // MovieBox/WeFeed is the primary playback source. Resolve it first and
-    // avoid delaying its startup while a secondary Admin lookup is running.
+    // Start the secondary Admin lookup in parallel, but never wait for it
+    // when MovieBox/WeFeed finds the primary playable match.
+    final adminLookup = client == null
+        ? Future<Movie?>.value(cachedAdmin)
+        : _resolvePublishedAdminFallback(requested)
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => null,
+            )
+            .catchError((_) => null);
+
+    // MovieBox/WeFeed remains the primary source. Returning as soon as this
+    // lookup succeeds avoids adding Supabase latency to poster-to-playback.
     final movieBoxMatch = await _searchMovieBoxMatch(requested)
         .timeout(
           const Duration(seconds: 5),
@@ -5330,16 +5341,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
 
-    // Only check the secondary Admin source if the primary MovieBox lookup
-    // did not find a playable match.
-    final adminMatch = client == null
-        ? cachedAdmin
-        : await _resolvePublishedAdminFallback(requested)
-            .timeout(
-              const Duration(seconds: 5),
-              onTimeout: () => null,
-            )
-            .catchError((_) => null);
+    // Admin/Supabase is consulted only as a fallback when MovieBox has no
+    // playable match.
+    final adminMatch = await adminLookup;
     if (adminMatch != null) {
       return CatalogSourcePolicy.preferMovieBox<Movie>(
         movieBoxMatch: null,
@@ -13060,7 +13064,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       _movieBoxDetail = Map<String, dynamic>.from(await detailFuture as Map);
       if (_isDisposed) return;
 
-      final savedSelection = await _readLastEpisodeSelection();
+      // Movie playback has no episode selection to restore. Skip the
+      // preferences read so stream resolution can start immediately.
+      final savedSelection = widget.movie.movieBoxIsSeries
+          ? await _readLastEpisodeSelection()
+          : null;
       var targetSeason = savedSelection?[0] ?? 1;
       var targetEpisode = savedSelection?[1] ?? 1;
 
@@ -14720,7 +14728,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     });
 
     try {
-      await Future.delayed(const Duration(milliseconds: 120));
+      // Send the seek request immediately; the slider already commits only
+      // once on release, so an extra delay only makes seeking feel slower.
       if (!mounted || _isDisposed || requestToken != _seekRequestToken) return;
       await _player.seek(target);
     } catch (error) {
@@ -14785,10 +14794,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         // playback rebuffer briefly before resuming after an underrun.
         await platformPlayer.setProperty('cache', 'yes');
         await platformPlayer.setProperty('cache-pause', 'yes');
-        await platformPlayer.setProperty('demuxer-readahead-secs', '45');
-        await platformPlayer.setProperty('cache-secs', '45');
-        await platformPlayer.setProperty('demuxer-max-bytes', '128MiB');
-        await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
+        await platformPlayer.setProperty('demuxer-readahead-secs', '60');
+        await platformPlayer.setProperty('cache-secs', '60');
+        await platformPlayer.setProperty('demuxer-max-bytes', '192MiB');
+        await platformPlayer.setProperty('demuxer-max-back-bytes', '64MiB');
         await platformPlayer.setProperty('cache-pause-wait', '1.0');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
