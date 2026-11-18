@@ -3,11 +3,26 @@
   "protocol": "stremio-addon-v1",
   "addons": [
     {
+      "id": "org.stremio.opensubtitlesv3",
+      "name": "OpenSubtitles v3",
+      "manifestUrl": "https://opensubtitles-v3.strem.io/manifest.json",
+      "enabled": true,
+      "priority": 10,
+      "languages": [
+        "en",
+        "bn"
+      ],
+      "types": [
+        "movie",
+        "series"
+      ]
+    },
+    {
       "id": "com.subtitles.website",
       "name": "Subtitle Search Engine",
       "manifestUrl": "https://subtitles.website/stremio/manifest.json",
       "enabled": true,
-      "priority": 10,
+      "priority": 20,
       "languages": [
         "en",
         "bn"
