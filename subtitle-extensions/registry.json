@@ -31,6 +31,21 @@
         "movie",
         "series"
       ]
+    },
+    {
+      "id": "com.subsense.nepiraw",
+      "name": "SubSense Multi-Source",
+      "manifestUrl": "https://subsense.nepiraw.com/%7B%22languages%22%3A%5B%22eng%22%2C%22ben%22%5D%2C%22maxSubtitles%22%3A5%7D/manifest.json",
+      "enabled": true,
+      "priority": 15,
+      "languages": [
+        "en",
+        "bn"
+      ],
+      "types": [
+        "movie",
+        "series"
+      ]
     }
   ]
 }
