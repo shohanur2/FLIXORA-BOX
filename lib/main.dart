@@ -14788,12 +14788,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         await platformPlayer.setProperty('cache-pause', 'yes');
         await platformPlayer.setProperty('demuxer-readahead-secs', '45');
         await platformPlayer.setProperty('cache-secs', '45');
-        await platformPlayer.setProperty('demuxer-max-bytes', '96MiB');
+        await platformPlayer.setProperty('demuxer-max-bytes', '128MiB');
         await platformPlayer.setProperty('demuxer-max-back-bytes', '32MiB');
-        await platformPlayer.setProperty('cache-pause-wait', '1.5');
+        await platformPlayer.setProperty('cache-pause-wait', '1.0');
         // Prefer keyframe seeks for faster response on network streams.
         // This can land a fraction earlier/later than frame-accurate seeking.
         await platformPlayer.setProperty('hr-seek', 'no');
+        // Drop only late video-output frames so video can stay synchronized
+        // with audio when decoding/rendering briefly falls behind.
+        await platformPlayer.setProperty('framedrop', 'vo');
         // Keep libmpv subtitle output enabled for embedded and external tracks.
         await platformPlayer.setProperty('sub-visibility', 'yes');
       }
