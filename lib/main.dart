@@ -13312,6 +13312,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       setState(() {
         _loadingQualities = true;
         _tvEpisodeError = null;
+        // Never expose a previous episode's MovieBox subtitle URLs while the
+        // newly selected episode is resolving its own stream metadata.
+        _movieBoxSubtitles = [];
+        _automaticSubtitleOptions = [];
+        _automaticSubtitleMessage = 'Loading available subtitles…';
       });
       if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
     }
