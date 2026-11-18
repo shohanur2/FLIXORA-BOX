@@ -26,6 +26,11 @@ jobs:
           WATCHMODE_API_KEY: ${{ secrets.WATCHMODE_API_KEY }}
           TASTEDIVE_API_KEY: ${{ secrets.TASTEDIVE_API_KEY }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          SUBDL_API_KEY: ${{ secrets.SUBDL_API_KEY }}
+          SUBSOURCE_API_KEY: ${{ secrets.SUBSOURCE_API_KEY }}
+          OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+          FLIXORA_FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FLIXORA_FIREBASE_SERVICE_ACCOUNT }}
+          FLIXORA_NOTIFICATION_WEBHOOK_SECRET: ${{ secrets.FLIXORA_NOTIFICATION_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_PROJECT_REF" ]; then
@@ -34,7 +39,7 @@ jobs:
           fi
 
           args=()
-          for key in OMDB_API_KEY WATCHMODE_API_KEY TASTEDIVE_API_KEY TRAKT_CLIENT_ID; do
+          for key in OMDB_API_KEY WATCHMODE_API_KEY TASTEDIVE_API_KEY TRAKT_CLIENT_ID SUBDL_API_KEY SUBSOURCE_API_KEY OPENSUBTITLES_API_KEY FLIXORA_FIREBASE_SERVICE_ACCOUNT FLIXORA_NOTIFICATION_WEBHOOK_SECRET; do
             value="${!key:-}"
             if [ -n "$value" ]; then
               args+=("$key=$value")
