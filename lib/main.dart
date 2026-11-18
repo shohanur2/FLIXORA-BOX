@@ -5436,72 +5436,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openMovie(Movie movie) async {
-    if (!_beginTitleOpening(movie)) return;
-    try {
-      if (!_online && _hasCompletedLocalDownload(movie)) {
-        await _openResolvedPlayer(movie, movie);
-        return;
-      }
-      final hasInternet = _online ||
-          await InternetService.isOnline(forceRefresh: true);
-      if (!mounted) return;
-      if (!hasInternet) {
-        if (_hasCompletedLocalDownload(movie)) {
-          // Downloaded movies/episodes remain playable even when the
-          // catalogue itself is offline.
-          await _openResolvedPlayer(movie, movie);
-          return;
-        }
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-        });
-        _showNoInternetScreen();
-        return;
-      }
-      if (!_online) setState(() => _online = true);
-
-      final resolvedMovie = await _resolveMovieForOpening(movie);
-      if (!mounted) return;
-
-      if (resolvedMovie == null) {
-        _showMessage('This title is currently unavailable.');
-        return;
-      }
-
-      final selectedMovie = resolvedMovie;
-      if (selectedMovie.isMovieBox) {
-        unawaited(MovieBoxService.prewarm(
-          selectedMovie.toMovieBoxMap(),
-          isSeries: selectedMovie.movieBoxIsSeries,
-        ));
-      }
-      final isFavourite = _favourites.contains(selectedMovie.id) ||
-          _favourites.contains(movie.id);
-      final isSaved = _saved.contains(selectedMovie.id) ||
-          _saved.contains(movie.id);
-
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => MovieDetailsScreen(
-            movie: selectedMovie,
-            isOnline: _online,
-            isFavourite: isFavourite,
-            isSaved: isSaved,
-            onShare: () => Share.share(
-              '${selectedMovie.title} (${selectedMovie.year}) on FLIXORA',
-            ),
-            onFavourite: () => _toggleFavourite(selectedMovie),
-            onSave: () => _toggleSaved(selectedMovie),
-            onDownload: () => addDownload(selectedMovie),
-            onWatch: () => _playResolvedMovie(selectedMovie, movie),
-          ),
-        ),
-      );
-    } finally {
-      _endTitleOpening();
-    }
+    // Poster taps go straight to the resolved player; the MovieBox-first
+    // source policy and Admin-only fallback remain in _playMovie.
+    await _playMovie(movie);
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
