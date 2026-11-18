@@ -13025,6 +13025,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         episode: widget.movie.movieBoxIsSeries ? targetEpisode : 0,
         openPlayer: true,
         playerConfiguration: playerConfiguration,
+        startup: true,
       );
 
       if (widget.movie.movieBoxIsSeries) {
@@ -13107,6 +13108,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 episode: targetEpisode,
                 openPlayer: true,
                 playerConfiguration: playerConfiguration,
+                startup: true,
               );
             }
           }
@@ -13225,6 +13227,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     required int episode,
     required bool openPlayer,
     Future<void>? playerConfiguration,
+    bool startup = false,
   }) async {
     if (openPlayer) {
       _bufferingRecoveryTimer?.cancel();
@@ -13277,7 +13280,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             episode: episode,
             isSeries: widget.movie.movieBoxIsSeries,
             forceRefresh: attempt > 0,
-          ).timeout(const Duration(seconds: 15));
+          ).timeout(Duration(seconds: startup ? 12 : 15));
         } catch (error) {
           if (attempt == 0) {
             debugPrint('MovieBox stream request failed; refreshing once: $error');
@@ -13367,6 +13370,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           options.first,
           requestToken,
           playerConfiguration: playerConfiguration,
+          startup: startup,
         );
         if (opened) return;
         if (attempt == 1) {
@@ -13396,6 +13400,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     Map<String, String> item,
     int requestToken, {
     Future<void>? playerConfiguration,
+    bool startup = false,
   }) async {
     final candidates = <Map<String, String>>[
       item,
@@ -13449,10 +13454,15 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         }
 
         try {
-          await _player.open(
+          final openRequest = _player.open(
             Media(url, httpHeaders: _headersForQuality(candidate)),
             play: false,
           );
+          if (startup) {
+            await openRequest.timeout(const Duration(seconds: 15));
+          } else {
+            await openRequest;
+          }
           if (_isDisposed || requestToken != _movieBoxPlaybackRequestToken) {
             return false;
           }
