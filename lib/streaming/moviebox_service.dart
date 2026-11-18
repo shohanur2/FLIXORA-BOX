@@ -115,6 +115,8 @@ class MovieBoxService {
       _seasonsCache = {};
   static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
       _streamsCache = {};
+  static final Map<String, _MovieBoxCacheEntry<Map<String, dynamic>>>
+      _fastStreamsCache = {};
 
   static String _subjectId(Map<String, dynamic> item) =>
       (item['id'] ?? item['subjectId'] ?? item['subject_id'] ?? '')
@@ -255,10 +257,10 @@ class MovieBoxService {
             detail.toString())
         .toString();
     final key = '$subject:$season:$episode:$isSeries';
-    if (forceRefresh) _streamsCache.remove(key);
+    if (forceRefresh) _fastStreamsCache.remove(key);
     return _remember(
-      _streamsCache,
-      'fast:$key',
+      _fastStreamsCache,
+      key,
       const Duration(seconds: 30),
       () => _retry(
         () => SparkBoxCore.streamsFast(
@@ -320,7 +322,7 @@ class MovieBoxService {
         if (season <= 0) return null;
       }
 
-      final resolvedStreams = await streams(
+      final resolvedStreams = await streamsFast(
         detail,
         season: season,
         episode: episode,
