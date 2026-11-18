@@ -520,7 +520,7 @@ class MovieBoxHomeSection {
   factory MovieBoxHomeSection.fromApi(Map<String, dynamic> json) {
     final rawItems = json['items'] as List? ?? const [];
     return MovieBoxHomeSection(
-      title: (json['title'] ?? 'MovieBox').toString(),
+      title: (json['title'] ?? 'Featured').toString().replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA'),
       items: rawItems
           .whereType<Map>()
           .map((item) => Movie.fromMovieBox(Map<String, dynamic>.from(item)))
@@ -534,7 +534,7 @@ class MovieBoxHomeSection {
   factory MovieBoxHomeSection.fromCache(Map<String, dynamic> json) {
     final rawItems = json['items'] as List? ?? const [];
     return MovieBoxHomeSection(
-      title: (json['title'] ?? 'MovieBox').toString(),
+      title: (json['title'] ?? 'Featured').toString().replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA'),
       items: rawItems
           .whereType<Map>()
           .map((item) => Movie.fromCache(Map<String, dynamic>.from(item)))
@@ -11410,7 +11410,7 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
                               ? 'Short Series · S$_activeSeasonNumber · E$_activeEpisodeNumber'
                               : (movie.movieBoxIsSeries
                                   ? 'Short Series'
-                                  : 'MovieBox Shorts'),
+                                  : 'Shorts'),
                           style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 11,
@@ -12977,7 +12977,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }) async {
     if (_isDisposed || !_playerIsOnline) {
       if (mounted) {
-        setState(() => _errorMessage = 'Connect to the internet to load this MovieBox title.');
+        setState(() => _errorMessage = 'Connect to the internet to load this title.');
       }
       return;
     }
@@ -13121,7 +13121,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       debugPrint('MovieBox playback preparation failed: $error');
       if (mounted && !_isDisposed && !_initialized) {
         setState(() {
-          _errorMessage = 'MovieBox could not resolve a playable stream. Please retry.';
+          _errorMessage = 'Unable to load this video right now. Please retry.';
           _tvEpisodeError = error.toString();
         });
       }
@@ -13379,7 +13379,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
           _tvEpisodeError = error.toString();
-          _errorMessage = 'Unable to resolve this MovieBox stream.';
+          _errorMessage = 'Unable to play this video right now.';
         });
         if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
       }
@@ -13507,7 +13507,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           !_isDisposed &&
           requestToken == _movieBoxPlaybackRequestToken) {
         setState(() {
-          _errorMessage = 'Could not start this MovieBox stream. Please try again.';
+          _errorMessage = 'Could not start playback. Please try again.';
           _tvEpisodeError = error.toString();
         });
         if (_isMiniPlayer) _miniPlayerOverlayRevision.value++;
@@ -13692,7 +13692,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (!_validVideoUrl && widget.localFilePath == null && _errorMessage == null) {
       setState(() {
         _errorMessage =
-            'No playable Admin video or matching MovieBox/WeFeed stream is available.';
+            'No playable video source is available for this title.';
       });
     }
   }
@@ -15064,7 +15064,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (options.isEmpty) {
       if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('This MovieBox subtitle link is unavailable.')),
+          const SnackBar(content: Text('This subtitle link is unavailable.')),
         );
       }
       return;
@@ -15072,7 +15072,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final option = options.first;
     final url = (option['downloadUrl'] ?? '').toString();
     final language = (option['language'] ?? 'und').toString();
-    final release = (option['releaseName'] ?? 'MovieBox subtitle').toString();
+    final release = (option['releaseName'] ?? 'Subtitle').toString();
     await _selectSubtitleTrack(SubtitleTrack.uri(
       url,
       title: '${_subtitleLanguageName(language)} · $release',
@@ -15112,12 +15112,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       });
       Navigator.of(context).maybePop();
       _startHideTimer();
-    } catch (error) {
-      if (mounted && !_isDisposed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not activate subtitle: $error')),
-        );
-      }
+    } catch (_) {
+      // Keep subtitle activation feedback silent; do not show internal player errors to visitors.
     }
   }
 
@@ -16772,7 +16768,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               subtitle['label'] ??
               fileName)
           .toString()
-          .trim();
+          .trim()
+          .replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA');
       final format = (subtitle['format'] ??
               (fileName.contains('.') ? fileName.split('.').last : 'srt'))
           .toString()
@@ -16782,7 +16779,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         'providerSource': 'moviebox',
         'language': language,
         'releaseName': releaseName.isEmpty
-            ? '${_subtitleLanguageName(language)} · MovieBox subtitle ${index + 1}'
+            ? '${_subtitleLanguageName(language)} · Subtitle ${index + 1}'
             : releaseName,
         'fileName': fileName,
         'downloadUrl': url,
@@ -16817,11 +16814,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final available = widget.movie.isMovieBox ? _movieBoxSubtitleOptions() : <Map<String,dynamic>>[];
       if (mounted && !_isDisposed) setState(() {
         _automaticSubtitleOptions = available;
-        _automaticSubtitleMessage = available.isNotEmpty ? available.length.toString() + ' MovieBox subtitle(s) available' : (widget.movie.isMovieBox ? 'No MovieBox subtitles were returned for this title or episode.' : (embeddedTrackSelected ? 'Embedded subtitle track is active' : 'No embedded subtitle tracks are available. You can import a subtitle file.'));
+        _automaticSubtitleMessage = available.isNotEmpty ? available.length.toString() + ' subtitle(s) available' : (widget.movie.isMovieBox ? 'No subtitles were returned for this title or episode.' : (embeddedTrackSelected ? 'Embedded subtitle track is active' : 'No embedded subtitle tracks are available. You can import a subtitle file.'));
       });
     } catch (error) {
       debugPrint('FLIXORA MovieBox subtitles: $error');
-      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() { _automaticSubtitleMessage = 'MovieBox subtitles could not be loaded. You can import a subtitle file.'; });
+      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() { _automaticSubtitleMessage = 'Subtitles could not be loaded. You can import a subtitle file.'; });
     } finally {
       if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() => _automaticSubtitleLoading = false);
     }
@@ -17186,7 +17183,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                         padding: const EdgeInsets.symmetric(vertical: 18),
                                         child: Text(
                                           (_automaticSubtitleLoading && !widget.movie.isMovieBox) ? 'Finding available languages…' :
-                                            (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No MovieBox subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
+                                            (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
                                           textAlign: TextAlign.center,
                                           style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
                                         ),
@@ -17218,7 +17215,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                     row('Download Subtitle', 'download', () {
                                       Navigator.of(sheetContext).pop();
                                       _showSubtitleDownloadPanel();
-                                    }, detail: 'Browse available MovieBox subtitles',
+                                    }, detail: 'Browse available subtitles',
                                       trailing: const Icon(Icons.download_rounded, color: playerGoldLight)),
                                   ],
                                 ),
@@ -17374,7 +17371,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                               child: Align(
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  widget.movie.isMovieBox ? 'Available MovieBox subtitles' : 'Available subtitle tracks',
+                                  widget.movie.isMovieBox ? 'Available subtitles' : 'Available subtitle tracks',
                                   style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
                                 ),
                               ),
@@ -17414,8 +17411,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                                   ? Center(child: Padding(
                                       padding: const EdgeInsets.all(22),
                                       child: Text(
-                                        _automaticSubtitleLoading ? 'Loading MovieBox subtitles…' :
-                                          (message.isNotEmpty ? message : 'No MovieBox subtitles are available for this title or episode.'),
+                                        _automaticSubtitleLoading ? 'Loading available subtitles…' :
+                                          (message.isNotEmpty ? message : 'No subtitles are available for this title or episode.'),
                                         textAlign: TextAlign.center,
                                         style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
                                       ),
@@ -18568,7 +18565,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   style: TextStyle(color: playerWhite,
                       fontSize: 15, fontWeight: FontWeight.w800)),
               SizedBox(height: 5),
-              Text('This title needs a valid Admin video source or a matching MovieBox/WeFeed stream.',
+              Text('This title needs a valid video source to play.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
             ],
