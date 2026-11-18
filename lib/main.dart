@@ -13127,19 +13127,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   List<Map<String, String>> _prioritizeMovieBoxQualities(
     Iterable<Map<String, String>> values,
   ) {
-    // Prefer known 720p, 480p, then 360p sources. MovieBox sometimes labels
-    // valid streams as "Original" or omits the resolution entirely, so keep
-    // those as last-resort fallbacks instead of rejecting every playable URL.
-    final options = values.where((item) {
-      final rank = VideoQualityService.rank(item['quality'] ?? '');
-      return rank == 0 || rank <= 720;
-    }).toList(growable: false);
-    options.sort((a, b) {
-      final rankA = VideoQualityService.rank(a['quality'] ?? '');
-      final rankB = VideoQualityService.rank(b['quality'] ?? '');
-      return rankB.compareTo(rankA);
-    });
-    return options;
+    // Preserve MovieBox's original source order and all valid qualities.
+    // Do not filter or reorder streams based on resolution.
+    return values.toList(growable: false);
   }
 
   List<Map<String, String>> _movieBoxOptionsForLanguage(String language) {
