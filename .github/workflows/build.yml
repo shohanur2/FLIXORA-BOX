@@ -300,7 +300,7 @@ jobs:
               let values = if !items.is_empty() { items } else { list };
               // Explicit season/episode metadata must match; the query itself is
               // also episode-qualified for providers that omit these fields.
-              let filtered: Vec<&Value> = values.into_iter().filter(|item| {
+              let filtered: Vec<&Map<String, Value>> = values.into_iter().filter(|item| {
                   let item_se = s(item, "se").parse::<i64>()
                       .or_else(|_| s(item, "season").parse::<i64>()).unwrap_or(0);
                   let item_ep = s(item, "ep").parse::<i64>()
