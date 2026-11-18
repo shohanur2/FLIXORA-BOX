@@ -15077,20 +15077,51 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     if (options.isEmpty) {
       if (mounted && !_isDisposed) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('This subtitle link is unavailable.')),
+          const SnackBar(content: Text('This MovieBox subtitle link is unavailable.')),
         );
       }
       return;
     }
+
     final option = options.first;
-    final url = (option['downloadUrl'] ?? '').toString();
-    final language = (option['language'] ?? 'und').toString();
-    final release = (option['releaseName'] ?? 'Subtitle').toString();
-    await _selectSubtitleTrack(SubtitleTrack.uri(
-      url,
-      title: '${_subtitleLanguageName(language)} · $release',
-      language: language,
-    ));
+    final language = (option['language'] ?? 'und').toString().toLowerCase();
+    try {
+      // MovieBox caption URLs may redirect or return encoded subtitle data.
+      // Download and validate the native MovieBox file before attaching it;
+      // media_kit renders the local file reliably across Android devices.
+      final file = await _downloadAutomaticSubtitle({
+        ...option,
+        'provider': 'moviebox',
+        'providerSource': 'moviebox',
+      });
+      if (!mounted || _isDisposed) return;
+
+      final track = SubtitleTrack.uri(
+        Uri.file(file.path).toString(),
+        title: '${_subtitleLanguageName(language)} · MovieBox',
+        language: language,
+      );
+      _subtitleManuallySelected = true;
+      _automaticSubtitleRequestToken++;
+      await _activateSubtitleTrack(track);
+      if (!mounted || _isDisposed) return;
+
+      setState(() {
+        _selectedSubtitleLanguageCode = language;
+        _subtitleVisibilityEnabled = true;
+        _automaticEnglishTrack = track;
+        _automaticSubtitleMessage = '${_subtitleLanguageName(language)} track active';
+      });
+      Navigator.of(context).maybePop();
+      _startHideTimer();
+    } catch (error) {
+      debugPrint('FLIXORA MovieBox subtitle download/activation failed: $error');
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load MovieBox subtitle: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _activateSubtitleTrack(SubtitleTrack track) async {
