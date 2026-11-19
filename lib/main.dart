@@ -15281,10 +15281,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   Future<void> _activateLocalDownloadedSubtitles(List<String> paths) async {
-    if (_isDisposed || paths.isEmpty) return;
+    if (_isDisposed) return;
     try {
       await _player.setSubtitleTrack(SubtitleTrack.auto());
     } catch (_) {}
+    _subtitleManuallySelected = false;
+    _automaticEnglishTrack = null;
+    _selectedSubtitleLanguageCode = '';
+    if (paths.isEmpty) {
+      if (mounted && !_isDisposed) {
+        setState(() => _automaticSubtitleMessage = null);
+      }
+      return;
+    }
     for (final path in paths) {
       if (_isDisposed) return;
       try {
@@ -15717,11 +15726,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
               <int>[],
               (all, chunk) => all..addAll(chunk),
             );
-      final bytes = picked.bytes ??
-          streamedBytes ??
-          (sourceFile != null && await sourceFile.exists()
-              ? await sourceFile.readAsBytes()
-              : null);
+      final pickedBytes = picked.bytes;
+      final bytes = (pickedBytes != null && pickedBytes.isNotEmpty)
+          ? pickedBytes
+          : streamedBytes ??
+              (sourceFile != null && await sourceFile.exists()
+                  ? await sourceFile.readAsBytes()
+                  : null);
       if (bytes == null) {
         throw StateError('Android could not read the selected subtitle. Please select the file again.');
       }
