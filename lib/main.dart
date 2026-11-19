@@ -65,7 +65,7 @@ Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String video
     final episodeKey = isSeries && task.seasonNumber != null && task.episodeNumber != null
         ? '_s${task.seasonNumber}_e${task.episodeNumber}'
         : '';
-    final cacheMarker = '_${task.mediaType}_${mediaId}$episodeKey_';
+    final cacheMarker = '_${task.mediaType}_${mediaId}${episodeKey}_';
     if (await cacheDir.exists()) {
       await for (final entity in cacheDir.list()) {
         if (entity is! File) continue;
