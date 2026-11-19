@@ -38,6 +38,25 @@ import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
+List<Map<String,dynamic>> _extractDownloadSubtitleOptions(Map<String,dynamic> response) {
+  const keys=<String>{'subtitles','subtitle','subTitleList','subtitleList','subtitle_list','subtitle_list_data','captions','captionList','caption_list','externalSubtitles','external_subtitles'};
+  const urlKeys=<String>['url','downloadUrl','download_url','subtitleUrl','subtitle_url','fileUrl','file_url','captionUrl','caption_url','srtUrl','vttUrl','src','link','path'];
+  List<Map<String,dynamic>>? find(dynamic value,int depth){
+    if(depth>5||value is! Map)return null;final map=Map<String,dynamic>.from(value);
+    for(final entry in map.entries){if(!keys.contains(entry.key.toString()))continue;if(entry.value is List){final items=(entry.value as List).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList();if(items.isNotEmpty)return items;}final nested=find(entry.value,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}
+    for(final child in map.values){if(child is Map){final nested=find(child,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}}return null;
+  }
+  final output=<Map<String,dynamic>>[];
+  for(final item in find(response,0)??const <Map<String,dynamic>>[]){var url='';for(final key in urlKeys){final raw=item[key];final candidate=raw is Map?(raw['url']??raw['uri']??raw['link']??'').toString().trim():(raw??'').toString().trim();final uri=Uri.tryParse(candidate);if(uri!=null&&(uri.scheme=='http'||uri.scheme=='https')&&uri.host.isNotEmpty&&uri.userInfo.isEmpty){url=candidate;break;}}if(url.isEmpty)continue;final uri=Uri.parse(url);final name=(item['fileName']??item['filename']??item['file_name']??item['title']??(uri.pathSegments.isNotEmpty?uri.pathSegments.last:'')).toString();output.add({'url':url,'language':(item['language']??item['lang']??item['lan']??item['languageCode']??item['langCode']??'und').toString().toLowerCase(),'fileName':name,'format':(item['format']??(name.contains('.')?name.split('.').last:'srt')).toString().toLowerCase()});}
+  return output;
+}
+Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String videoPath) async {
+  final saved=<String>[];final seen=<String>{};final parent=File(videoPath).parent.path;final name=File(videoPath).uri.pathSegments.last;final base=name.contains('.')?name.substring(0,name.lastIndexOf('.')):name;
+  final options=task.subtitleOptions.toList()..sort((a,b){int rank(Map<String,dynamic> x){final l=(x['language']??'').toString();return l=='bn'?0:(l=='bn+en'?1:(l=='en'?2:3));}return rank(a).compareTo(rank(b));});
+  for(final option in options){final url=(option['url']??'').toString();final uri=Uri.tryParse(url);if(uri==null||!{'http','https'}.contains(uri.scheme)||uri.host.isEmpty||!seen.add(url))continue;try{final response=await http.get(uri,headers:const {'Accept':'text/plain, text/vtt, application/octet-stream, */*','User-Agent':'FLIXORA Subtitle Client/1.0'}).timeout(const Duration(seconds:25));final bytes=response.bodyBytes;final type=(response.headers['content-type']??'').toLowerCase();if(response.statusCode!=200||bytes.length<16||bytes.length>10*1024*1024||(bytes.length>=2&&bytes[0]==0x50&&bytes[1]==0x4b)||type.contains('text/html')||type.contains('application/json'))continue;var ext=(option['format']??'').toString().toLowerCase().replaceFirst('.','');if(!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(ext)){ext=RegExp(r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',caseSensitive:false).firstMatch(uri.path)?.group(1)?.toLowerCase()??'srt';}final lang=(option['language']??'und').toString().replaceAll(RegExp(r'[^a-z0-9+_-]'),'_');final file=File('$parent/$base.subtitle_${saved.length+1}_$lang.$ext');await file.writeAsBytes(bytes,flush:true);saved.add(file.path);}catch(error){debugPrint('Offline subtitle download skipped: $error');}}
+  return saved;
+}
+
 const MethodChannel _mediaStoreChannel =
     MethodChannel('com.flixora.flixora/media_store');
 
@@ -1429,6 +1448,8 @@ class DownloadTask {
   int sourceIndex;
   final int? seasonNumber;
   final int? episodeNumber;
+  List<Map<String,dynamic>> subtitleOptions;
+  List<String> subtitlePaths;
   String? publicMediaUri;
   double progress;
   int bytesReceived;
@@ -1449,6 +1470,8 @@ class DownloadTask {
     this.sourceIndex = 0,
     this.seasonNumber,
     this.episodeNumber,
+    this.subtitleOptions = const <Map<String,dynamic>>[],
+    this.subtitlePaths = const <String>[],
     this.publicMediaUri,
     this.progress = 0,
     this.bytesReceived = 0,
@@ -1477,6 +1500,8 @@ class DownloadTask {
         'sourceIndex': sourceIndex,
         'seasonNumber': seasonNumber,
         'episodeNumber': episodeNumber,
+        'subtitleOptions': subtitleOptions,
+        'subtitlePaths': subtitlePaths,
         'publicMediaUri': publicMediaUri,
         'progress': progress,
         'bytesReceived': bytesReceived,
@@ -1516,6 +1541,8 @@ class DownloadTask {
         episodeNumber: _toInt(json['episodeNumber']) > 0
             ? _toInt(json['episodeNumber'])
             : null,
+        subtitleOptions: (json['subtitleOptions'] as List? ?? const []).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList(growable:false),
+        subtitlePaths: (json['subtitlePaths'] as List? ?? const []).map((e)=>e.toString()).toList(growable:false),
         publicMediaUri: json['publicMediaUri']?.toString(),
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
         bytesReceived: _toInt(json['bytesReceived']),
@@ -4207,6 +4234,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'language': language.isEmpty ? 'Original' : language,
         'video_url': url,
         'headers': jsonEncode(headers),
+        'subtitle_options': jsonEncode(_extractDownloadSubtitleOptions(response)),
       });
     }
     return options;
@@ -4703,6 +4731,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       sourceIndex: 0,
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
+      subtitleOptions: (() {try{final raw=jsonDecode(first['subtitle_options']??'[]');return raw is List?raw.whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList(growable:false):<Map<String,dynamic>>[];}catch(_){return <Map<String,dynamic>>[];}})(),
       totalBytes: 0,
       status: 'Waiting',
     );
@@ -5022,6 +5051,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               uniqueId: downloadId,
             ),
           );
+          final subtitlePaths = await _saveDownloadedSubtitleFiles(task, path);
           final publicMediaUri = await _publishDownloadedVideo(
             path,
             '${task.displayTitle}_${task.quality}',
@@ -5034,6 +5064,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ..totalBytes = fileSize
               ..status = 'Completed'
               ..filePath = path
+              ..subtitlePaths = subtitlePaths
               ..publicMediaUri = publicMediaUri
               ..errorMessage = null;
           });
