@@ -38,6 +38,91 @@ import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
+List<Map<String,dynamic>> _extractDownloadSubtitleOptions(Map<String,dynamic> response) {
+  const keys=<String>{'subtitles','subtitle','subTitleList','subtitleList','subtitle_list','subtitle_list_data','captions','captionList','caption_list','externalSubtitles','external_subtitles'};
+  const urlKeys=<String>['url','downloadUrl','download_url','subtitleUrl','subtitle_url','fileUrl','file_url','captionUrl','caption_url','srtUrl','vttUrl','src','link','path'];
+  List<Map<String,dynamic>>? find(dynamic value,int depth){
+    if(depth>5||value is! Map)return null;final map=Map<String,dynamic>.from(value);
+    for(final entry in map.entries){if(!keys.contains(entry.key.toString()))continue;if(entry.value is List){final items=(entry.value as List).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList();if(items.isNotEmpty)return items;}final nested=find(entry.value,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}
+    for(final child in map.values){if(child is Map){final nested=find(child,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}}return null;
+  }
+  final output=<Map<String,dynamic>>[];
+  for(final item in find(response,0)??const <Map<String,dynamic>>[]){var url='';for(final key in urlKeys){final raw=item[key];final candidate=raw is Map?(raw['url']??raw['uri']??raw['link']??'').toString().trim():(raw??'').toString().trim();final uri=Uri.tryParse(candidate);if(uri!=null&&(uri.scheme=='http'||uri.scheme=='https')&&uri.host.isNotEmpty&&uri.userInfo.isEmpty){url=candidate;break;}}if(url.isEmpty)continue;final uri=Uri.parse(url);final name=(item['fileName']??item['filename']??item['file_name']??item['title']??(uri.pathSegments.isNotEmpty?uri.pathSegments.last:'')).toString();output.add({'url':url,'language':(item['language']??item['lang']??item['lan']??item['languageCode']??item['langCode']??'und').toString().toLowerCase(),'fileName':name,'format':(item['format']??(name.contains('.')?name.split('.').last:'srt')).toString().toLowerCase()});}
+  return output;
+}
+Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String videoPath) async {
+  final saved=<String>[];final seen=<String>{};final parent=File(videoPath).parent.path;final name=File(videoPath).uri.pathSegments.last;final base=name.contains('.')?name.substring(0,name.lastIndexOf('.')):name;
+  final options=task.subtitleOptions.toList()..sort((a,b){int rank(Map<String,dynamic> x){final l=(x['language']??'').toString();return l=='bn'?0:(l=='bn+en'?1:(l=='en'?2:3));}return rank(a).compareTo(rank(b));});
+  for(final option in options){final url=(option['url']??'').toString();final uri=Uri.tryParse(url);if(uri==null||!{'http','https'}.contains(uri.scheme)||uri.host.isEmpty||!seen.add(url))continue;try{final response=await http.get(uri,headers:const {'Accept':'text/plain, text/vtt, application/octet-stream, */*','User-Agent':'FLIXORA Subtitle Client/1.0'}).timeout(const Duration(seconds:25));final bytes=response.bodyBytes;final type=(response.headers['content-type']??'').toLowerCase();if(response.statusCode!=200||bytes.length<16||bytes.length>10*1024*1024||(bytes.length>=2&&bytes[0]==0x50&&bytes[1]==0x4b)||type.contains('text/html')||type.contains('application/json'))continue;var ext=(option['format']??'').toString().toLowerCase().replaceFirst('.','');if(!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(ext)){ext=RegExp(r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',caseSensitive:false).firstMatch(uri.path)?.group(1)?.toLowerCase()??'srt';}final lang=(option['language']??'und').toString().replaceAll(RegExp(r'[^a-z0-9+_-]'),'_');final file=File('$parent/$base.subtitle_${saved.length+1}_$lang.$ext');await file.writeAsBytes(bytes,flush:true);saved.add(file.path);}catch(error){debugPrint('Offline subtitle download skipped: $error');}}
+  // Also preserve subtitle releases already downloaded by the online Subtitle
+  // system. This keeps its provider and cache logic untouched while making
+  // those same files available beside the offline video.
+  try {
+    final support = await getApplicationSupportDirectory();
+    final cacheDir = Directory('${support.path}/flixora_subtitles');
+    final mediaId = task.tmdbId > 0 ? task.tmdbId : task.movieId;
+    final isSeries = task.mediaType == 'tv' || task.movieBoxIsSeries;
+    final episodeKey = isSeries && task.seasonNumber != null && task.episodeNumber != null
+        ? '_s${task.seasonNumber}_e${task.episodeNumber}'
+        : '';
+    final cacheMarker = '_${task.mediaType}_${mediaId}${episodeKey}_';
+    if (await cacheDir.exists()) {
+      await for (final entity in cacheDir.list()) {
+        if (entity is! File) continue;
+        final cacheName = entity.uri.pathSegments.last;
+        final markerIndex = cacheName.indexOf(cacheMarker);
+        if (markerIndex <= 0) continue;
+        final extension = cacheName.contains('.')
+            ? cacheName.split('.').last.toLowerCase()
+            : '';
+        if (!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(extension)) continue;
+        if (await entity.length() < 16) continue;
+        final language = cacheName.substring(0, markerIndex)
+            .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
+        final target = File('$parent/$base.cached_subtitle_${saved.length+1}_$language.$extension');
+        await entity.copy(target.path);
+        saved.add(target.path);
+      }
+    }
+  } catch (error) {
+    debugPrint('Could not copy cached online subtitles for offline use: $error');
+  }
+  return saved;
+}
+
+const MethodChannel _mediaStoreChannel =
+    MethodChannel('com.flixora.flixora/media_store');
+
+Future<String?> _publishDownloadedVideo(String path, String displayName) async {
+  try {
+    return await _mediaStoreChannel.invokeMethod<String>(
+      'publishVideo',
+      {'path': path, 'displayName': displayName},
+    );
+  } catch (error) {
+    debugPrint('Could not publish FLIXORA download to File Manager: $error');
+    return null;
+  }
+}
+
+Future<bool?> _publicDownloadExists(String uri) async {
+  try {
+    return await _mediaStoreChannel.invokeMethod<bool>('exists', {'uri': uri});
+  } catch (error) {
+    debugPrint('Could not verify public FLIXORA download: $error');
+    return null;
+  }
+}
+
+Future<void> _deletePublicDownload(String? uri) async {
+  if (uri == null || uri.isEmpty) return;
+  try {
+    await _mediaStoreChannel.invokeMethod<bool>('delete', {'uri': uri});
+  } catch (error) {
+    debugPrint('Could not delete public FLIXORA download: $error');
+  }
+}
+
 const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String supabaseAnonKey =
     String.fromEnvironment('SUPABASE_ANON_KEY');
@@ -1387,6 +1472,12 @@ class FlixoraMovieService {
 class DownloadTask {
   final int movieId;
   final int downloadId;
+  final int tmdbId;
+  final String mediaType;
+  final String movieSource;
+  final String movieBoxId;
+  final String movieBoxDetailPath;
+  final bool movieBoxIsSeries;
   final String title;
   final String poster;
   String videoUrl;
@@ -1396,6 +1487,9 @@ class DownloadTask {
   int sourceIndex;
   final int? seasonNumber;
   final int? episodeNumber;
+  List<Map<String,dynamic>> subtitleOptions;
+  List<String> subtitlePaths;
+  String? publicMediaUri;
   double progress;
   int bytesReceived;
   int totalBytes;
@@ -1408,6 +1502,12 @@ class DownloadTask {
     this.downloadId = 0,
     required this.title,
     required this.poster,
+    this.tmdbId = 0,
+    this.mediaType = 'movie',
+    this.movieSource = 'tmdb',
+    this.movieBoxId = '',
+    this.movieBoxDetailPath = '',
+    this.movieBoxIsSeries = false,
     this.videoUrl = '',
     this.quality = 'Original',
     this.headers = const <String, String>{},
@@ -1415,6 +1515,9 @@ class DownloadTask {
     this.sourceIndex = 0,
     this.seasonNumber,
     this.episodeNumber,
+    this.subtitleOptions = const <Map<String,dynamic>>[],
+    this.subtitlePaths = const <String>[],
+    this.publicMediaUri,
     this.progress = 0,
     this.bytesReceived = 0,
     this.totalBytes = 0,
@@ -1433,6 +1536,12 @@ class DownloadTask {
   Map<String, dynamic> toJson() => {
         'movieId': movieId,
         'downloadId': downloadId,
+        'tmdbId': tmdbId,
+        'mediaType': mediaType,
+        'movieSource': movieSource,
+        'movieBoxId': movieBoxId,
+        'movieBoxDetailPath': movieBoxDetailPath,
+        'movieBoxIsSeries': movieBoxIsSeries,
         'title': title,
         'poster': poster,
         'videoUrl': videoUrl,
@@ -1442,6 +1551,9 @@ class DownloadTask {
         'sourceIndex': sourceIndex,
         'seasonNumber': seasonNumber,
         'episodeNumber': episodeNumber,
+        'subtitleOptions': subtitleOptions,
+        'subtitlePaths': subtitlePaths,
+        'publicMediaUri': publicMediaUri,
         'progress': progress,
         'bytesReceived': bytesReceived,
         'totalBytes': totalBytes,
@@ -1455,6 +1567,18 @@ class DownloadTask {
         downloadId: _toInt(json['downloadId']) > 0
             ? _toInt(json['downloadId'])
             : _toInt(json['movieId']),
+        tmdbId: _toInt(json['tmdbId']),
+        mediaType: (json['mediaType'] ??
+            (_toInt(json['seasonNumber']) > 0 ? 'tv' : 'movie')).toString(),
+        movieSource: (json['movieSource'] ??
+            ((json['movieBoxId'] ?? '').toString().isNotEmpty
+                ? 'moviebox'
+                : 'tmdb')).toString(),
+        movieBoxId: (json['movieBoxId'] ?? '').toString(),
+        movieBoxDetailPath: (json['movieBoxDetailPath'] ?? '').toString(),
+        movieBoxIsSeries: json['movieBoxIsSeries'] == true ||
+            (_toInt(json['seasonNumber']) > 0 &&
+                _toInt(json['episodeNumber']) > 0),
         title: (json['title'] ?? 'Downloaded Movie').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
@@ -1480,6 +1604,9 @@ class DownloadTask {
         episodeNumber: _toInt(json['episodeNumber']) > 0
             ? _toInt(json['episodeNumber'])
             : null,
+        subtitleOptions: (json['subtitleOptions'] as List? ?? const []).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList(growable:false),
+        subtitlePaths: (json['subtitlePaths'] as List? ?? const []).map((e)=>e.toString()).toList(growable:false),
+        publicMediaUri: json['publicMediaUri']?.toString(),
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
         bytesReceived: _toInt(json['bytesReceived']),
         totalBytes: _toInt(json['totalBytes']),
@@ -3189,6 +3316,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      unawaited(_syncDeletedPublicDownloads());
       _refreshConnectionStatus();
       final lastRefresh = _lastHomeRefreshAt;
       if (lastRefresh == null ||
@@ -3199,6 +3327,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         unawaited(loadHome(forceRefresh: true));
       }
     }
+  }
+
+  Future<void> _syncDeletedPublicDownloads() async {
+    final removed = <DownloadTask>[];
+    for (final task in _downloads) {
+      final uri = task.publicMediaUri;
+      if (task.status != 'Completed' || uri == null || uri.isEmpty) continue;
+      if (await _publicDownloadExists(uri) == false) removed.add(task);
+    }
+    if (removed.isEmpty) return;
+    for (final task in removed) {
+      if (task.filePath != null) {
+        try {
+          final file = File(task.filePath!);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+      }
+      for (final subtitlePath in task.subtitlePaths) {
+        try {
+          final subtitleFile = File(subtitlePath);
+          if (await subtitleFile.exists()) await subtitleFile.delete();
+        } catch (_) {}
+      }
+    }
+    if (!mounted) return;
+    setState(() => _downloads.removeWhere(removed.contains));
+    await MovieCache.saveDownloads(_downloads);
   }
 
   Future<void> _refreshConnectionStatus() async {
@@ -4148,6 +4303,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'language': language.isEmpty ? 'Original' : language,
         'video_url': url,
         'headers': jsonEncode(headers),
+        'subtitle_options': jsonEncode(_extractDownloadSubtitleOptions(response)),
       });
     }
     return options;
@@ -4637,6 +4793,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       downloadId: DateTime.now().microsecondsSinceEpoch,
       title: movie.title,
       poster: movie.posterUrl,
+      tmdbId: movie.tmdbId,
+      mediaType: movie.mediaType,
+      movieSource: movie.source,
+      movieBoxId: movie.movieBoxId,
+      movieBoxDetailPath: movie.movieBoxDetailPath,
+      movieBoxIsSeries: movie.movieBoxIsSeries,
       videoUrl: first['video_url'] ?? '',
       quality: quality,
       headers: _decodeDownloadHeaders(first['headers']),
@@ -4644,6 +4806,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       sourceIndex: 0,
       seasonNumber: seasonNumber,
       episodeNumber: episodeNumber,
+      subtitleOptions: (() {try{final raw=jsonDecode(first['subtitle_options']??'[]');return raw is List?raw.whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList(growable:false):<Map<String,dynamic>>[];}catch(_){return <Map<String,dynamic>>[];}})(),
       totalBytes: 0,
       status: 'Waiting',
     );
@@ -4963,6 +5126,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               uniqueId: downloadId,
             ),
           );
+          final subtitlePaths = await _saveDownloadedSubtitleFiles(task, path);
+          final publicMediaUri = await _publishDownloadedVideo(
+            path,
+            '${task.displayTitle}_${task.quality}',
+          );
           if (!mounted) return;
           setState(() {
             task
@@ -4971,6 +5139,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ..totalBytes = fileSize
               ..status = 'Completed'
               ..filePath = path
+              ..subtitlePaths = subtitlePaths
+              ..publicMediaUri = publicMediaUri
               ..errorMessage = null;
           });
           await MovieCache.saveDownloads(_downloads);
@@ -5059,10 +5229,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (confirmed != true) return;
+    await _deletePublicDownload(task.publicMediaUri);
     if (task.filePath != null) {
       try {
         final file = File(task.filePath!);
         if (await file.exists()) await file.delete();
+        for (final subtitlePath in task.subtitlePaths) {
+          final subtitleFile = File(subtitlePath);
+          if (await subtitleFile.exists()) await subtitleFile.delete();
+        }
       } catch (_) {
         _showMessage('Could not delete downloaded file.');
         return;
@@ -5496,6 +5671,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           localFilePath: downloaded!.filePath,
           localSeasonNumber: downloaded.seasonNumber,
           localEpisodeNumber: downloaded.episodeNumber,
+          localSubtitlePaths: downloaded.subtitlePaths,
+          localEpisodeDownloads: _downloads.where((task) =>
+              task.movieId == downloaded!.movieId &&
+              task.status == 'Completed' &&
+              task.filePath != null &&
+              task.seasonNumber != null &&
+              task.episodeNumber != null &&
+              File(task.filePath!).existsSync()).toList(growable: false),
           recommendedMovies: _allMovies(),
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
@@ -8047,7 +8230,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (task.filePath == null) return;
         final movie = Movie(
           id: task.movieId,
-          title: task.displayTitle,
+          tmdbId: task.tmdbId,
+          source: task.movieSource,
+          title: task.title,
           year: 'N/A',
           overview: '',
           poster: task.poster,
@@ -8055,10 +8240,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           rating: 0,
           releaseDate: '',
           videoUrl: task.filePath!,
+          mediaType: task.mediaType,
+          movieBoxId: task.movieBoxId,
+          movieBoxDetailPath: task.movieBoxDetailPath,
+          movieBoxIsSeries: task.movieBoxIsSeries,
         );
         _pushPlayerRoute((_) => MoviePlayerScreen(
             movie: movie,
             localFilePath: task.filePath,
+            localSeasonNumber: task.seasonNumber,
+            localEpisodeNumber: task.episodeNumber,
+            localSubtitlePaths: task.subtitlePaths,
+            localEpisodeDownloads: _downloads.where((item) =>
+                item.movieId == task.movieId &&
+                item.status == 'Completed' &&
+                item.filePath != null &&
+                item.seasonNumber != null &&
+                item.episodeNumber != null &&
+                File(item.filePath!).existsSync()).toList(growable: false),
             recommendedMovies: _allMovies(),
             onMovieSelected: _openMovie,
             isOnline: _online,
@@ -11721,6 +11920,8 @@ class MoviePlayerScreen extends StatefulWidget {
   final String? localFilePath;
   final int? localSeasonNumber;
   final int? localEpisodeNumber;
+  final List<String> localSubtitlePaths;
+  final List<DownloadTask> localEpisodeDownloads;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
@@ -11736,6 +11937,8 @@ class MoviePlayerScreen extends StatefulWidget {
     this.localFilePath,
     this.localSeasonNumber,
     this.localEpisodeNumber,
+    this.localSubtitlePaths = const <String>[],
+    this.localEpisodeDownloads = const <DownloadTask>[],
     this.recommendedMovies = const [],
     this.onMovieSelected,
     this.onSave,
@@ -12148,9 +12351,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   List<List<int>> _episodeNavigationEntries() {
-    if (!widget.movie.isMovieBox ||
-        !widget.movie.movieBoxIsSeries ||
-        widget.localFilePath != null) {
+    if (widget.localFilePath != null) {
+      final entries = widget.localEpisodeDownloads
+          .where((task) => task.status == 'Completed' &&
+              task.filePath != null &&
+              task.seasonNumber != null &&
+              task.episodeNumber != null)
+          .map((task) => <int>[task.seasonNumber!, task.episodeNumber!])
+          .toList()
+        ..sort((a, b) => a[0] == b[0]
+            ? a[1].compareTo(b[1])
+            : a[0].compareTo(b[0]));
+      final seen = <String>{};
+      return entries.where((entry) =>
+          seen.add('${entry[0]}:${entry[1]}')).toList(growable: false);
+    }
+    if (!widget.movie.isMovieBox || !widget.movie.movieBoxIsSeries) {
       return const <List<int>>[];
     }
 
@@ -12203,6 +12419,38 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final target = entries[currentIndex + direction];
     final seasonNumber = target[0];
     final episodeNumber = target[1];
+    if (widget.localFilePath != null) {
+      DownloadTask? localTask;
+      for (final task in widget.localEpisodeDownloads) {
+        if (task.seasonNumber == seasonNumber &&
+            task.episodeNumber == episodeNumber &&
+            task.status == 'Completed' &&
+            task.filePath != null) {
+          localTask = task;
+          break;
+        }
+      }
+      if (localTask == null || !await File(localTask.filePath!).exists()) return;
+      if (mounted && !_isDisposed) setState(() => _loadingQualities = true);
+      try {
+        await _player.open(Media(localTask.filePath!), play: true);
+        if (!mounted || _isDisposed) return;
+        _selectedSeasonNumber = seasonNumber;
+        _selectedEpisodeNumber = episodeNumber;
+        _updatePosition(Duration.zero);
+        _duration = _player.state.duration;
+        await _restoreResumePosition();
+        await _activateLocalDownloadedSubtitles(localTask.subtitlePaths);
+      } catch (error) {
+        debugPrint('Offline episode switch failed: $error');
+        if (mounted && !_isDisposed) {
+          setState(() => _errorMessage = 'Could not open the downloaded episode.');
+        }
+      } finally {
+        if (mounted && !_isDisposed) setState(() => _loadingQualities = false);
+      }
+      return;
+    }
     final season = _movieBoxSeasons.firstWhere(
       (item) => _toInt(item['se']) == seasonNumber,
       orElse: () => <String, dynamic>{},
@@ -14232,6 +14480,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (!mounted || _isDisposed) return;
 
           if (!isLocal) _currentVideoUrl = playbackSource;
+          if (isLocal) await _activateLocalDownloadedSubtitles(widget.localSubtitlePaths);
           setState(() {
             _selectedQuality = candidate['quality'];
             _initialized = true;
@@ -15070,6 +15319,50 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     ));
   }
 
+  Future<void> _activateLocalDownloadedSubtitles(List<String> paths) async {
+    if (_isDisposed) return;
+    try {
+      await _player.setSubtitleTrack(SubtitleTrack.auto());
+    } catch (_) {}
+    _subtitleManuallySelected = false;
+    _automaticEnglishTrack = null;
+    _selectedSubtitleLanguageCode = '';
+    if (paths.isEmpty) {
+      if (mounted && !_isDisposed) {
+        setState(() => _automaticSubtitleMessage = null);
+      }
+      return;
+    }
+    for (final path in paths) {
+      if (_isDisposed) return;
+      try {
+        final file = File(path);
+        if (!await file.exists() || await file.length() < 8) continue;
+        final name = file.uri.pathSegments.last;
+        final match = RegExp(r'subtitle_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?)\.', caseSensitive: false).firstMatch(name);
+        final language = match?.group(1)?.toLowerCase() ?? 'und';
+        final track = SubtitleTrack.uri(
+          Uri.file(path).toString(),
+          title: _subtitleLanguageName(language),
+          language: language,
+        );
+        await _activateSubtitleTrack(track);
+        _subtitleManuallySelected = true;
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _selectedSubtitleLanguageCode = language;
+            _subtitleVisibilityEnabled = true;
+            _automaticSubtitleMessage = 'Offline subtitle active';
+          });
+        }
+        return;
+      } catch (error) {
+        debugPrint('Offline subtitle activation skipped: $error');
+      }
+    }
+  }
+
   Future<void> _activateSubtitleTrack(SubtitleTrack track) async {
     if (_isDisposed) throw StateError('The video player is no longer active.');
     await _player.setSubtitleTrack(track);
@@ -15460,27 +15753,39 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'],
         allowMultiple: false,
         withData: true,
+        withReadStream: true,
       );
       if (result == null || result.files.isEmpty) return;
       final picked = result.files.single;
       final path = picked.path;
       final sourceFile = path == null || path.isEmpty ? null : File(path);
-      final bytes = picked.bytes ??
-          (sourceFile != null && await sourceFile.exists()
-              ? await sourceFile.readAsBytes()
-              : null);
+      final streamedBytes = picked.readStream == null
+          ? null
+          : await picked.readStream!.fold<List<int>>(
+              <int>[],
+              (all, chunk) => all..addAll(chunk),
+            );
+      final pickedBytes = picked.bytes;
+      final bytes = (pickedBytes != null && pickedBytes.isNotEmpty)
+          ? pickedBytes
+          : streamedBytes ??
+              (sourceFile != null && await sourceFile.exists()
+                  ? await sourceFile.readAsBytes()
+                  : null);
       if (bytes == null) {
         throw StateError('Android could not read the selected subtitle. Please select the file again.');
       }
       if (bytes.length < 8 || bytes.length > 10 * 1024 * 1024) {
         throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
       }
-      final ext = picked.extension?.toLowerCase() ?? '';
+      final ext = (picked.extension ??
+              (picked.name.contains('.')
+                  ? picked.name.split('.').last
+                  : ''))
+          .toLowerCase();
       final decodedText = _decodeSubtitleText(bytes);
       final detectedExtension = _detectSubtitleExtension(decodedText, ext);
-      if (detectedExtension == 'sub') {
-        throw StateError('MicroDVD .sub subtitles are not supported reliably. Please use SRT or ASS.');
-      }
+      // Preserve valid MicroDVD .sub files; libmpv supports them as external tracks.
       final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
 
       // Keep imported subtitles in app-private storage. File-picker paths can
