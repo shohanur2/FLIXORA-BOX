@@ -5022,6 +5022,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               uniqueId: downloadId,
             ),
           );
+          final publicMediaUri = await _publishDownloadedVideo(
+            path,
+            '${task.displayTitle}_${task.quality}',
+          );
           if (!mounted) return;
           setState(() {
             task
@@ -5030,10 +5034,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ..totalBytes = fileSize
               ..status = 'Completed'
               ..filePath = path
-              ..publicMediaUri = await _publishDownloadedVideo(
-                path,
-                '${task.displayTitle}_${task.quality}',
-              )
+              ..publicMediaUri = publicMediaUri
               ..errorMessage = null;
           });
           await MovieCache.saveDownloads(_downloads);
