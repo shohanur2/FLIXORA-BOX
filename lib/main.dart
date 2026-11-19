@@ -4203,8 +4203,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required List<Map<String, dynamic>> seasons,
     required int initialSeason,
     required int initialEpisode,
+    required Future<Map<String, dynamic>> Function() loadOptions,
   }) async {
     var options = initialOptions;
+    var availableSeasons = seasons;
+    var optionsLoading = true;
+    var optionsLoadError = '';
+    var loadStarted = false;
     var selectedSeason = initialSeason;
     var selectedLanguage = options.isNotEmpty
         ? _downloadLanguage(options.first)
@@ -4220,7 +4225,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         },
     };
     final episodesBySeason = <int, List<int>>{
-      for (final season in seasons)
+      for (final season in availableSeasons)
         _toInt(season['se']): ((season['episodes'] as List? ?? const [])
             .map(_toInt)
             .where((number) => number > 0)
@@ -4247,7 +4252,81 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, setSheetState) {
-          if (isSeries && prefetchStartedForSeason.add(selectedSeason)) {
+          if (!loadStarted) {
+            loadStarted = true;
+            unawaited(() async {
+              try {
+                final prepared = await loadOptions();
+                if (!sheetContext.mounted) return;
+                final loadedOptions = (prepared['options'] as List? ?? const [])
+                    .whereType<Map>()
+                    .map((item) => Map<String, String>.from(item.map(
+                          (key, value) => MapEntry(key.toString(), value.toString()),
+                        )))
+                    .toList(growable: false);
+                final loadedSeasons = (prepared['seasons'] as List? ?? const [])
+                    .whereType<Map>()
+                    .map((item) => Map<String, dynamic>.from(item))
+                    .toList(growable: false);
+                final loadedSeason = _toInt(prepared['season']);
+                final loadedEpisode = _toInt(prepared['episode']);
+                setSheetState(() {
+                  options = loadedOptions;
+                  availableSeasons = loadedSeasons;
+                  selectedSeason = loadedSeason;
+                  episodesBySeason
+                    ..clear()
+                    ..addEntries(availableSeasons.map((season) {
+                      final number = _toInt(season['se']);
+                      final values = ((season['episodes'] as List? ?? const [])
+                          .map(_toInt)
+                          .where((value) => value > 0)
+                          .toList()
+                        ..sort());
+                      return MapEntry(number, values);
+                    }));
+                  episodeNumbers = episodesBySeason[selectedSeason] ?? <int>[];
+                  selectedEpisodes
+                    ..clear()
+                    ..addAll(episodeNumbers.contains(loadedEpisode)
+                        ? <int>[loadedEpisode]
+                        : (episodeNumbers.isNotEmpty
+                            ? <int>[episodeNumbers.first]
+                            : <int>[]));
+                  episodeOptionsBySeason
+                    ..clear()
+                    ..addEntries(<int, Map<int, List<Map<String, String>>>>{
+                      if (selectedSeason > 0)
+                        selectedSeason: {
+                          if (loadedEpisode > 0) loadedEpisode: loadedOptions,
+                        },
+                    }.entries);
+                  selectedLanguage = loadedOptions.isNotEmpty
+                      ? _downloadLanguage(loadedOptions.first)
+                      : (movie.originalLanguage.isNotEmpty
+                          ? movie.originalLanguage : 'Original');
+                  selectedQuality = loadedOptions.isNotEmpty
+                      ? _downloadQuality(loadedOptions.first) : '';
+                  selectedQualities
+                    ..clear()
+                    ..addAll(selectedQuality.isEmpty
+                        ? <String>[] : <String>[selectedQuality]);
+                  optionsLoading = false;
+                });
+              } catch (error) {
+                if (!sheetContext.mounted) return;
+                setSheetState(() {
+                  optionsLoading = false;
+                  optionsLoadError = 'Could not load download options. Please retry.';
+                });
+                debugPrint('Download option preparation failed: $error');
+              }
+            }());
+          }
+          if (isSeries &&
+              selectedSeason > 0 &&
+              episodeNumbers.isNotEmpty &&
+              prefetchStartedForSeason.add(selectedSeason)) {
             final season = selectedSeason;
             final token = ++seasonRequestToken;
             final seed = Map<int, List<Map<String, String>>>.from(
@@ -4461,8 +4540,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               const SizedBox(height: 12),
                               if (qualities.isEmpty)
                                 const Text(
-                                  'Checking available download qualities...',
-                                  style: TextStyle(color: ink60, fontSize: 12),
+                                  optionsLoading
+                                      ? 'Checking available download qualities...'
+                                      : (optionsLoadError.isNotEmpty
+                                          ? optionsLoadError
+                                          : 'No downloadable qualities are available.'),
+                                  style: const TextStyle(color: ink60, fontSize: 12),
                                 )
                               else
                                 Wrap(
@@ -4661,7 +4744,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         '${movie.source}:${movie.id}:${seasonNumber ?? 0}:${episodeNumber ?? 0}';
     if (!_downloadPreparationKeys.add(preparationKey)) return;
 
-    _showMessage('Preparing download options...');
     try {
       await _prepareDownload(
         movie,
@@ -4678,102 +4760,108 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     int? seasonNumber,
     int? episodeNumber,
   }) async {
-    final hasInternet = await InternetService.isOnline();
-    if (!hasInternet) {
-      if (mounted) {
-        setState(() {
-          _online = false;
-          _connectionKnown = true;
-        });
-        _showMessage('Check your internet connection');
-      }
-      return;
-    }
-    if (mounted && !_online) setState(() => _online = true);
-
     final isSeries = movie.isMovieBox && movie.movieBoxIsSeries;
     var resolvedSeason = seasonNumber ?? 0;
     var resolvedEpisode = episodeNumber ?? 0;
-    var availableSeasons = <Map<String, dynamic>>[];
-    if (isSeries) {
-      try {
-        availableSeasons = await MovieBoxService.seasons(movie.movieBoxId);
-        if (availableSeasons.isEmpty) {
-          _showMessage('No seasons are available to download for this series.');
-          return;
+    var options = <Map<String, String>>[];
+
+    Future<Map<String, dynamic>> loadDownloadOptions() async {
+      final hasInternet = await InternetService.isOnline();
+      if (!hasInternet) {
+        if (mounted) {
+          setState(() {
+            _online = false;
+            _connectionKnown = true;
+          });
         }
-        final chosen = availableSeasons.firstWhere(
-          (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
-          orElse: () => availableSeasons.first,
-        );
-        resolvedSeason = _toInt(chosen['se']);
-        final episodes = (chosen['episodes'] as List? ?? const [])
-            .map(_toInt)
-            .where((number) => number > 0)
-            .toList(growable: false);
-        if (episodes.isEmpty) {
-          _showMessage('No episodes are available in this season.');
-          return;
-        }
-        if (!episodes.contains(resolvedEpisode)) {
-          resolvedEpisode = episodes.first;
-        }
-      } catch (error) {
-        debugPrint('MovieBox season lookup for download failed: $error');
-        _showMessage('Could not load this series episode list. Please retry.');
-        return;
+        throw StateError('Check your internet connection');
       }
-    }
+      if (mounted && !_online) setState(() => _online = true);
 
-    List<Map<String, String>> rawOptions;
-    try {
-      rawOptions = movie.isMovieBox
-          ? await _movieBoxDirectDownloadOptions(
-              movie,
-              season: resolvedSeason,
-              episode: resolvedEpisode,
-            )
-          : await FlixoraMovieService.getDownloadQualities(movie);
-    } catch (error) {
-      debugPrint('Download source lookup failed: $error');
-      rawOptions = <Map<String, String>>[];
-    }
-    if (!mounted) return;
-    if (rawOptions.isEmpty && !isSeries) {
-      _showMessage(
-        movie.isMovieBox
-            ? 'A direct downloadable video source is not available for this title.'
-            : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
-      );
-      return;
-    }
+      var availableSeasons = <Map<String, dynamic>>[];
+      if (isSeries) {
+        try {
+          availableSeasons = await MovieBoxService.seasons(movie.movieBoxId);
+          if (availableSeasons.isEmpty) {
+            throw StateError('No seasons are available to download for this series.');
+          }
+          final chosen = availableSeasons.firstWhere(
+            (item) => resolvedSeason > 0 && _toInt(item['se']) == resolvedSeason,
+            orElse: () => availableSeasons.first,
+          );
+          resolvedSeason = _toInt(chosen['se']);
+          final episodes = (chosen['episodes'] as List? ?? const [])
+              .map(_toInt)
+              .where((number) => number > 0)
+              .toList(growable: false);
+          if (episodes.isEmpty) {
+            throw StateError('No episodes are available in this season.');
+          }
+          if (!episodes.contains(resolvedEpisode)) {
+            resolvedEpisode = episodes.first;
+          }
+        } catch (error) {
+          debugPrint('MovieBox season lookup for download failed: $error');
+          rethrow;
+        }
+      }
 
-    final options = rawOptions.map((item) {
-      final label = item['quality'] ?? 'Original';
-      final languageMatch = RegExp(r'\[([^\]]+)\]\s*$').firstMatch(label);
-      final qualityMatch = RegExp(r'^\s*(\d{3,4}p)', caseSensitive: false)
-          .firstMatch(label);
-      final language = (item['language'] ??
-              languageMatch?.group(1) ??
-              movie.originalLanguage)
-          .toString()
-          .trim();
-      return <String, String>{
-        ...item,
-        'quality': qualityMatch?.group(1)?.toUpperCase() ?? label,
-        'language': language.isEmpty ? 'Original' : language,
-        'size_bytes': '',
-        'size_label': 'Detected when download starts',
+      List<Map<String, String>> rawOptions;
+      try {
+        rawOptions = movie.isMovieBox
+            ? await _movieBoxDirectDownloadOptions(
+                movie,
+                season: resolvedSeason,
+                episode: resolvedEpisode,
+              )
+            : await FlixoraMovieService.getDownloadQualities(movie);
+      } catch (error) {
+        debugPrint('Download source lookup failed: $error');
+        rawOptions = <Map<String, String>>[];
+      }
+      if (rawOptions.isEmpty && !isSeries) {
+        throw StateError(
+          movie.isMovieBox
+              ? 'A direct downloadable video source is not available for this title.'
+              : 'Download source is not available for this movie. Ask Admin to add a direct video file.',
+        );
+      }
+
+      options = rawOptions.map((item) {
+        final label = item['quality'] ?? 'Original';
+        final languageMatch = RegExp(r'\\[([^\\]]+)\\]\\s*$').firstMatch(label);
+        final qualityMatch = RegExp(r'^\\s*(\\d{3,4}p)', caseSensitive: false)
+            .firstMatch(label);
+        final language = (item['language'] ??
+                languageMatch?.group(1) ??
+                movie.originalLanguage)
+            .toString()
+            .trim();
+        return <String, String>{
+          ...item,
+          'quality': qualityMatch?.group(1)?.toUpperCase() ?? label,
+          'language': language.isEmpty ? 'Original' : language,
+          'size_bytes': '',
+          'size_label': 'Detected when download starts',
+        };
+      }).toList(growable: false);
+
+      return <String, dynamic>{
+        'options': options,
+        'seasons': availableSeasons,
+        'season': resolvedSeason,
+        'episode': resolvedEpisode,
       };
-    }).toList(growable: false);
+    }
 
     final selection = await _showDownloadSelectionSheet(
       movie: movie,
-      initialOptions: options,
+      initialOptions: const <Map<String, String>>[],
       isSeries: isSeries,
-      seasons: availableSeasons,
+      seasons: const <Map<String, dynamic>>[],
       initialSeason: resolvedSeason,
       initialEpisode: resolvedEpisode,
+      loadOptions: loadDownloadOptions,
     );
     if (!mounted || selection == null) return;
 
@@ -14498,8 +14586,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   void _handlePlayerGestureStart(ScaleStartDetails details) {
     _gestureFeedbackTimer?.cancel();
+    // Compact edge zone reserved for Android's notification shade.
     final topSystemGestureArea =
-        MediaQuery.of(context).viewPadding.top + 24.0;
+        (MediaQuery.of(context).viewPadding.top + 8.0)
+            .clamp(24.0, 32.0)
+            .toDouble();
     if (details.localFocalPoint.dy <= topSystemGestureArea) {
       _gestureStartPoint = null;
       _gestureMode = 'system';
