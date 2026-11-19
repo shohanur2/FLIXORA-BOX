@@ -1948,6 +1948,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _activeBackgroundDownloadTasks = 0;
 
   Future<bool> _beginBackgroundDownloadTask() async {
+    // Wait for the saved preference so the initial default cannot skip the service.
+    await (_appSettingsFuture ??= _loadAppSettings());
     if (!_downloadInBackground) return false;
     _activeBackgroundDownloadTasks++;
     if (_activeBackgroundDownloadTasks == 1) {
@@ -1983,7 +1985,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
-  bool _downloadInBackground = false;
+  bool _downloadInBackground = true;
+  Future<void>? _appSettingsFuture;
   bool _autoMiniPlayer = true;
   String _appLanguage = 'English';
   String _preferredQuality = 'Auto';
@@ -2961,7 +2964,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
       final prefsFuture = SharedPreferences.getInstance();
       unawaited(_loadSavedPreferences().catchError((_) {}));
-      unawaited(_loadAppSettings());
+      unawaited(_appSettingsFuture ??= _loadAppSettings());
 
       await _loadCachedMovies();
       if (!mounted) return;
@@ -14966,6 +14969,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       // mpv's software volume ceiling: 200% permits up to 2x amplification.
       await platformPlayer.setProperty('volume-max', '200');
+      // Use Android hardware decoding when available; MPV falls back safely.
+      await platformPlayer.setProperty('hwdec', 'auto-safe');
 
       if (widget.localFilePath == null) {
         // Explicitly enable the network demuxer cache for MovieBox/WeFeed and
@@ -15784,7 +15789,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   : ''))
           .toLowerCase();
       final decodedText = _decodeSubtitleText(bytes);
-      final detectedExtension = _detectSubtitleExtension(decodedText, ext);
+      final detectedExtension = _detectImportedSubtitleExtension(decodedText, ext);
       // Preserve valid MicroDVD .sub files; libmpv supports them as external tracks.
       final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
 
@@ -16587,6 +16592,36 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
   }
 
+  // Import-only ASS/SSA validation. Keep the shared detector below unchanged.
+  // Automatic subtitle downloads continue using the original detector.
+  String _detectImportedSubtitleExtension(String source, String preferred) {
+    final normalizedPreferred = preferred.trim().toLowerCase();
+    if (normalizedPreferred == 'ass' || normalizedPreferred == 'ssa') {
+      final normalizedText = source
+          .replaceFirst('\uFEFF', '')
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .trim();
+      final lines = normalizedText.split('\n');
+      final eventsIndex = lines.indexWhere(
+        (line) => line.trim().toLowerCase() == '[events]',
+      );
+      if (eventsIndex < 0) {
+        throw StateError('The ASS/SSA subtitle has no Events section.');
+      }
+      final hasDialogue = lines.skip(eventsIndex + 1).any((line) {
+        final trimmed = line.trimLeft();
+        return trimmed.length >= 9 &&
+            trimmed.substring(0, 8).toLowerCase() == 'dialogue' &&
+            trimmed.substring(8).trimLeft().startsWith(':');
+      });
+      if (!hasDialogue) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return normalizedPreferred;
+    }
+    return _detectSubtitleExtension(source, preferred);
+  }
   String _detectSubtitleExtension(String source, String preferred) {
     final text = source.replaceFirst('\uFEFF', '').trim();
     final lower = text.toLowerCase();
