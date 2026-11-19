@@ -1439,6 +1439,12 @@ class FlixoraMovieService {
 class DownloadTask {
   final int movieId;
   final int downloadId;
+  final int tmdbId;
+  final String mediaType;
+  final String movieSource;
+  final String movieBoxId;
+  final String movieBoxDetailPath;
+  final bool movieBoxIsSeries;
   final String title;
   final String poster;
   String videoUrl;
@@ -1463,6 +1469,12 @@ class DownloadTask {
     this.downloadId = 0,
     required this.title,
     required this.poster,
+    this.tmdbId = 0,
+    this.mediaType = 'movie',
+    this.movieSource = 'moviebox',
+    this.movieBoxId = '',
+    this.movieBoxDetailPath = '',
+    this.movieBoxIsSeries = false,
     this.videoUrl = '',
     this.quality = 'Original',
     this.headers = const <String, String>{},
@@ -1491,6 +1503,12 @@ class DownloadTask {
   Map<String, dynamic> toJson() => {
         'movieId': movieId,
         'downloadId': downloadId,
+        'tmdbId': tmdbId,
+        'mediaType': mediaType,
+        'movieSource': movieSource,
+        'movieBoxId': movieBoxId,
+        'movieBoxDetailPath': movieBoxDetailPath,
+        'movieBoxIsSeries': movieBoxIsSeries,
         'title': title,
         'poster': poster,
         'videoUrl': videoUrl,
@@ -1516,6 +1534,12 @@ class DownloadTask {
         downloadId: _toInt(json['downloadId']) > 0
             ? _toInt(json['downloadId'])
             : _toInt(json['movieId']),
+        tmdbId: _toInt(json['tmdbId']),
+        mediaType: (json['mediaType'] ?? 'movie').toString(),
+        movieSource: (json['movieSource'] ?? 'moviebox').toString(),
+        movieBoxId: (json['movieBoxId'] ?? '').toString(),
+        movieBoxDetailPath: (json['movieBoxDetailPath'] ?? '').toString(),
+        movieBoxIsSeries: json['movieBoxIsSeries'] == true,
         title: (json['title'] ?? 'Downloaded Movie').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
@@ -4730,6 +4754,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       downloadId: DateTime.now().microsecondsSinceEpoch,
       title: movie.title,
       poster: movie.posterUrl,
+      tmdbId: movie.tmdbId,
+      mediaType: movie.mediaType,
+      movieSource: movie.source,
+      movieBoxId: movie.movieBoxId,
+      movieBoxDetailPath: movie.movieBoxDetailPath,
+      movieBoxIsSeries: movie.movieBoxIsSeries,
       videoUrl: first['video_url'] ?? '',
       quality: quality,
       headers: _decodeDownloadHeaders(first['headers']),
@@ -8161,7 +8191,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (task.filePath == null) return;
         final movie = Movie(
           id: task.movieId,
-          title: task.displayTitle,
+          tmdbId: task.tmdbId,
+          source: task.movieSource,
+          title: task.title,
           year: 'N/A',
           overview: '',
           poster: task.poster,
@@ -8169,10 +8201,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           rating: 0,
           releaseDate: '',
           videoUrl: task.filePath!,
+          mediaType: task.mediaType,
+          movieBoxId: task.movieBoxId,
+          movieBoxDetailPath: task.movieBoxDetailPath,
+          movieBoxIsSeries: task.movieBoxIsSeries,
         );
         _pushPlayerRoute((_) => MoviePlayerScreen(
             movie: movie,
             localFilePath: task.filePath,
+            localSeasonNumber: task.seasonNumber,
+            localEpisodeNumber: task.episodeNumber,
+            localSubtitlePaths: task.subtitlePaths,
+            localEpisodeDownloads: _downloads.where((item) =>
+                item.movieId == task.movieId &&
+                item.status == 'Completed' &&
+                item.filePath != null &&
+                item.seasonNumber != null &&
+                item.episodeNumber != null &&
+                File(item.filePath!).existsSync()).toList(growable: false),
             recommendedMovies: _allMovies(),
             onMovieSelected: _openMovie,
             isOnline: _online,
