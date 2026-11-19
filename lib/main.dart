@@ -5561,6 +5561,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           localFilePath: downloaded!.filePath,
           localSeasonNumber: downloaded.seasonNumber,
           localEpisodeNumber: downloaded.episodeNumber,
+          localEpisodeDownloads: _downloads.where((task) =>
+              task.movieId == downloaded!.movieId &&
+              task.status == 'Completed' &&
+              task.filePath != null &&
+              task.seasonNumber != null &&
+              task.episodeNumber != null &&
+              File(task.filePath!).existsSync()).toList(growable: false),
           recommendedMovies: _allMovies(),
           onMovieSelected: _playMovieFromPlayer,
           onSave: () => _toggleSaved(selectedMovie),
@@ -11786,6 +11793,7 @@ class MoviePlayerScreen extends StatefulWidget {
   final String? localFilePath;
   final int? localSeasonNumber;
   final int? localEpisodeNumber;
+  final List<DownloadTask> localEpisodeDownloads;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
   final VoidCallback? onSave;
@@ -11801,6 +11809,7 @@ class MoviePlayerScreen extends StatefulWidget {
     this.localFilePath,
     this.localSeasonNumber,
     this.localEpisodeNumber,
+    this.localEpisodeDownloads = const <DownloadTask>[],
     this.recommendedMovies = const [],
     this.onMovieSelected,
     this.onSave,
@@ -12213,9 +12222,22 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   }
 
   List<List<int>> _episodeNavigationEntries() {
-    if (!widget.movie.isMovieBox ||
-        !widget.movie.movieBoxIsSeries ||
-        widget.localFilePath != null) {
+    if (widget.localFilePath != null) {
+      final entries = widget.localEpisodeDownloads
+          .where((task) => task.status == 'Completed' &&
+              task.filePath != null &&
+              task.seasonNumber != null &&
+              task.episodeNumber != null)
+          .map((task) => <int>[task.seasonNumber!, task.episodeNumber!])
+          .toList()
+        ..sort((a, b) => a[0] == b[0]
+            ? a[1].compareTo(b[1])
+            : a[0].compareTo(b[0]));
+      final seen = <String>{};
+      return entries.where((entry) =>
+          seen.add('${entry[0]}:${entry[1]}')).toList(growable: false);
+    }
+    if (!widget.movie.isMovieBox || !widget.movie.movieBoxIsSeries) {
       return const <List<int>>[];
     }
 
@@ -12268,6 +12290,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     final target = entries[currentIndex + direction];
     final seasonNumber = target[0];
     final episodeNumber = target[1];
+    if (widget.localFilePath != null) {
+      DownloadTask? localTask;
+      for (final task in widget.localEpisodeDownloads) {
+        if (task.seasonNumber == seasonNumber &&
+            task.episodeNumber == episodeNumber &&
+            task.status == 'Completed' &&
+            task.filePath != null) {
+          localTask = task;
+          break;
+        }
+      }
+      if (localTask == null || !await File(localTask.filePath!).exists()) return;
+      if (mounted && !_isDisposed) setState(() => _loadingQualities = true);
+      try {
+        await _player.open(Media(localTask.filePath!), play: true);
+        if (!mounted || _isDisposed) return;
+        _selectedSeasonNumber = seasonNumber;
+        _selectedEpisodeNumber = episodeNumber;
+        _updatePosition(Duration.zero);
+        _duration = _player.state.duration;
+        await _restoreResumePosition();
+      } catch (error) {
+        debugPrint('Offline episode switch failed: $error');
+        if (mounted && !_isDisposed) {
+          setState(() => _errorMessage = 'Could not open the downloaded episode.');
+        }
+      } finally {
+        if (mounted && !_isDisposed) setState(() => _loadingQualities = false);
+      }
+      return;
+    }
     final season = _movieBoxSeasons.firstWhere(
       (item) => _toInt(item['se']) == seasonNumber,
       orElse: () => <String, dynamic>{},
