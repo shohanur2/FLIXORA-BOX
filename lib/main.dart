@@ -5592,6 +5592,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           localFilePath: downloaded!.filePath,
           localSeasonNumber: downloaded.seasonNumber,
           localEpisodeNumber: downloaded.episodeNumber,
+          localSubtitlePaths: downloaded.subtitlePaths,
           localEpisodeDownloads: _downloads.where((task) =>
               task.movieId == downloaded!.movieId &&
               task.status == 'Completed' &&
@@ -11824,6 +11825,7 @@ class MoviePlayerScreen extends StatefulWidget {
   final String? localFilePath;
   final int? localSeasonNumber;
   final int? localEpisodeNumber;
+  final List<String> localSubtitlePaths;
   final List<DownloadTask> localEpisodeDownloads;
   final List<Movie> recommendedMovies;
   final ValueChanged<Movie>? onMovieSelected;
@@ -11840,6 +11842,7 @@ class MoviePlayerScreen extends StatefulWidget {
     this.localFilePath,
     this.localSeasonNumber,
     this.localEpisodeNumber,
+    this.localSubtitlePaths = const <String>[],
     this.localEpisodeDownloads = const <DownloadTask>[],
     this.recommendedMovies = const [],
     this.onMovieSelected,
@@ -12342,6 +12345,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _updatePosition(Duration.zero);
         _duration = _player.state.duration;
         await _restoreResumePosition();
+        await _activateLocalDownloadedSubtitles(localTask.subtitlePaths);
       } catch (error) {
         debugPrint('Offline episode switch failed: $error');
         if (mounted && !_isDisposed) {
@@ -14381,6 +14385,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           if (!mounted || _isDisposed) return;
 
           if (!isLocal) _currentVideoUrl = playbackSource;
+          if (isLocal) await _activateLocalDownloadedSubtitles(widget.localSubtitlePaths);
           setState(() {
             _selectedQuality = candidate['quality'];
             _initialized = true;
@@ -15217,6 +15222,41 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       title: '${_subtitleLanguageName(language)} · $release',
       language: language,
     ));
+  }
+
+  Future<void> _activateLocalDownloadedSubtitles(List<String> paths) async {
+    if (_isDisposed || paths.isEmpty) return;
+    try {
+      await _player.setSubtitleTrack(SubtitleTrack.auto());
+    } catch (_) {}
+    for (final path in paths) {
+      if (_isDisposed) return;
+      try {
+        final file = File(path);
+        if (!await file.exists() || await file.length() < 8) continue;
+        final name = file.uri.pathSegments.last;
+        final match = RegExp(r'subtitle_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?)\.', caseSensitive: false).firstMatch(name);
+        final language = match?.group(1)?.toLowerCase() ?? 'und';
+        final track = SubtitleTrack.uri(
+          Uri.file(path).toString(),
+          title: _subtitleLanguageName(language),
+          language: language,
+        );
+        await _activateSubtitleTrack(track);
+        _subtitleManuallySelected = true;
+        if (mounted && !_isDisposed) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _selectedSubtitleLanguageCode = language;
+            _subtitleVisibilityEnabled = true;
+            _automaticSubtitleMessage = 'Offline subtitle active';
+          });
+        }
+        return;
+      } catch (error) {
+        debugPrint('Offline subtitle activation skipped: $error');
+      }
+    }
   }
 
   Future<void> _activateSubtitleTrack(SubtitleTrack track) async {
