@@ -4472,7 +4472,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               border: OutlineInputBorder(),
                               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                             ),
-                            items: seasons.map((season) {
+                            items: availableSeasons.map((season) {
                               final number = _toInt(season['se']);
                               return DropdownMenuItem(
                                 value: number,
@@ -4539,7 +4539,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ),
                               const SizedBox(height: 12),
                               if (qualities.isEmpty)
-                                const Text(
+                                Text(
                                   optionsLoading
                                       ? 'Checking available download qualities...'
                                       : (optionsLoadError.isNotEmpty
@@ -4652,6 +4652,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               : () => Navigator.pop(sheetContext, <String, dynamic>{
                                   'language': selectedLanguage,
                                   'qualities': selectedQualities.toList(),
+                                  'options': options,
                                   'season': selectedSeason,
                                   'episodes': selectedEpisodes.toList()..sort(),
                                   'episodeOptionsByNumber': <String, List<Map<String, String>>>{
