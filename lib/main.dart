@@ -54,6 +54,39 @@ Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String video
   final saved=<String>[];final seen=<String>{};final parent=File(videoPath).parent.path;final name=File(videoPath).uri.pathSegments.last;final base=name.contains('.')?name.substring(0,name.lastIndexOf('.')):name;
   final options=task.subtitleOptions.toList()..sort((a,b){int rank(Map<String,dynamic> x){final l=(x['language']??'').toString();return l=='bn'?0:(l=='bn+en'?1:(l=='en'?2:3));}return rank(a).compareTo(rank(b));});
   for(final option in options){final url=(option['url']??'').toString();final uri=Uri.tryParse(url);if(uri==null||!{'http','https'}.contains(uri.scheme)||uri.host.isEmpty||!seen.add(url))continue;try{final response=await http.get(uri,headers:const {'Accept':'text/plain, text/vtt, application/octet-stream, */*','User-Agent':'FLIXORA Subtitle Client/1.0'}).timeout(const Duration(seconds:25));final bytes=response.bodyBytes;final type=(response.headers['content-type']??'').toLowerCase();if(response.statusCode!=200||bytes.length<16||bytes.length>10*1024*1024||(bytes.length>=2&&bytes[0]==0x50&&bytes[1]==0x4b)||type.contains('text/html')||type.contains('application/json'))continue;var ext=(option['format']??'').toString().toLowerCase().replaceFirst('.','');if(!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(ext)){ext=RegExp(r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',caseSensitive:false).firstMatch(uri.path)?.group(1)?.toLowerCase()??'srt';}final lang=(option['language']??'und').toString().replaceAll(RegExp(r'[^a-z0-9+_-]'),'_');final file=File('$parent/$base.subtitle_${saved.length+1}_$lang.$ext');await file.writeAsBytes(bytes,flush:true);saved.add(file.path);}catch(error){debugPrint('Offline subtitle download skipped: $error');}}
+  // Also preserve subtitle releases already downloaded by the online Subtitle
+  // system. This keeps its provider and cache logic untouched while making
+  // those same files available beside the offline video.
+  try {
+    final support = await getApplicationSupportDirectory();
+    final cacheDir = Directory('${support.path}/flixora_subtitles');
+    final mediaId = task.tmdbId > 0 ? task.tmdbId : task.movieId;
+    final isSeries = task.mediaType == 'tv' || task.movieBoxIsSeries;
+    final episodeKey = isSeries && task.seasonNumber != null && task.episodeNumber != null
+        ? '_s${task.seasonNumber}_e${task.episodeNumber}'
+        : '';
+    final cacheMarker = '_${task.mediaType}_${mediaId}$episodeKey_';
+    if (await cacheDir.exists()) {
+      await for (final entity in cacheDir.list()) {
+        if (entity is! File) continue;
+        final cacheName = entity.uri.pathSegments.last;
+        final markerIndex = cacheName.indexOf(cacheMarker);
+        if (markerIndex <= 0) continue;
+        final extension = cacheName.contains('.')
+            ? cacheName.split('.').last.toLowerCase()
+            : '';
+        if (!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(extension)) continue;
+        if (await entity.length() < 16) continue;
+        final language = cacheName.substring(0, markerIndex)
+            .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
+        final target = File('$parent/$base.cached_subtitle_${saved.length+1}_$language.$extension');
+        await entity.copy(target.path);
+        saved.add(target.path);
+      }
+    }
+  } catch (error) {
+    debugPrint('Could not copy cached online subtitles for offline use: $error');
+  }
   return saved;
 }
 
