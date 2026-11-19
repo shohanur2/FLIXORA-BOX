@@ -4830,7 +4830,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       options = rawOptions.map((item) {
         final label = item['quality'] ?? 'Original';
-        final languageMatch = RegExp(r'\[([^\]]+)\]\s*
+        final languageMatch = RegExp(r'\[([^\]]+)\]\s*$').firstMatch(label);
+        final qualityMatch = RegExp(r'^\s*(\d{3,4}p)', caseSensitive: false)
             .firstMatch(label);
         final language = (item['language'] ??
                 languageMatch?.group(1) ??
@@ -19943,122 +19944,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
     );
   }
-}).firstMatch(label);
-        final qualityMatch = RegExp(r'^\s*(\d{3,4}p)', caseSensitive: false)
-            .firstMatch(label);
-        final language = (item['language'] ??
-                languageMatch?.group(1) ??
-                movie.originalLanguage)
-            .toString()
-            .trim();
-        return <String, String>{
-          ...item,
-          'quality': qualityMatch?.group(1)?.toUpperCase() ?? label,
-          'language': language.isEmpty ? 'Original' : language,
-          'size_bytes': '',
-          'size_label': 'Detected when download starts',
-        };
-      }).toList(growable: false);
-
-      return <String, dynamic>{
-        'options': options,
-        'seasons': availableSeasons,
-        'season': resolvedSeason,
-        'episode': resolvedEpisode,
-      };
-    }
-
-    final selection = await _showDownloadSelectionSheet(
-      movie: movie,
-      initialOptions: const <Map<String, String>>[],
-      isSeries: isSeries,
-      seasons: const <Map<String, dynamic>>[],
-      initialSeason: resolvedSeason,
-      initialEpisode: resolvedEpisode,
-      loadOptions: loadDownloadOptions,
-    );
-    if (!mounted || selection == null) return;
-
-    final language = (selection['language'] ?? 'Original').toString();
-    final qualities = (selection['qualities'] as List? ?? const [])
-        .map((item) => item.toString())
-        .toSet();
-    if (isSeries) {
-      final selectedSeason = _toInt(selection['season']);
-      final episodes = (selection['episodes'] as List? ?? const [])
-          .map(_toInt).where((number) => number > 0).toList();
-      final cachedRaw = selection['episodeOptionsByNumber'];
-      final cachedOptions = <int, List<Map<String, String>>>{};
-      if (cachedRaw is Map) {
-        for (final entry in cachedRaw.entries) {
-          final episode = int.tryParse(entry.key.toString()) ?? 0;
-          if (episode <= 0 || entry.value is! List) continue;
-          cachedOptions[episode] = (entry.value as List)
-              .whereType<Map>()
-              .map((item) => Map<String, String>.from(item.map(
-                    (key, value) => MapEntry(key.toString(), value.toString()))))
-              .toList(growable: false);
-        }
-      }
-      final allEpisodeOptions = <int, List<Map<String, String>>>{};
-      await _prefetchSeasonDownloadOptions(
-        movie,
-        season: selectedSeason,
-        episodes: episodes,
-        seed: cachedOptions,
-        onBatch: (loaded) => allEpisodeOptions
-          ..clear()
-          ..addAll(loaded),
-      );
-      var queued = 0;
-      var unavailable = 0;
-      for (final episode in episodes) {
-        final episodeOptions = allEpisodeOptions[episode] ?? const [];
-        for (final quality in qualities) {
-          final matches = episodeOptions.where((item) =>
-              _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
-              _downloadQuality(item).toLowerCase() == quality.toLowerCase()).toList();
-          if (matches.isEmpty) {
-            unavailable++;
-            continue;
-          }
-          await _queueSelectedDownload(
-            movie,
-            matches.first,
-            fallbackOptions: matches,
-            seasonNumber: selectedSeason,
-            episodeNumber: episode,
-          );
-          queued++;
-        }
-      }
-      if (unavailable > 0) {
-        _showMessage(
-          queued.toString() + ' episode download(s) queued; ' +
-          unavailable.toString() + ' selected-quality source(s) unavailable.',
-        );
-      } else if (queued > 0) {
-        _showMessage(queued.toString() + ' episode(s) added to downloads.');
-      }
-      return;
-    }
-
-    final selectedOptions = options.where((item) =>
-        _downloadLanguage(item).toLowerCase() == language.toLowerCase() &&
-        qualities.contains(_downloadQuality(item))).toList();
-    final groupedOptions = <String, List<Map<String, String>>>{};
-    for (final option in selectedOptions) {
-      (groupedOptions[_downloadQuality(option)] ??= <Map<String, String>>[])
-          .add(option);
-    }
-    for (final group in groupedOptions.values) {
-      await _queueSelectedDownload(movie, group.first, fallbackOptions: group);
-    }
-    if (groupedOptions.isNotEmpty) {
-      _showMessage(groupedOptions.length.toString() + ' download quality(ies) added to queue.');
-    }
-  }
-
   Future<void> _runDownloadTask(
     DownloadTask task, {
     bool resume = false,
