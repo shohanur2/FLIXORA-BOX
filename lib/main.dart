@@ -15578,12 +15578,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         allowedExtensions: ['srt', 'ass', 'ssa', 'vtt', 'sub', 'smi', 'ttml'],
         allowMultiple: false,
         withData: true,
+        withReadStream: true,
       );
       if (result == null || result.files.isEmpty) return;
       final picked = result.files.single;
       final path = picked.path;
       final sourceFile = path == null || path.isEmpty ? null : File(path);
+      final streamedBytes = picked.readStream == null
+          ? null
+          : await picked.readStream!.fold<List<int>>(
+              <int>[],
+              (all, chunk) => all..addAll(chunk),
+            );
       final bytes = picked.bytes ??
+          streamedBytes ??
           (sourceFile != null && await sourceFile.exists()
               ? await sourceFile.readAsBytes()
               : null);
@@ -15593,7 +15601,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       if (bytes.length < 8 || bytes.length > 10 * 1024 * 1024) {
         throw StateError('Subtitle file must be between 8 bytes and 10 MB.');
       }
-      final ext = picked.extension?.toLowerCase() ?? '';
+      final ext = (picked.extension ??
+              (picked.name.contains('.')
+                  ? picked.name.split('.').last
+                  : ''))
+          .toLowerCase();
       final decodedText = _decodeSubtitleText(bytes);
       final detectedExtension = _detectSubtitleExtension(decodedText, ext);
       if (detectedExtension == 'sub') {
