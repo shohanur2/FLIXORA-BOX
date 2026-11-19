@@ -14969,8 +14969,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       // mpv's software volume ceiling: 200% permits up to 2x amplification.
       await platformPlayer.setProperty('volume-max', '200');
-      // Use Android hardware decoding when available; MPV falls back safely.
-      await platformPlayer.setProperty('hwdec', 'auto-safe');
+      // Prefer Android hardware decoding when available; keep the existing
+      // playback/network configuration running if this decoder option is unavailable.
+      try {
+        await platformPlayer.setProperty('hwdec', 'auto-safe');
+      } catch (error) {
+        debugPrint('FLIXORA hardware decoder preference unavailable: $error');
+      }
 
       if (widget.localFilePath == null) {
         // Explicitly enable the network demuxer cache for MovieBox/WeFeed and
