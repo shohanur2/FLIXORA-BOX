@@ -1471,7 +1471,7 @@ class DownloadTask {
     required this.poster,
     this.tmdbId = 0,
     this.mediaType = 'movie',
-    this.movieSource = 'moviebox',
+    this.movieSource = 'tmdb',
     this.movieBoxId = '',
     this.movieBoxDetailPath = '',
     this.movieBoxIsSeries = false,
@@ -1535,11 +1535,17 @@ class DownloadTask {
             ? _toInt(json['downloadId'])
             : _toInt(json['movieId']),
         tmdbId: _toInt(json['tmdbId']),
-        mediaType: (json['mediaType'] ?? 'movie').toString(),
-        movieSource: (json['movieSource'] ?? 'moviebox').toString(),
+        mediaType: (json['mediaType'] ??
+            (_toInt(json['seasonNumber']) > 0 ? 'tv' : 'movie')).toString(),
+        movieSource: (json['movieSource'] ??
+            ((json['movieBoxId'] ?? '').toString().isNotEmpty
+                ? 'moviebox'
+                : 'tmdb')).toString(),
         movieBoxId: (json['movieBoxId'] ?? '').toString(),
         movieBoxDetailPath: (json['movieBoxDetailPath'] ?? '').toString(),
-        movieBoxIsSeries: json['movieBoxIsSeries'] == true,
+        movieBoxIsSeries: json['movieBoxIsSeries'] == true ||
+            (_toInt(json['seasonNumber']) > 0 &&
+                _toInt(json['episodeNumber']) > 0),
         title: (json['title'] ?? 'Downloaded Movie').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
