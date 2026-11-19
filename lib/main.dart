@@ -38,6 +38,39 @@ import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
+const MethodChannel _mediaStoreChannel =
+    MethodChannel('com.flixora.flixora/media_store');
+
+Future<String?> _publishDownloadedVideo(String path, String displayName) async {
+  try {
+    return await _mediaStoreChannel.invokeMethod<String>(
+      'publishVideo',
+      {'path': path, 'displayName': displayName},
+    );
+  } catch (error) {
+    debugPrint('Could not publish FLIXORA download to File Manager: $error');
+    return null;
+  }
+}
+
+Future<bool?> _publicDownloadExists(String uri) async {
+  try {
+    return await _mediaStoreChannel.invokeMethod<bool>('exists', {'uri': uri});
+  } catch (error) {
+    debugPrint('Could not verify public FLIXORA download: $error');
+    return null;
+  }
+}
+
+Future<void> _deletePublicDownload(String? uri) async {
+  if (uri == null || uri.isEmpty) return;
+  try {
+    await _mediaStoreChannel.invokeMethod<bool>('delete', {'uri': uri});
+  } catch (error) {
+    debugPrint('Could not delete public FLIXORA download: $error');
+  }
+}
+
 const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const String supabaseAnonKey =
     String.fromEnvironment('SUPABASE_ANON_KEY');
@@ -1396,6 +1429,7 @@ class DownloadTask {
   int sourceIndex;
   final int? seasonNumber;
   final int? episodeNumber;
+  String? publicMediaUri;
   double progress;
   int bytesReceived;
   int totalBytes;
@@ -1415,6 +1449,7 @@ class DownloadTask {
     this.sourceIndex = 0,
     this.seasonNumber,
     this.episodeNumber,
+    this.publicMediaUri,
     this.progress = 0,
     this.bytesReceived = 0,
     this.totalBytes = 0,
@@ -1442,6 +1477,7 @@ class DownloadTask {
         'sourceIndex': sourceIndex,
         'seasonNumber': seasonNumber,
         'episodeNumber': episodeNumber,
+        'publicMediaUri': publicMediaUri,
         'progress': progress,
         'bytesReceived': bytesReceived,
         'totalBytes': totalBytes,
@@ -1480,6 +1516,7 @@ class DownloadTask {
         episodeNumber: _toInt(json['episodeNumber']) > 0
             ? _toInt(json['episodeNumber'])
             : null,
+        publicMediaUri: json['publicMediaUri']?.toString(),
         progress: (json['progress'] as num?)?.toDouble() ?? 1,
         bytesReceived: _toInt(json['bytesReceived']),
         totalBytes: _toInt(json['totalBytes']),
@@ -3189,6 +3226,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      unawaited(_syncDeletedPublicDownloads());
       _refreshConnectionStatus();
       final lastRefresh = _lastHomeRefreshAt;
       if (lastRefresh == null ||
@@ -3199,6 +3237,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         unawaited(loadHome(forceRefresh: true));
       }
     }
+  }
+
+  Future<void> _syncDeletedPublicDownloads() async {
+    final removed = <DownloadTask>[];
+    for (final task in _downloads) {
+      final uri = task.publicMediaUri;
+      if (task.status != 'Completed' || uri == null || uri.isEmpty) continue;
+      if (await _publicDownloadExists(uri) == false) removed.add(task);
+    }
+    if (removed.isEmpty) return;
+    for (final task in removed) {
+      if (task.filePath != null) {
+        try {
+          final file = File(task.filePath!);
+          if (await file.exists()) await file.delete();
+        } catch (_) {}
+      }
+    }
+    if (!mounted) return;
+    setState(() => _downloads.removeWhere(removed.contains));
+    await MovieCache.saveDownloads(_downloads);
   }
 
   Future<void> _refreshConnectionStatus() async {
@@ -4971,6 +5030,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ..totalBytes = fileSize
               ..status = 'Completed'
               ..filePath = path
+              ..publicMediaUri = await _publishDownloadedVideo(
+                path,
+                '${task.displayTitle}_${task.quality}',
+              )
               ..errorMessage = null;
           });
           await MovieCache.saveDownloads(_downloads);
@@ -5059,6 +5122,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (confirmed != true) return;
+    await _deletePublicDownload(task.publicMediaUri);
     if (task.filePath != null) {
       try {
         final file = File(task.filePath!);
