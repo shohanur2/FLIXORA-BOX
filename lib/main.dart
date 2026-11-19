@@ -16594,18 +16594,38 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
   }
 
-  // Import-only ASS/SSA validation. Keep the shared detector below unchanged
-  // because automatic subtitle downloads also use it.
+  // Import-only ASS/SSA validation. Keep the shared detector below unchanged.
+  // Automatic subtitle downloads continue using the original detector.
   String _detectImportedSubtitleExtension(String source, String preferred) {
     final normalizedPreferred = preferred.trim().toLowerCase();
     if (normalizedPreferred == 'ass' || normalizedPreferred == 'ssa') {
-      final text = source
+      final normalizedText = source
           .replaceFirst('\uFEFF', '')
           .replaceAll('\r\n', '\n')
           .replaceAll('\r', '\n')
           .trim();
-      final eventsHeader = RegExp(
-        r'^\\s*\\[\\s*events\\s*\\]\\s*
+      final lines = normalizedText.split('\n');
+      final eventsIndex = lines.indexWhere(
+        (line) => line.trim().toLowerCase() == '[events]',
+      );
+      if (eventsIndex < 0) {
+        throw StateError('The ASS/SSA subtitle has no Events section.');
+      }
+      final hasDialogue = lines.skip(eventsIndex + 1).any((line) {
+        final trimmed = line.trimLeft();
+        return trimmed.length >= 9 &&
+            trimmed.substring(0, 8).toLowerCase() == 'dialogue' &&
+            trimmed.substring(8).trimLeft().startsWith(':');
+      });
+      if (!hasDialogue) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return normalizedPreferred;
+    }
+    return _detectSubtitleExtension(source, preferred);
+  }
+
+  String _detectSubtitleExtension(String source, String preferred) {
     final text = source.replaceFirst('\uFEFF', '').trim();
     final lower = text.toLowerCase();
     if (text.isEmpty) throw StateError('The downloaded subtitle file is empty.');
