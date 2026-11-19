@@ -16292,8 +16292,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       throw StateError('The provider returned a web page or data response, not a subtitle file.');
     }
     if (lower.startsWith('webvtt')) return 'vtt';
+    // Some providers label an SRT payload as ASS/SSA or prepend an incomplete
+    // ASS header. Prefer the actual cue structure when valid, rather than
+    // rejecting a usable subtitle based only on its advertised extension.
+    if (text.contains('-->')) {
+      final hasCueTime = RegExp(
+        r'^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
+        multiLine: true,
+      ).hasMatch(text);
+      if (hasCueTime) return lower.contains('webvtt') ? 'vtt' : 'srt';
+    }
     if (lower.contains('[script info]') || lower.contains('[v4+ styles]') || lower.contains(r'{\an')) {
-      if (!lower.contains('[events]') || !lower.contains('dialogue:')) {
+      final hasEventsSection = RegExp(r'^\s*\[events\]\s*$', multiLine: true, caseSensitive: false).hasMatch(text);
+      final hasDialogueEvents = RegExp(r'^\s*dialogue\s*:', multiLine: true, caseSensitive: false).hasMatch(text);
+      if (!hasEventsSection || !hasDialogueEvents) {
         throw StateError('The ASS/SSA subtitle is missing dialogue events.');
       }
       return preferred == 'ssa' ? 'ssa' : 'ass';
@@ -16858,10 +16870,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         _startHideTimer();
       }
     } catch (error) {
-      if (mounted && !_isDisposed) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not load subtitle: $error')));
-      }
+      // Keep provider/parser failures out of the visitor UI.
+      debugPrint('FLIXORA subtitle download could not be applied: $error');
     }
   }
 
