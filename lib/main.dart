@@ -16622,6 +16622,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     }
     return _detectSubtitleExtension(source, preferred);
   }
+
   String _detectSubtitleExtension(String source, String preferred) {
     final text = source.replaceFirst('\uFEFF', '').trim();
     final lower = text.toLowerCase();
