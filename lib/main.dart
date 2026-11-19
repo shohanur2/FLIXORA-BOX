@@ -3281,6 +3281,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (await file.exists()) await file.delete();
         } catch (_) {}
       }
+      for (final subtitlePath in task.subtitlePaths) {
+        try {
+          final subtitleFile = File(subtitlePath);
+          if (await subtitleFile.exists()) await subtitleFile.delete();
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     setState(() => _downloads.removeWhere(removed.contains));
@@ -5159,6 +5165,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       try {
         final file = File(task.filePath!);
         if (await file.exists()) await file.delete();
+        for (final subtitlePath in task.subtitlePaths) {
+          final subtitleFile = File(subtitlePath);
+          if (await subtitleFile.exists()) await subtitleFile.delete();
+        }
       } catch (_) {
         _showMessage('Could not delete downloaded file.');
         return;
@@ -15679,9 +15689,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           .toLowerCase();
       final decodedText = _decodeSubtitleText(bytes);
       final detectedExtension = _detectSubtitleExtension(decodedText, ext);
-      if (detectedExtension == 'sub') {
-        throw StateError('MicroDVD .sub subtitles are not supported reliably. Please use SRT or ASS.');
-      }
+      // Preserve valid MicroDVD .sub files; libmpv supports them as external tracks.
       final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
 
       // Keep imported subtitles in app-private storage. File-picker paths can
