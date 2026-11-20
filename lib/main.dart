@@ -19688,7 +19688,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
         foregroundColor: playerWhite,
-        side: const BorderSide(color: Color(0x3DFFFFFF)),
+        side: const BorderSide(color: Color(0x88E5EEFF), width: 0.9),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       ),
       icon: Icon(icon, color: playerGold, size: 18),
