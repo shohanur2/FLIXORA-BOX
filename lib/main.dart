@@ -18602,20 +18602,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       required String tooltip,
       required VoidCallback onPressed,
     }) {
-      return Container(
-        width: 46,
-        height: 46,
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.48),
-          shape: BoxShape.circle,
-          border: Border.all(color: const Color(0x55FFFFFF)),
-        ),
-        child: IconButton(
+      return LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(30),
+        blur: 14,
+        child: SizedBox(
+          width: 46,
+          height: 46,
+          child: IconButton(
           tooltip: tooltip,
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           onPressed: onPressed,
-          icon: Icon(icon, color: playerWhite, size: 25),
+            icon: Icon(icon, color: playerWhite, size: 25),
+          ),
         ),
       );
     }
