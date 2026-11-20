@@ -11862,7 +11862,11 @@ class MovieDetailsScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  LiquidGlassSurface(
+                    padding: const EdgeInsets.all(12),
+                    borderRadius: BorderRadius.circular(20),
+                    blur: 18,
+                    child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ClipRRect(
@@ -11961,6 +11965,7 @@ class MovieDetailsScreen extends StatelessWidget {
                         ),
                       ),
                     ],
+                    ),
                   ),
                   const SizedBox(height: 20),
                   if (movie.genres.isNotEmpty)
