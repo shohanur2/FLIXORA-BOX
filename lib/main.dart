@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
@@ -1753,6 +1755,64 @@ class _NonBlockingPlayerRoute extends PageRouteBuilder<void> {
 
   @override
   Widget buildModalBarrier() => const SizedBox.shrink();
+}
+
+/// Reusable translucent surface for the Liquid Glass visual system.
+/// This widget is presentation-only; it never intercepts gestures or changes actions.
+class LiquidGlassSurface extends StatelessWidget {
+  const LiquidGlassSurface({
+    super.key,
+    required this.child,
+    this.borderRadius = const BorderRadius.all(Radius.circular(22)),
+    this.padding = EdgeInsets.zero,
+    this.blur = 18,
+  });
+
+  final Widget child;
+  final BorderRadius borderRadius;
+  final EdgeInsetsGeometry padding;
+  final double blur;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            borderRadius: borderRadius,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0x55FFFFFF),
+                Color(0x221C2B45),
+                Color(0x33101625),
+              ],
+            ),
+            border: Border.all(color: const Color(0x66E5EEFF), width: 0.8),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33101A30),
+                blurRadius: 24,
+                spreadRadius: -8,
+                offset: Offset(0, 10),
+              ),
+              BoxShadow(
+                color: Color(0x22FFFFFF),
+                blurRadius: 1,
+                spreadRadius: 0,
+                offset: Offset(0, 1),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
 }
 
 class FlixoraApp extends StatelessWidget {
@@ -10430,15 +10490,16 @@ Entertainment Beyond Boundaries.
               ? NoInternetScreen(onRefresh: _refreshFromOfflineScreen)
               : _currentPage(),
       extendBody: true,
-      bottomNavigationBar: _showRanking ? null : Container(
-        color: panel,
+      bottomNavigationBar: _showRanking ? null : LiquidGlassSurface(
+        borderRadius: BorderRadius.zero,
+        blur: 24,
         child: SafeArea(
           top: false,
           maintainBottomViewPadding: true,
           child: Container(
-            height: 56,
+            height: 60,
             decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: ink10, width: 0.5)),
+              border: Border(top: BorderSide(color: Color(0x66E5EEFF), width: 0.7)),
             ),
             child: Row(
               children: [
