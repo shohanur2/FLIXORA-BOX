@@ -1927,6 +1927,54 @@ class FlixoraApp extends StatelessWidget {
           thickness: 0.7,
           space: 1,
         ),
+        popupMenuTheme: PopupMenuThemeData(
+          color: const Color(0xEE182131),
+          surfaceTintColor: Colors.transparent,
+          elevation: 18,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Color(0x66DCE7FF), width: 0.8),
+          ),
+          textStyle: const TextStyle(color: Color(0xFFE8EEFF)),
+        ),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Color(0xEE151D2B),
+          modalBackgroundColor: Color(0xF0151D2B),
+          surfaceTintColor: Colors.transparent,
+          elevation: 20,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+            side: BorderSide(color: Color(0x55DCE7FF), width: 0.8),
+          ),
+          clipBehavior: Clip.antiAlias,
+        ),
+        snackBarTheme: SnackBarThemeData(
+          backgroundColor: const Color(0xEE202B3D),
+          contentTextStyle: const TextStyle(color: Color(0xFFF0F4FF)),
+          behavior: SnackBarBehavior.floating,
+          elevation: 12,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0x55DCE7FF), width: 0.7),
+          ),
+        ),
+        sliderTheme: const SliderThemeData(
+          activeTrackColor: Color(0xFFE8D19A),
+          inactiveTrackColor: Color(0x557F8DA8),
+          thumbColor: Color(0xFFF5E6C5),
+          overlayColor: Color(0x33DCE7FF),
+          valueIndicatorColor: Color(0xEE28364D),
+        ),
+        tooltipTheme: const TooltipThemeData(
+          decoration: BoxDecoration(
+            color: Color(0xEE202B3D),
+            borderRadius: BorderRadius.all(Radius.circular(10)),
+            border: Border.fromBorderSide(
+              BorderSide(color: Color(0x55DCE7FF), width: 0.7),
+            ),
+          ),
+          textStyle: TextStyle(color: Color(0xFFF0F4FF), fontSize: 12),
+        ),
         useMaterial3: true,
       ),
       home: const HomeScreen(),
@@ -10409,7 +10457,12 @@ Entertainment Beyond Boundaries.
     return Scaffold(
       extendBodyBehindAppBar: false,
       appBar: AppBar(
-        backgroundColor: bg,
+        flexibleSpace: LiquidGlassSurface(
+          borderRadius: BorderRadius.zero,
+          blur: 22,
+          child: const SizedBox.expand(),
+        ),
+        backgroundColor: Colors.transparent,
         systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
