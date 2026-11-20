@@ -18900,7 +18900,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      child: Row(
+      child: LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(18),
+        blur: 16,
+        child: Row(
         children: [
           Material(
             color: Colors.black.withValues(alpha: 0.48),
@@ -19074,6 +19077,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
           ),
         ],
+        ),
       ),
     );
   }
