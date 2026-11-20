@@ -6965,9 +6965,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return SizedBox(
       height: heroHeight,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
           NotificationListener<ScrollNotification>(
             onNotification: (notification) {
               if (notification is ScrollStartNotification &&
@@ -7043,7 +7045,39 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             bottom: 6,
             child: _featuredQuickCards(slides),
           ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(20),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              blur: 16,
+              child: Text(
+                '${(_slide.clamp(0, slides.length - 1) + 1).toString().padLeft(2, '0')} / ${slides.length.toString().padLeft(2, '0')}',
+                style: const TextStyle(
+                  color: white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: const Color(0x66E5EEFF),
+                    width: 0.8,
+                  ),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
+          ),
         ],
+      ),
       ),
     );
   }
