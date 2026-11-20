@@ -7848,8 +7848,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           child: Container(
             height: 46,
             decoration: BoxDecoration(
-              color: const Color(0xFF3B3C40),
-              borderRadius: BorderRadius.circular(9),
+              color: const Color(0x553D4B68),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: const Color(0x66DCE7FF),
+                width: 0.8,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x22101A30),
+                  blurRadius: 16,
+                  offset: Offset(0, 5),
+                ),
+              ],
             ),
             child: TextField(
               controller: _searchController,
