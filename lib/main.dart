@@ -7619,9 +7619,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
-        color: const Color(0xFF15161A),
-        borderRadius: BorderRadius.circular(8),
+      child: LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(10),
+        blur: 13,
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
           onTap: _isOpeningTitle ? null : () => _playMovie(movie),
