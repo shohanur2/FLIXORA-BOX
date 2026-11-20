@@ -8086,11 +8086,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final imageUrl = image.backdropUrl.isNotEmpty
                   ? image.backdropUrl
                   : image.posterUrl;
-              return Material(
-                color: panel,
-                borderRadius: BorderRadius.circular(8),
+              return LiquidGlassSurface(
+                borderRadius: BorderRadius.circular(12),
+                blur: 12,
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(12),
                   onTap: () => setState(() => _homeCategory = entry.value),
                   child: SizedBox(
                     width: 145,
@@ -8744,7 +8744,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
             return GestureDetector(onTap: () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
+              LiquidGlassSurface(
+                borderRadius: BorderRadius.circular(10),
+                blur: 10,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: SizedBox(
+                    width: 148,
+                    height: 78,
+                    child: FlixoraCachedImage(imageUrl: image, isOnline: _online),
+                  ),
+                ),
+              ),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
             ])));
