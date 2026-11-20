@@ -8507,8 +8507,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 selected: selected,
                 onSelected: (_) => setState(() => _librarySection = section),
                 selectedColor: gold,
-                backgroundColor: panel,
-                side: BorderSide(color: selected ? gold : ink24),
+                backgroundColor: const Color(0x553D4B68),
+                side: BorderSide(
+                  color: selected ? gold : const Color(0x66DCE7FF),
+                  width: 0.8,
+                ),
                 labelStyle: TextStyle(
                   color: selected ? white : ink70,
                   fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
@@ -8562,13 +8565,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ],
         ),
         const SizedBox(height: 18),
-        Container(
+        LiquidGlassSurface(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
-          decoration: BoxDecoration(
-            color: panel,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: gold.withValues(alpha: 0.28)),
-          ),
+          borderRadius: BorderRadius.circular(18),
+          blur: 18,
           child: Row(
             children: [
               _cineProfileStat('WATCHED', _watchHistory.length.toString()),
@@ -8814,10 +8814,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _profileGroup(List<Widget> children) {
-    return Card(
-      color: panel,
-      margin: EdgeInsets.zero,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+    return LiquidGlassSurface(
+      borderRadius: BorderRadius.circular(16),
+      blur: 16,
       child: Column(children: children),
     );
   }
@@ -11972,12 +11971,15 @@ class MovieDetailsScreen extends StatelessWidget {
                           .map(
                             (genre) => Chip(
                               label: Text(genre),
-                              backgroundColor: panel,
+                              backgroundColor: const Color(0x553D4B68),
                               labelStyle: const TextStyle(
                                 color: goldLight,
                                 fontSize: 11,
                               ),
-                              side: BorderSide.none,
+                              side: const BorderSide(
+                                color: Color(0x66DCE7FF),
+                                width: 0.8,
+                              ),
                             ),
                           )
                           .toList(),
