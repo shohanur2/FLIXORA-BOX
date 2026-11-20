@@ -19630,8 +19630,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        ClipRRect(
+                        LiquidGlassSurface(
                           borderRadius: BorderRadius.circular(9),
+                          blur: 12,
                           child: SizedBox(
                             width: 112,
                             height: 148,
