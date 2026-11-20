@@ -6826,9 +6826,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             width: 110,
             margin: const EdgeInsets.symmetric(horizontal: 4),
             decoration: BoxDecoration(
-              color: const Color(0xFF17181C),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF292B31), width: 0.8),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0x66FFFFFF),
+                  Color(0xAA263247),
+                  Color(0xCC111827),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: const Color(0x66E5EEFF), width: 0.8),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x44000000),
+                  blurRadius: 14,
+                  offset: Offset(0, 6),
+                ),
+              ],
             ),
             child: Material(
               color: Colors.transparent,
@@ -6896,9 +6911,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       alignment: Alignment.centerLeft,
                       padding: const EdgeInsets.symmetric(horizontal: 7),
                       decoration: const BoxDecoration(
-                        color: Color(0xFF202126),
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0xCC34445C), Color(0xEE101827)],
+                        ),
                         borderRadius: BorderRadius.vertical(
-                          bottom: Radius.circular(7),
+                          bottom: Radius.circular(10),
                         ),
                       ),
                       child: Text(
@@ -8326,10 +8345,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return Container(
           key: ValueKey('collection:${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
           decoration: BoxDecoration(
-            color: const Color(0xFF17181C),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF292B31), width: 0.8),
-          ),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0x66FFFFFF),
+                  Color(0xAA263247),
+                  Color(0xCC111827),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: const Color(0x66E5EEFF), width: 0.8),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x44000000),
+                  blurRadius: 14,
+                  offset: Offset(0, 6),
+                ),
+              ],
+            ),
           child: Material(
             color: Colors.transparent,
             borderRadius: BorderRadius.circular(8),
@@ -8395,11 +8429,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 7),
                     decoration: const BoxDecoration(
-                      color: Color(0xFF202126),
-                      borderRadius: BorderRadius.vertical(
-                        bottom: Radius.circular(7),
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0xCC34445C), Color(0xEE101827)],
+                        ),
+                        borderRadius: BorderRadius.vertical(
+                          bottom: Radius.circular(10),
+                        ),
                       ),
-                    ),
                     child: Text(
                       _displayTitle(movie),
                       maxLines: 1,
