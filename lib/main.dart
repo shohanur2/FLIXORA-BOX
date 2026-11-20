@@ -1778,21 +1778,94 @@ class FlixoraApp extends StatelessWidget {
           surface: panel,
         ),
         appBarTheme: const AppBarTheme(
-          backgroundColor: bg,
+          backgroundColor: Color(0xCC10131D),
           foregroundColor: white,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          surfaceTintColor: Colors.transparent,
+          centerTitle: false,
         ),
         navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: panel,
-          indicatorColor: gold.withValues(alpha: 0.16),
+          backgroundColor: const Color(0xCC151925),
+          elevation: 0,
+          indicatorColor: const Color(0x55B8C9FF),
           labelTextStyle: WidgetStateProperty.resolveWith((states) {
             return TextStyle(
               color: states.contains(WidgetState.selected)
-                  ? gold
-                  : ink58,
-              fontWeight: FontWeight.bold,
+                  ? const Color(0xFFE8EEFF)
+                  : const Color(0x99E0E7FF),
+              fontWeight: FontWeight.w600,
               fontSize: 12,
             );
           }),
+          iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? const Color(0xFFF3F6FF)
+                : const Color(0x99DCE4F8),
+          )),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0x553D4B68),
+            foregroundColor: const Color(0xFFF4F6FF),
+            disabledBackgroundColor: const Color(0x223D4B68),
+            disabledForegroundColor: const Color(0x668A93A8),
+            elevation: 0,
+            shadowColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            side: const BorderSide(color: Color(0x66DCE7FF), width: 0.8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFE8EEFF),
+            backgroundColor: const Color(0x221D2638),
+            side: const BorderSide(color: Color(0x66DCE7FF), width: 0.8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFFE4EBFF),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0x331D2638),
+          hintStyle: const TextStyle(color: Color(0x88E0E7F5)),
+          labelStyle: const TextStyle(color: Color(0xBBDCE5FA)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: Color(0x55DCE7FF)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: Color(0x44DCE7FF)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: const BorderSide(color: Color(0xCCB9CCFF), width: 1.4),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: const Color(0x331D2638),
+          selectedColor: const Color(0x664F6387),
+          disabledColor: const Color(0x221D2638),
+          secondarySelectedColor: const Color(0x664F6387),
+          side: const BorderSide(color: Color(0x55DCE7FF)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          labelStyle: const TextStyle(color: Color(0xFFE6ECFA)),
+          secondaryLabelStyle: const TextStyle(color: Color(0xFFE6ECFA)),
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+        ),
+        dividerTheme: const DividerThemeData(
+          color: Color(0x33DCE7FF),
+          thickness: 0.7,
+          space: 1,
         ),
         useMaterial3: true,
       ),
