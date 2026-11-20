@@ -1927,6 +1927,42 @@ class FlixoraApp extends StatelessWidget {
           thickness: 0.7,
           space: 1,
         ),
+        cardTheme: CardThemeData(
+          color: const Color(0xAA1D293B),
+          surfaceTintColor: Colors.transparent,
+          elevation: 8,
+          shadowColor: const Color(0x44101A30),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: const BorderSide(color: Color(0x55DCE7FF), width: 0.7),
+          ),
+          margin: const EdgeInsets.all(4),
+        ),
+        dialogTheme: DialogThemeData(
+          backgroundColor: const Color(0xF0182232),
+          surfaceTintColor: Colors.transparent,
+          elevation: 20,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+            side: const BorderSide(color: Color(0x66DCE7FF), width: 0.8),
+          ),
+          titleTextStyle: const TextStyle(
+            color: Color(0xFFF0F4FF),
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
+          contentTextStyle: const TextStyle(color: Color(0xFFDCE5F5)),
+        ),
+        iconButtonTheme: IconButtonThemeData(
+          style: IconButton.styleFrom(
+            foregroundColor: const Color(0xFFE8EEFF),
+            backgroundColor: const Color(0x221D2638),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: Color(0x44DCE7FF), width: 0.6),
+            ),
+          ),
+        ),
         popupMenuTheme: PopupMenuThemeData(
           color: const Color(0xEE182131),
           surfaceTintColor: Colors.transparent,
