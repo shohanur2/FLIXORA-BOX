@@ -7052,14 +7052,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(20),
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
               blur: 16,
-              child: Text(
-                '${(_slide.clamp(0, slides.length - 1) + 1).toString().padLeft(2, '0')} / ${slides.length.toString().padLeft(2, '0')}',
-                style: const TextStyle(
-                  color: white,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.1,
-                ),
+              child: AnimatedBuilder(
+                animation: _sliderController,
+                builder: (context, _) {
+                  final activeIndex = _sliderController.hasClients
+                      ? (_sliderController.page?.round() ?? _slide)
+                      : _slide;
+                  return Text(
+                    '${(activeIndex.clamp(0, slides.length - 1) + 1).toString().padLeft(2, '0')} / ${slides.length.toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.1,
+                    ),
+                  );
+                },
               ),
             ),
           ),
