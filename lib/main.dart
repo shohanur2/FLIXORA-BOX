@@ -15451,11 +15451,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           right: viewPadding.right + miniRight,
           bottom: viewPadding.bottom + viewInsets.bottom + miniBottom,
           child: Material(
-            color: Colors.black,
+            color: const Color(0xDD182438),
             elevation: 20,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(13),
-              side: const BorderSide(color: Color(0x55D9B45B)),
+              side: const BorderSide(color: Color(0x88E5EEFF)),
             ),
             clipBehavior: Clip.antiAlias,
             child: SizedBox(
@@ -15465,7 +15465,16 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 children: [
                   Container(
                     height: 32,
-                    color: const Color(0xFF171717),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xCC40516A), Color(0xEE101827)],
+                      ),
+                      border: Border(
+                        bottom: BorderSide(color: Color(0x55FFFFFF)),
+                      ),
+                    ),
                     padding: const EdgeInsets.only(left: 6, right: 2),
                     child: Row(
                       children: [
