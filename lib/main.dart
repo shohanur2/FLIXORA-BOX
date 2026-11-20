@@ -7120,8 +7120,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                             right: 6,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF25272D),
-                            borderRadius: BorderRadius.circular(8),
+                            gradient: const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Color(0xCCFFFFFF),
+                                Color(0x99202B40),
+                                Color(0xCC111827),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0x66E5EEFF),
+                              width: 0.8,
+                            ),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x44000000),
+                                blurRadius: 16,
+                                offset: Offset(0, 7),
+                              ),
+                            ],
                           ),
                           child: Row(
                             children: [
@@ -8800,10 +8819,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       itemBuilder: (context, index) {
         final movie = _watchHistory[index];
         final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-        return InkWell(
-          borderRadius: BorderRadius.circular(9),
-          onTap: () => _playMovie(movie),
-          child: Row(children: [
+        return LiquidGlassSurface(
+          borderRadius: BorderRadius.circular(14),
+          padding: const EdgeInsets.all(10),
+          blur: 14,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(9),
+            onTap: () => _playMovie(movie),
+            child: Row(children: [
             ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
               FlixoraCachedImage(imageUrl: image, isOnline: _online),
               Positioned(left: 0, right: 0, bottom: 0, child: Container(padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3), color: Colors.black54, child: Text(movie.year, style: const TextStyle(color: white, fontSize: 10, fontWeight: FontWeight.bold)))),
@@ -8843,7 +8866,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
             ),
             IconButton(tooltip: 'Play', onPressed: () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
-          ]),
+            ]),
+          ),
         );
       },
     );
@@ -18627,13 +18651,9 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         compact ? 10 : 66,
         compact ? 6 : 18,
       ),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.transparent,
-          gradient: null,
-          borderRadius: BorderRadius.circular(compact ? 12 : 18),
-          border: Border.all(color: const Color(0x2EFFFFFF)),
-        ),
+      child: LiquidGlassSurface(
+        borderRadius: BorderRadius.circular(compact ? 12 : 18),
+        blur: compact ? 12 : 20,
         child: Padding(
           padding: EdgeInsets.fromLTRB(
             compact ? 8 : 12,
