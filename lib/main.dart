@@ -20172,8 +20172,10 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ),
             ),
         SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 13, 12, 0),
+          child: LiquidGlassSurface(
+            padding: const EdgeInsets.fromLTRB(16, 13, 12, 14),
+            borderRadius: BorderRadius.circular(22),
+            blur: 20,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
