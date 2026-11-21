@@ -1778,9 +1778,9 @@ class TmdbService {
       final localizedOverview = (localized?['overview'] ?? '').toString().trim();
       if (localizedOverview.isNotEmpty) {
         data = {
-          ...data!,
+          ...data,
           'overview': localizedOverview,
-          if (data!['credits'] == null && localized?['credits'] != null)
+          if (data['credits'] == null && localized?['credits'] != null)
             'credits': localized!['credits'],
         };
       }
@@ -6104,43 +6104,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         return resolved;
       }
     }
-    return null;
-  }
-
-  Future<Movie?> _resolveFilmographySource(Movie credit) async {
-    if (!_online || credit.title.trim().isEmpty) return null;
-    final movieBox = _cachedMovieBoxMatch(credit) ??
-        await _searchMovieBoxMatch(credit).timeout(
-          const Duration(seconds: 6), onTimeout: () => null,
-        ).catchError((_) => null);
-    if (movieBox != null && movieBox.isMovieBox) {
-      return movieBox.withFallbackMetadata(credit);
-    }
-    final admin = _cachedFlixoraMatch(credit);
-    if (admin != null && admin.hasPlayableVideoUrl) {
-      return admin.withFallbackMetadata(credit);
-    }
-    try {
-      final publishedMatches = await FlixoraMovieService.searchPublishedMovies(
-        credit.title,
-      ).timeout(const Duration(seconds: 7));
-      final wantedTitle = _normalizedMovieTitle(credit.title);
-      for (final candidate in publishedMatches) {
-        if (candidate.mediaType != credit.mediaType ||
-            !candidate.hasPlayableVideoUrl) continue;
-        final sameTmdbId = credit.tmdbId > 0 &&
-            candidate.tmdbId > 0 && candidate.tmdbId == credit.tmdbId;
-        final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
-        final sameYear = candidate.year == credit.year ||
-            candidate.year == 'N/A' || credit.year == 'N/A';
-        if (sameTmdbId || (sameTitle && sameYear)) {
-          return candidate.withFallbackMetadata(credit);
-        }
-      }
-    } catch (error) {
-      debugPrint('Cast filmography Admin source lookup failed: $error');
-    }
-    if (credit.hasPlayableVideoUrl) return credit;
     return null;
   }
 
