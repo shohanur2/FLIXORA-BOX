@@ -12669,8 +12669,9 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
                                     (matchedMovie.isMovieBox ||
                                      (matchedMovie.isFlixora && matchedMovie.hasPlayableVideoUrl) ||
                                      matchedMovie.hasPlayableVideoUrl);
-                                final poster = matchedMovie?.posterUrl.isNotEmpty == true
-                                    ? matchedMovie.posterUrl : credit.posterUrl;
+                                final matchedPoster = matchedMovie?.posterUrl ?? '';
+                                final poster = matchedPoster.isNotEmpty
+                                    ? matchedPoster : credit.posterUrl;
                                 return InkWell(
                                   borderRadius: BorderRadius.circular(9),
                                   onTap: isMatched ? () {
