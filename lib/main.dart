@@ -6944,354 +6944,149 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Widget _featuredSlider() {
     final slides = _homeTrendingMovies().toList(growable: false);
-    if (slides.isEmpty) return const SizedBox(height: 12);
 
-    final width = MediaQuery.sizeOf(context).width;
-    final isMobile = width < 760;
-    final heroHeight = isMobile
-        ? (width * 1.28).clamp(465.0, 570.0).toDouble()
-        : (width * 0.43).clamp(420.0, 590.0).toDouble();
+    if (slides.isEmpty) {
+      return const SizedBox(height: 12);
+    }
+
+    // Match the supplied mobile reference: a full-width 16:9 hero with
+    // a compact, overlapping horizontal poster-card strip at its bottom.
+    final heroHeight = (MediaQuery.of(context).size.width * 9 / 16)
+        .clamp(200.0, 360.0)
+        .toDouble();
     final pixelRatio = MediaQuery.devicePixelRatioOf(context);
-    final heroCacheWidth = (width * pixelRatio).round().clamp(720, 1800).toInt();
-    final heroCacheHeight =
-        (heroHeight * pixelRatio).round().clamp(450, 1200).toInt();
+    final heroCacheWidth = (MediaQuery.sizeOf(context).width * pixelRatio)
+        .round()
+        .clamp(720, 1440)
+        .toInt();
+    final heroCacheHeight = (heroHeight * pixelRatio)
+        .round()
+        .clamp(450, 900)
+        .toInt();
 
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: width * (isMobile ? 0.03 : 0.045)),
-      child: SizedBox(
-        height: heroHeight,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(isMobile ? 22 : 28),
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              NotificationListener<ScrollNotification>(
-                onNotification: (notification) {
-                  if (notification is ScrollStartNotification &&
-                      notification.dragDetails != null) {
-                    _lastCarouselInteractionAt = DateTime.now();
-                  }
-                  return false;
-                },
-                child: PageView.builder(
-                  controller: _sliderController,
-                  physics: const BouncingScrollPhysics(),
-                  allowImplicitScrolling: true,
-                  itemCount: slides.length,
-                  onPageChanged: (index) {
-                    if (_slide != index) _slide = index;
-                    _scrollFeaturedCardTo(index);
-                  },
-                  itemBuilder: (context, index) {
-                    final movie = slides[index];
-                    final hasBackdrop = movie.backdrop.trim().isNotEmpty &&
-                        movie.backdropUrl.isNotEmpty;
-                    final imageUrl = isMobile
-                        ? (movie.posterUrl.isNotEmpty ? movie.posterUrl : movie.backdropUrl)
-                        : (hasBackdrop ? movie.backdropUrl : movie.posterUrl);
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ColoredBox(
-                          color: const Color(0xFF080A12),
-                          child: imageUrl.isEmpty
-                              ? const SizedBox.expand()
-                              : FlixoraCachedImage(
-                                  imageUrl: imageUrl,
-                                  isOnline: _online,
-                                  fit: BoxFit.cover,
-                                  memCacheWidth: heroCacheWidth,
-                                  memCacheHeight: heroCacheHeight,
-                                  placeholder: const ColoredBox(
-                                    color: Color(0xFF111522),
-                                  ),
-                                  fallback: const ColoredBox(
-                                    color: Color(0xFF080A12),
-                                  ),
-                                ),
-                        ),
-                        DecoratedBox(
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: isMobile
-                                  ? Alignment.topCenter
-                                  : Alignment.centerLeft,
-                              end: Alignment.bottomCenter,
-                              colors: isMobile
-                                  ? const [
-                                      Color(0x08050910),
-                                      Color(0x22050910),
-                                      Color(0xCC070910),
-                                      Color(0xFF070910),
-                                    ]
-                                  : const [
-                                      Color(0xF5070910),
-                                      Color(0xC9070910),
-                                      Color(0x33070910),
-                                      Color(0x99070910),
-                                    ],
-                              stops: isMobile
-                                  ? const [0, 0.28, 0.62, 1]
-                                  : const [0, 0.43, 0.78, 1],
+    return SizedBox(
+      height: heroHeight,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+          NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollStartNotification &&
+                  notification.dragDetails != null) {
+                _lastCarouselInteractionAt = DateTime.now();
+              }
+              return false;
+            },
+            child: PageView.builder(
+              controller: _sliderController,
+              physics: const BouncingScrollPhysics(),
+              allowImplicitScrolling: true,
+              itemCount: slides.length,
+              onPageChanged: (index) {
+                if (_slide != index) _slide = index;
+                _scrollFeaturedCardTo(index);
+              },
+              itemBuilder: (context, index) {
+                final movie = slides[index];
+                final hasLandscapeBackdrop = movie.backdrop.trim().isNotEmpty &&
+                    movie.backdropUrl.isNotEmpty;
+                final heroImageUrl = hasLandscapeBackdrop
+                    ? movie.backdropUrl
+                    : movie.posterUrl;
+                // Keep every hero frame full-bleed and the same 16:9 size.
+                // Poster-only titles now fill the frame instead of shrinking
+                // into a small letterboxed image.
+                const heroImageFit = BoxFit.cover;
+                return GestureDetector(
+                  onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      heroImageUrl.isEmpty
+                          ? const ColoredBox(color: Color(0xFF080808))
+                          : ColoredBox(
+                              color: const Color(0xFF080808),
+                              child: FlixoraCachedImage(
+                              imageUrl: heroImageUrl,
+                              isOnline: _online,
+                              fit: heroImageFit,
+                              memCacheWidth: heroCacheWidth,
+                              memCacheHeight: heroCacheHeight,
+                              placeholder: Container(color: panel),
+                              fallback: const ColoredBox(color: Color(0xFF080808)),
                             ),
+                            ),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Color(0x55000000),
+                              Color(0x08000000),
+                              Colors.transparent,
+                              Color(0xFF080808),
+                            ],
+                            stops: [0, 0.28, 0.58, 1],
                           ),
                         ),
-                        _titleOpeningOverlay(movie),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              AnimatedBuilder(
+                      ),
+                      _titleOpeningOverlay(movie),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 6,
+            child: _featuredQuickCards(slides),
+          ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(20),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              blur: 16,
+              child: AnimatedBuilder(
                 animation: _sliderController,
                 builder: (context, _) {
                   final activeIndex = _sliderController.hasClients
                       ? (_sliderController.page?.round() ?? _slide)
                       : _slide;
-                  final safeIndex = activeIndex.clamp(0, slides.length - 1);
-                  final movie = slides[safeIndex];
-                  final kind = movie.mediaType == 'tv' ? 'TV' : 'MOVIE';
-                  final year = movie.year.isNotEmpty && movie.year != 'N/A'
-                      ? movie.year
-                      : (movie.releaseDate.length >= 4
-                          ? movie.releaseDate.substring(0, 4)
-                          : '');
-                  return Stack(
-                    children: [
-                      Positioned(
-                        left: isMobile ? 22 : width * 0.06,
-                        right: isMobile ? 22 : width * 0.42,
-                        top: isMobile ? null : 0,
-                        bottom: isMobile ? 82 : 0,
-                        child: Column(
-                          mainAxisAlignment: isMobile ? MainAxisAlignment.end : MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.auto_awesome_rounded,
-                                    color: Color(0xFFD8C9FF), size: 14),
-                                const SizedBox(width: 7),
-                                const Text(
-                                  'FLIXORA ORIGINALS',
-                                  style: TextStyle(
-                                    color: Color(0xFFD8C9FF),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 2,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Container(
-                                  width: 34,
-                                  height: 1,
-                                  color: const Color(0x99D8C9FF),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              kind,
-                              style: const TextStyle(
-                                color: Color(0xFFB8B0D0),
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 2,
-                              ),
-                            ),
-                            const SizedBox(height: 7),
-                            Text(
-                              movie.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: isMobile ? (width * 0.1).clamp(34.0, 48.0).toDouble() : (width * 0.054).clamp(38.0, 76.0).toDouble(),
-                                height: 0.98,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: -1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              spacing: 14,
-                              runSpacing: 7,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                if (movie.rating > 0)
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(Icons.star_rounded,
-                                          color: Color(0xFFFFD27B), size: 14),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        movie.rating.toStringAsFixed(1),
-                                        style: const TextStyle(
-                                          color: Color(0xFFFFD27B),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                if (year.isNotEmpty)
-                                  Text(year,
-                                      style: const TextStyle(
-                                          color: Color(0xFFD0D2DC),
-                                          fontSize: 12)),
-                                Text(kind,
-                                    style: const TextStyle(
-                                        color: Color(0xFFD0D2DC),
-                                        fontSize: 12)),
-                              ],
-                            ),
-                            if (movie.overview.trim().isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  maxWidth: isMobile ? 520 : 440,
-                                ),
-                                child: Text(
-                                  movie.overview,
-                                  maxLines: isMobile ? 2 : 3,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: const Color(0xFFD0D2DC),
-                                    fontSize: isMobile ? 12 : 13,
-                                    height: 1.55,
-                                  ),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 17),
-                            Wrap(
-                              spacing: 11,
-                              runSpacing: 10,
-                              children: [
-                                ElevatedButton.icon(
-                                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    backgroundColor: const Color(0xAA7654C8),
-                                    elevation: 0,
-                                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      side: const BorderSide(color: Color(0x99D8C9FF)),
-                                    ),
-                                  ),
-                                  icon: const Icon(Icons.play_circle_fill_rounded, size: 19),
-                                  label: const Text('Watch now', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: () => _openHeroDetails(movie),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    backgroundColor: const Color(0x55212A3D),
-                                    padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 13),
-                                    side: const BorderSide(color: Color(0x66FFFFFF)),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                  ),
-                                  icon: const Icon(Icons.info_outline_rounded, size: 18),
-                                  label: const Text('More info', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-                                ),
-                              ],
-                            )
-                          ],
-                        ),
-                      ),
-                      Positioned(
-                        bottom: isMobile ? 29 : 31,
-                        right: isMobile ? 22 : 28,
-                        child: LiquidGlassSurface(
-                          borderRadius: BorderRadius.circular(20),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 7),
-                          blur: 18,
-                          child: Text(
-                            '${(safeIndex + 1).toString().padLeft(2, '0')} / ${slides.length.toString().padLeft(2, '0')}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: isMobile ? 22 : 48,
-                        bottom: 22,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _heroSliderControl(
-                              icon: Icons.chevron_left_rounded,
-                              tooltip: 'Previous featured title',
-                              onPressed: () => _moveHeroSlide(-1, slides.length),
-                            ),
-                            const SizedBox(width: 10),
-                            ...List.generate(
-                              slides.length > 8 ? 8 : slides.length,
-                              (index) {
-                                final shownIndex = slides.length > 8
-                                    ? (safeIndex < 4
-                                        ? index
-                                        : (safeIndex > slides.length - 5
-                                            ? slides.length - 8 + index
-                                            : safeIndex - 3 + index))
-                                    : index;
-                                final selected = shownIndex == safeIndex;
-                                return GestureDetector(
-                                  onTap: () => _moveHeroSlideTo(
-                                      shownIndex, slides.length),
-                                  child: AnimatedContainer(
-                                    duration:
-                                        const Duration(milliseconds: 220),
-                                    width: selected ? 25 : 9,
-                                    height: 5,
-                                    margin: const EdgeInsets.symmetric(
-                                        horizontal: 3),
-                                    decoration: BoxDecoration(
-                                      color: selected
-                                          ? const Color(0xFFD8C9FF)
-                                          : const Color(0x77FFFFFF),
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            const SizedBox(width: 10),
-                            _heroSliderControl(
-                              icon: Icons.chevron_right_rounded,
-                              tooltip: 'Next featured title',
-                              onPressed: () => _moveHeroSlide(1, slides.length),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              border: Border.all(
-                                  color: const Color(0x55FFFFFF), width: 0.8),
-                              borderRadius:
-                                  BorderRadius.circular(isMobile ? 22 : 28),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                  return Text(
+                    '${(activeIndex.clamp(0, slides.length - 1) + 1).toString().padLeft(2, '0')} / ${slides.length.toString().padLeft(2, '0')}',
+                    style: const TextStyle(
+                      color: white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.1,
+                    ),
                   );
                 },
               ),
-            ],
+            ),
           ),
-        ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: const Color(0x66E5EEFF),
+                    width: 0.8,
+                  ),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
       ),
     );
   }
@@ -20376,7 +20171,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 13, 12, 0),
-            child: Column(
+            child: LiquidGlassSurface(
+              borderRadius: BorderRadius.circular(22),
+              padding: const EdgeInsets.all(14),
+              blur: 20,
+              child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
@@ -20452,6 +20251,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   ),
                 ),
               ],
+              ),
             ),
           ),
         ),
