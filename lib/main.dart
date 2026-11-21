@@ -5765,7 +5765,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
-    await _playMovie(movie, closeCurrentPlayer: true);
+    _openMovieDetails(movie);
   }
 
   Future<void> _playMovie(
@@ -7172,7 +7172,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               IconButton(
                                 onPressed: _isOpeningTitle
                                     ? null
-                                    : () => _playMovie(movie),
+                                    : () => _openMovieDetails(movie),
                                 tooltip: 'Play ${movie.title}',
                                 padding: EdgeInsets.zero,
                                 constraints: const BoxConstraints.tightFor(
@@ -7721,7 +7721,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 IconButton(
                   tooltip: 'Play ${movie.title}',
-                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
+                  onPressed: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                   icon: const CircleAvatar(
                     radius: 15,
                     backgroundColor: gold,
@@ -8831,7 +8831,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
               itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
             ),
-            IconButton(tooltip: 'Play', onPressed: () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
+            IconButton(tooltip: 'Play', onPressed: () => _openMovieDetails(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
           ]),
         );
       },
@@ -10380,7 +10380,7 @@ Entertainment Beyond Boundaries.
               const Spacer(),
               Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _playMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
+            IconButton(onPressed: () => _openMovieDetails(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
