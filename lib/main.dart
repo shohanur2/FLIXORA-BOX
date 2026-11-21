@@ -17680,35 +17680,60 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
   }
 
-  // Import-only ASS/SSA validation. Keep the shared detector below unchanged.
-  // Automatic subtitle downloads continue using the original detector.
+  // Import-only format detection. Inspect file contents first because Android
+  // document providers can report a misleading extension for a valid subtitle.
+  // Automatic subtitle-download detection remains unchanged.
   String _detectImportedSubtitleExtension(String source, String preferred) {
     final normalizedPreferred = preferred.trim().toLowerCase();
-    if (normalizedPreferred == 'ass' || normalizedPreferred == 'ssa') {
-      final normalizedText = source
-          .replaceFirst('\uFEFF', '')
-          .replaceAll('\r\n', '\n')
-          .replaceAll('\r', '\n')
-          .trim();
-      final lines = normalizedText.split('\n');
-      final eventsIndex = lines.indexWhere(
-        (line) => line.trim().toLowerCase() == '[events]',
-      );
+    final normalizedText = source
+        .replaceFirst('\uFEFF', '')
+        .replaceAll('\u0000', '')
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .trim();
+    final lines = normalizedText.split('\n');
+    final eventsIndex = lines.indexWhere(
+      (line) => line.trim().toLowerCase() == '[events]',
+    );
+    final hasAssMarkers = RegExp(
+      r'^\s*\[(?:script info|v4 styles|v4\+ styles|events)\]\s*$',
+      caseSensitive: false,
+      multiLine: true,
+    ).hasMatch(normalizedText) ||
+        RegExp(r'^\s*Dialogue\s*:', caseSensitive: false, multiLine: true)
+            .hasMatch(normalizedText);
+
+    if (hasAssMarkers || normalizedPreferred == 'ass' ||
+        normalizedPreferred == 'ssa') {
+      // A document provider may label an SRT/VTT file as .ass. Detect its
+      // actual cue format instead of rejecting it as an incomplete ASS file.
+      if (!hasAssMarkers && normalizedText.contains('-->')) {
+        return _detectSubtitleExtension(normalizedText, normalizedPreferred);
+      }
       if (eventsIndex < 0) {
         throw StateError('The ASS/SSA subtitle has no Events section.');
       }
-      final hasDialogue = lines.skip(eventsIndex + 1).any((line) {
-        final trimmed = line.trimLeft();
-        return trimmed.length >= 9 &&
-            trimmed.substring(0, 8).toLowerCase() == 'dialogue' &&
-            trimmed.substring(8).trimLeft().startsWith(':');
-      });
+      var nextSectionIndex = -1;
+      for (var i = eventsIndex + 1; i < lines.length; i++) {
+        if (RegExp(r'^\s*\[[^]]+\]\s*$').hasMatch(lines[i].trim())) {
+          nextSectionIndex = i;
+          break;
+        }
+      }
+      final eventLines = lines.sublist(
+        eventsIndex + 1,
+        nextSectionIndex < 0 ? lines.length : nextSectionIndex,
+      );
+      final hasDialogue = eventLines.any(
+        (line) => RegExp(r'^\s*Dialogue\s*:', caseSensitive: false)
+            .hasMatch(line),
+      );
       if (!hasDialogue) {
         throw StateError('The ASS/SSA subtitle is missing dialogue events.');
       }
-      return normalizedPreferred;
+      return normalizedPreferred == 'ssa' ? 'ssa' : 'ass';
     }
-    return _detectSubtitleExtension(source, preferred);
+    return _detectSubtitleExtension(normalizedText, normalizedPreferred);
   }
 
   String _detectSubtitleExtension(String source, String preferred) {
