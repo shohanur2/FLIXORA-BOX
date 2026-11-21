@@ -1420,7 +1420,7 @@ class TmdbService {
   static Future<Map<String, dynamic>> _loadTvMazeMetadata(Movie movie) async {
     if (movie.mediaType != 'tv' || movie.title.trim().isEmpty) return {};
     final rawResults = await _tvMazeGet(
-      '/search/shows?q=\${Uri.encodeQueryComponent(movie.title.trim())}',
+      '/search/shows?q=${Uri.encodeQueryComponent(movie.title.trim())}',
     );
     if (rawResults is! List) return {};
     final wanted = _metadataTitleKey(movie.title);
@@ -1665,7 +1665,6 @@ class TmdbService {
       };
     }
     if (apiKey.isEmpty) return {};
-    if (apiKey.isEmpty || personId <= 0) return {};
     try {
       final uri = Uri.parse('$base/person/$personId').replace(
         queryParameters: {
