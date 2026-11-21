@@ -1395,7 +1395,7 @@ class TmdbService {
 
   static String _metadataSearchTitle(String value) {
     return value
-        .replaceAll(RegExp(r'\\s*[\\(\\[]?(?:19|20)\\d{2}[\\)\\]]?\\s*
+        .replaceAll(RegExp(r'\s*[\(\[]?(?:19|20)\d{2}[\)\]]?\s*
 
   static Future<dynamic> _tvMazeGet(String path) async {
     try {
@@ -1543,7 +1543,7 @@ class TmdbService {
           'page': '1',
           'include_adult': 'false',
         };
-        if (movie.year != 'N/A' && RegExp(r'^(19|20)\\d{2}$').hasMatch(movie.year)) {
+        if (movie.year != 'N/A' && RegExp(r'^(19|20)\d{2}$').hasMatch(movie.year)) {
           parameters[type == 'tv' ? 'first_air_date_year' : 'year'] = movie.year;
         }
         final uri = Uri.parse('$base/search/$type').replace(queryParameters: parameters);
@@ -21095,7 +21095,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     );
   }
 }), '')
-        .replaceAll(RegExp(r'\\s*[-–|]\\s*(?:19|20)\\d{2}\\s*
+        .replaceAll(RegExp(r'\s*[-–|]\s*(?:19|20)\d{2}\s*
 
   static Future<dynamic> _tvMazeGet(String path) async {
     try {
