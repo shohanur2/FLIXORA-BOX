@@ -6290,34 +6290,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _openMovieDetails(movie);
   }
 
+  // Preserve the original FLIXORA navigation: tapping a title poster
+  // starts playback directly and never opens the Details Page.
   void _openMovieDetails(Movie movie) {
     if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MovieDetailsScreen(
-          movie: movie,
-          isOnline: _online,
-          isFavourite: _favourites.contains(movie.id),
-          isSaved: _saved.contains(movie.id),
-          onShare: () => Share.share(
-            '${movie.title} (${movie.year}) on FLIXORA',
-          ),
-          onFavourite: () => _toggleFavourite(movie),
-          onSave: () => _toggleSaved(movie),
-          onDownload: () => addDownload(movie),
-          onWatch: () {
-            Navigator.of(context).pop();
-            unawaited(_playMovie(movie));
-          },
-          onMovieSelected: _openMovieDetails,
-          onResolveMovie: _resolveFilmographySource,
-        ),
-      ),
-    );
+    unawaited(_playMovie(movie));
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
-    _openMovieDetails(movie);
+    await _playMovie(movie);
   }
 
   Future<void> _playMovie(
