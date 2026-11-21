@@ -1223,6 +1223,7 @@ class _TimedMovieListCacheEntry {
 
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
+  static const String tvMazeBase = 'https://api.tvmaze.com';
   static const Duration _catalogueCacheDuration = Duration(minutes: 5);
   static const Duration _searchCacheDuration = Duration(minutes: 2);
   static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
@@ -1393,6 +1394,86 @@ class TmdbService {
   }
   static String _metadataTitleKey(String value) => value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
 
+  static Future<dynamic> _tvMazeGet(String path) async {
+    try {
+      final response = await http.get(Uri.parse('$tvMazeBase$path'))
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body);
+    } catch (error) {
+      debugPrint('TVmaze metadata request failed: $error');
+      return null;
+    }
+  }
+
+  static String _cleanMetadataText(dynamic value) {
+    return value.toString()
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static Future<Map<String, dynamic>> _loadTvMazeMetadata(Movie movie) async {
+    if (movie.mediaType != 'tv' || movie.title.trim().isEmpty) return {};
+    final rawResults = await _tvMazeGet(
+      '/search/shows?q=\${Uri.encodeQueryComponent(movie.title.trim())}',
+    );
+    if (rawResults is! List) return {};
+    final wanted = _metadataTitleKey(movie.title);
+    final candidates = <Map<String, dynamic>>[];
+    for (final raw in rawResults.whereType<Map>()) {
+      final show = raw['show'];
+      if (show is! Map) continue;
+      final item = Map<String, dynamic>.from(show);
+      if (_metadataTitleKey((item['name'] ?? '').toString()) == wanted) {
+        candidates.add(item);
+      }
+    }
+    if (candidates.isEmpty) return {};
+    candidates.sort((a, b) {
+      int score(Map<String, dynamic> item) {
+        final premiered = (item['premiered'] ?? '').toString();
+        return movie.year != 'N/A' && premiered.startsWith(movie.year) ? 0 : 1;
+      }
+      return score(a).compareTo(score(b));
+    });
+    final showId = _toInt(candidates.first['id']);
+    if (showId <= 0) return {};
+    final details = await _tvMazeGet('/shows/$showId?embed=cast');
+    final show = details is Map ? Map<String, dynamic>.from(details) : candidates.first;
+    final embedded = show['_embedded'];
+    final rawCast = embedded is Map ? embedded['cast'] : null;
+    final cast = <Map<String, dynamic>>[];
+    if (rawCast is List) {
+      for (final raw in rawCast.whereType<Map>().take(18)) {
+        final person = raw['person'];
+        final character = raw['character'];
+        if (person is! Map) continue;
+        final image = person['image'];
+        cast.add({
+          'id': _toInt(person['id']),
+          'name': (person['name'] ?? 'Cast member').toString(),
+          'character': character is Map ? (character['name'] ?? '').toString() : '',
+          'profile_path': image is Map
+              ? (image['original'] ?? image['medium'] ?? '').toString()
+              : '',
+          'metadata_source': 'tvmaze',
+        });
+      }
+    }
+    return {
+      'metadata_source': 'tvmaze',
+      'tvmaze_id': showId,
+      'overview': _cleanMetadataText(show['summary'] ?? ''),
+      'cast': cast,
+      'details': show,
+    };
+  }
+
   static Future<Map<String, dynamic>> getTitleMetadata(Movie movie) {
     final key = [
       movie.mediaType, movie.tmdbId.toString(),
@@ -1403,8 +1484,17 @@ class TmdbService {
 
   static Future<Map<String, dynamic>> _loadTitleMetadata(Movie movie) async {
     final fallbackOverview = movie.overview.trim();
-    if (apiKey.isEmpty) return {'overview': fallbackOverview, 'cast': <Map<String, dynamic>>[]};
     final type = movie.mediaType == 'tv' ? 'tv' : 'movie';
+    if (apiKey.isEmpty) {
+      final tvMaze = await _loadTvMazeMetadata(movie);
+      return {
+        'overview': (tvMaze['overview'] ?? '').toString().trim().isNotEmpty
+            ? tvMaze['overview'] : fallbackOverview,
+        'cast': tvMaze['cast'] ?? <Map<String, dynamic>>[],
+        'metadata_source': tvMaze.isNotEmpty ? 'tvmaze' : 'catalogue',
+        'details': tvMaze['details'] ?? <String, dynamic>{},
+      };
+    }
     var id = movie.tmdbId;
     Map<String, dynamic>? data;
 
@@ -1447,11 +1537,35 @@ class TmdbService {
     }
     final rawCast = data?['credits'] is Map ? (data!['credits'] as Map)['cast'] : null;
     final cast = rawCast is List ? rawCast.whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item)).take(18).toList() : <Map<String, dynamic>>[];
-    final overview = (data?['overview'] ?? '').toString().trim();
-    return {'tmdbId': id, 'mediaType': type,
+        .map((item) => <String, dynamic>{
+          ...Map<String, dynamic>.from(item),
+          'metadata_source': 'tmdb',
+        }).take(18).toList() : <Map<String, dynamic>>[];
+    var overview = (data?['overview'] ?? '').toString().trim();
+    var resolvedCast = cast;
+    var metadataSource = 'tmdb';
+    if (type == 'tv' && (overview.isEmpty || resolvedCast.isEmpty)) {
+      final tvMaze = await _loadTvMazeMetadata(movie);
+      final alternateOverview = (tvMaze['overview'] ?? '').toString().trim();
+      final alternateCast = tvMaze['cast'];
+      if (overview.isEmpty && alternateOverview.isNotEmpty) {
+        overview = alternateOverview;
+        metadataSource = 'tvmaze';
+      }
+      if (resolvedCast.isEmpty && alternateCast is List) {
+        resolvedCast = alternateCast.whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item)).toList();
+        if (resolvedCast.isNotEmpty) metadataSource = 'tvmaze';
+      }
+    }
+    return {
+      'tmdbId': id,
+      'mediaType': type,
       'overview': overview.isNotEmpty ? overview : fallbackOverview,
-      'cast': cast, 'details': data ?? <String, dynamic>{}};
+      'cast': resolvedCast,
+      'details': data ?? <String, dynamic>{},
+      'metadata_source': metadataSource,
+    };
   }
 
   static Future<String?> getTrailerKey(int id, {String mediaType = 'movie'}) async {
@@ -1506,7 +1620,51 @@ class TmdbService {
     }
   }
 
-  static Future<Map<String, dynamic>> getPersonDetails(int personId) async {
+  static Future<Map<String, dynamic>> getPersonDetails(
+    int personId, {String source = 'tmdb'}
+  ) async {
+    if (personId <= 0) return {};
+    if (source == 'tvmaze') {
+      final rawPerson = await _tvMazeGet('/people/$personId');
+      if (rawPerson is! Map) return {};
+      final person = Map<String, dynamic>.from(rawPerson);
+      final rawCredits = await _tvMazeGet('/people/$personId/castcredits?embed=show');
+      final credits = <Map<String, dynamic>>[];
+      if (rawCredits is List) {
+        for (final raw in rawCredits.whereType<Map>()) {
+          final embedded = raw['_embedded'];
+          final show = embedded is Map ? embedded['show'] : raw['show'];
+          if (show is! Map) continue;
+          final item = Map<String, dynamic>.from(show);
+          final image = item['image'];
+          credits.add({
+            'id': _toInt(item['id']),
+            'name': (item['name'] ?? '').toString(),
+            'title': (item['name'] ?? '').toString(),
+            'overview': _cleanMetadataText(item['summary'] ?? ''),
+            'poster_path': image is Map
+                ? (image['original'] ?? image['medium'] ?? '').toString()
+                : '',
+            'backdrop_path': '',
+            'first_air_date': (item['premiered'] ?? '').toString(),
+            'media_type': 'tv',
+            'vote_average': 0,
+          });
+        }
+      }
+      final image = person['image'];
+      return {
+        ...person,
+        'profile_path': image is Map
+            ? (image['original'] ?? image['medium'] ?? '').toString()
+            : '',
+        'known_for_department': 'Acting',
+        'biography': '',
+        'combined_credits': {'cast': credits},
+        'metadata_source': 'tvmaze',
+      };
+    }
+    if (apiKey.isEmpty) return {};
     if (apiKey.isEmpty || personId <= 0) return {};
     try {
       final uri = Uri.parse('$base/person/$personId').replace(
@@ -12317,6 +12475,7 @@ class MovieDetailsScreen extends StatelessWidget {
                                           builder: (_) => CastProfileScreen(
                                             personId: personId,
                                             personName: name,
+                                            personSource: (person['metadata_source'] ?? 'tmdb').toString(),
                                             isOnline: isOnline,
                                             onMovieSelected: onMovieSelected,
                                           ),
@@ -12338,7 +12497,7 @@ class MovieDetailsScreen extends StatelessWidget {
                                                 child: const Icon(Icons.person, color: gold, size: 34),
                                               )
                                             : FlixoraCachedImage(
-                                                imageUrl: '${imageBase}w185$profile',
+                                                imageUrl: profile.startsWith('http') ? profile : '${imageBase}w185$profile',
                                                 isOnline: isOnline,
                                                 fit: BoxFit.cover,
                                               ),
@@ -12411,6 +12570,7 @@ class MovieDetailsScreen extends StatelessWidget {
 class CastProfileScreen extends StatefulWidget {
   final int personId;
   final String personName;
+  final String personSource;
   final bool isOnline;
   final ValueChanged<Movie> onMovieSelected;
 
@@ -12418,6 +12578,7 @@ class CastProfileScreen extends StatefulWidget {
     super.key,
     required this.personId,
     required this.personName,
+    this.personSource = 'tmdb',
     required this.isOnline,
     required this.onMovieSelected,
   });
@@ -12432,7 +12593,7 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
   @override
   void initState() {
     super.initState();
-    _profileFuture = TmdbService.getPersonDetails(widget.personId);
+    _profileFuture = TmdbService.getPersonDetails(widget.personId, source: widget.personSource);
   }
 
   List<Movie> _filmography(Map<String, dynamic> profile) {
@@ -12496,7 +12657,7 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
                     children: [
                       if (profilePath.isNotEmpty)
                         FlixoraCachedImage(
-                          imageUrl: '${imageBase}w500$profilePath',
+                          imageUrl: profilePath.startsWith('http') ? profilePath : '${imageBase}w500$profilePath',
                           isOnline: widget.isOnline,
                           fit: BoxFit.cover,
                         )
