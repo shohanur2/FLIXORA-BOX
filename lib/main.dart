@@ -17715,7 +17715,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
       var nextSectionIndex = -1;
       for (var i = eventsIndex + 1; i < lines.length; i++) {
-        if (RegExp(r'^\s*\[[^\]]+\]\s*
+        final sectionLine = lines[i].trim();
+        if (sectionLine.startsWith('[') && sectionLine.endsWith(']')) {
           nextSectionIndex = i;
           break;
         }
