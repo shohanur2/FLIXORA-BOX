@@ -38,55 +38,315 @@ import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
-List<Map<String,dynamic>> _extractDownloadSubtitleOptions(Map<String,dynamic> response) {
-  const keys=<String>{'subtitles','subtitle','subTitleList','subtitleList','subtitle_list','subtitle_list_data','captions','captionList','caption_list','externalSubtitles','external_subtitles'};
-  const urlKeys=<String>['url','downloadUrl','download_url','subtitleUrl','subtitle_url','fileUrl','file_url','captionUrl','caption_url','srtUrl','vttUrl','src','link','path'];
-  List<Map<String,dynamic>>? find(dynamic value,int depth){
-    if(depth>5||value is! Map)return null;final map=Map<String,dynamic>.from(value);
-    for(final entry in map.entries){if(!keys.contains(entry.key.toString()))continue;if(entry.value is List){final items=(entry.value as List).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList();if(items.isNotEmpty)return items;}final nested=find(entry.value,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}
-    for(final child in map.values){if(child is Map){final nested=find(child,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}}return null;
+List<Map<String, dynamic>> _extractDownloadSubtitleOptions(
+  Map<String, dynamic> response,
+) {
+  const keys = <String>{
+    'subtitles', 'subtitle', 'subTitleList', 'subtitleList',
+    'subtitle_list', 'subtitle_list_data', 'captions', 'captionList',
+    'caption_list', 'externalSubtitles', 'external_subtitles',
+  };
+  const urlKeys = <String>[
+    'url', 'downloadUrl', 'download_url', 'subtitleUrl', 'subtitle_url',
+    'fileUrl', 'file_url', 'captionUrl', 'caption_url', 'srtUrl',
+    'vttUrl', 'src', 'link', 'path',
+  ];
+
+  List<Map<String, dynamic>>? find(dynamic value, int depth) {
+    if (depth > 5 || value is! Map) return null;
+    final map = Map<String, dynamic>.from(value);
+    for (final entry in map.entries) {
+      if (!keys.contains(entry.key.toString())) continue;
+      if (entry.value is List) {
+        final items = (entry.value as List)
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        if (items.isNotEmpty) return items;
+      }
+      final nested = find(entry.value, depth + 1);
+      if (nested != null && nested.isNotEmpty) return nested;
+    }
+    for (final child in map.values) {
+      if (child is Map) {
+        final nested = find(child, depth + 1);
+        if (nested != null && nested.isNotEmpty) return nested;
+      }
+    }
+    return null;
   }
-  final output=<Map<String,dynamic>>[];
-  for(final item in find(response,0)??const <Map<String,dynamic>>[]){var url='';for(final key in urlKeys){final raw=item[key];final candidate=raw is Map?(raw['url']??raw['uri']??raw['link']??'').toString().trim():(raw??'').toString().trim();final uri=Uri.tryParse(candidate);if(uri!=null&&(uri.scheme=='http'||uri.scheme=='https')&&uri.host.isNotEmpty&&uri.userInfo.isEmpty){url=candidate;break;}}if(url.isEmpty)continue;final uri=Uri.parse(url);final name=(item['fileName']??item['filename']??item['file_name']??item['title']??(uri.pathSegments.isNotEmpty?uri.pathSegments.last:'')).toString();output.add({'url':url,'language':(item['language']??item['lang']??item['lan']??item['languageCode']??item['langCode']??'und').toString().toLowerCase(),'fileName':name,'format':(item['format']??(name.contains('.')?name.split('.').last:'srt')).toString().toLowerCase()});}
+
+  final output = <Map<String, dynamic>>[];
+  for (final item in find(response, 0) ?? const <Map<String, dynamic>>[]) {
+    var url = '';
+    for (final key in urlKeys) {
+      final raw = item[key];
+      final candidate = raw is Map
+          ? (raw['url'] ?? raw['uri'] ?? raw['link'] ?? '').toString().trim()
+          : (raw ?? '').toString().trim();
+      final uri = Uri.tryParse(candidate);
+      if (uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty) {
+        url = candidate;
+        break;
+      }
+    }
+    if (url.isEmpty) continue;
+
+    final uri = Uri.parse(url);
+    final name = (item['fileName'] ??
+            item['filename'] ??
+            item['file_name'] ??
+            item['title'] ??
+            (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
+        .toString();
+    final rawHeaders = item['headers'] ??
+        item['requestHeaders'] ??
+        item['request_headers'];
+    final headers = rawHeaders is Map
+        ? Map<String, String>.from(rawHeaders.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          ))
+        : <String, String>{};
+    output.add({
+      'url': url,
+      'language': (item['language'] ??
+              item['lang'] ??
+              item['lan'] ??
+              item['languageCode'] ??
+              item['langCode'] ??
+              'und')
+          .toString()
+          .toLowerCase(),
+      'fileName': name,
+      'format': (item['format'] ??
+              (name.contains('.') ? name.split('.').last : 'srt'))
+          .toString()
+          .toLowerCase(),
+      'headers': headers,
+    });
+  }
   return output;
 }
-Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String videoPath) async {
-  final saved=<String>[];final seen=<String>{};final parent=File(videoPath).parent.path;final name=File(videoPath).uri.pathSegments.last;final base=name.contains('.')?name.substring(0,name.lastIndexOf('.')):name;
-  final options=task.subtitleOptions.toList()..sort((a,b){int rank(Map<String,dynamic> x){final l=(x['language']??'').toString();return l=='bn'?0:(l=='bn+en'?1:(l=='en'?2:3));}return rank(a).compareTo(rank(b));});
-  for(final option in options){final url=(option['url']??'').toString();final uri=Uri.tryParse(url);if(uri==null||!{'http','https'}.contains(uri.scheme)||uri.host.isEmpty||!seen.add(url))continue;try{final response=await http.get(uri,headers:const {'Accept':'text/plain, text/vtt, application/octet-stream, */*','User-Agent':'FLIXORA Subtitle Client/1.0'}).timeout(const Duration(seconds:25));final bytes=response.bodyBytes;final type=(response.headers['content-type']??'').toLowerCase();if(response.statusCode!=200||bytes.length<16||bytes.length>10*1024*1024||(bytes.length>=2&&bytes[0]==0x50&&bytes[1]==0x4b)||type.contains('text/html')||type.contains('application/json'))continue;var ext=(option['format']??'').toString().toLowerCase().replaceFirst('.','');if(!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(ext)){ext=RegExp(r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',caseSensitive:false).firstMatch(uri.path)?.group(1)?.toLowerCase()??'srt';}final lang=(option['language']??'und').toString().replaceAll(RegExp(r'[^a-z0-9+_-]'),'_');final file=File('$parent/$base.subtitle_${saved.length+1}_$lang.$ext');await file.writeAsBytes(bytes,flush:true);saved.add(file.path);}catch(error){debugPrint('Offline subtitle download skipped: $error');}}
-  // Also preserve subtitle releases already downloaded by the online Subtitle
-  // system. This keeps its provider and cache logic untouched while making
-  // those same files available beside the offline video.
+
+Future<List<Map<String, dynamic>>> _lookupDownloadSubtitleOptions(
+  DownloadTask task,
+) async {
+  final client = supabaseClient;
+  if (client == null || task.title.trim().isEmpty) return [];
+  final isTv = task.mediaType == 'tv' || task.movieBoxIsSeries;
+  if (isTv && ((task.seasonNumber ?? 0) <= 0 ||
+      (task.episodeNumber ?? 0) <= 0)) return [];
+
+  Future<List<Map<String, dynamic>>> search(String action) async {
+    final response = await client.functions.invoke(
+      'flixora-subtitles',
+      body: {
+        if (action.isNotEmpty) 'action': action,
+        'tmdbId': task.tmdbId,
+        'title': task.title,
+        'year': '',
+        'mediaType': isTv ? 'tv' : 'movie',
+        'languages': 'BN,EN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+        if (isTv) 'season': task.seasonNumber,
+        if (isTv) 'episode': task.episodeNumber,
+      },
+    ).timeout(const Duration(seconds: 38));
+    final payload = response.data;
+    if (payload is! Map || payload['subtitles'] is! List) return [];
+    return (payload['subtitles'] as List)
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  try {
+    var options = await search('');
+    if (options.isEmpty) options = await search('search_title_fallback');
+    return options;
+  } catch (error) {
+    debugPrint('Could not find subtitles for offline download: $error');
+    return [];
+  }
+}
+
+Future<List<String>> _saveDownloadedSubtitleFiles(
+  DownloadTask task,
+  String videoPath,
+) async {
+  final saved = <String>[];
+  final seenUrls = <String>{};
+  final seenFiles = <String>{};
+  final parent = File(videoPath).parent.path;
+  final videoName = File(videoPath).uri.pathSegments.last;
+  final base = videoName.contains('.')
+      ? videoName.substring(0, videoName.lastIndexOf('.'))
+      : videoName;
+
+  final options = task.subtitleOptions.toList()
+    ..sort((a, b) {
+      int rank(Map<String, dynamic> item) {
+        final language = (item['language'] ?? '').toString().toLowerCase();
+        if (language == 'bn') return 0;
+        if (language == 'bn+en') return 1;
+        if (language == 'en') return 2;
+        return 3;
+      }
+      return rank(a).compareTo(rank(b));
+    });
+
+  final downloadedLanguages = <String, int>{};
+  for (final option in options.take(30)) {
+    final url = (option['downloadUrl'] ?? option['url'] ?? '').toString().trim();
+    final uri = Uri.tryParse(url);
+    final provider = (option['provider'] ?? option['providerSource'] ?? '')
+        .toString().toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final language = (option['language'] ?? 'und')
+        .toString().toLowerCase().replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
+    final isSubSource = provider == 'subsource';
+    if (url.isEmpty ||
+        (!isSubSource && (uri == null ||
+            (uri.scheme != 'http' && uri.scheme != 'https') ||
+            uri.host.isEmpty)) ||
+        !seenUrls.add(url) ||
+        (downloadedLanguages[language] ?? 0) >= 2) {
+      continue;
+    }
+    try {
+      late List<int> bytes;
+      var extension = (option['format'] ?? '').toString()
+          .toLowerCase().replaceFirst('.', '');
+      if (provider.isNotEmpty && provider != 'moviebox') {
+        final client = supabaseClient;
+        if (client == null) continue;
+        final result = await client.functions.invoke(
+          'flixora-subtitles',
+          body: {
+            'action': isSubSource
+                ? 'download_subsource'
+                : 'download_provider_subtitle',
+            'provider': provider,
+            if (isSubSource) 'subtitleId': option['subsourceId'],
+            if (!isSubSource) 'downloadUrl': url,
+            'pageUrl': option['pageUrl'] ?? '',
+            'releaseName': option['releaseName'] ?? '',
+            'language': language,
+            'mediaType': task.mediaType == 'tv' || task.movieBoxIsSeries
+                ? 'tv'
+                : 'movie',
+            if (task.mediaType == 'tv' || task.movieBoxIsSeries) ...{
+              'season': task.seasonNumber ?? 0,
+              'episode': task.episodeNumber ?? 0,
+            },
+          },
+        ).timeout(const Duration(seconds: 35));
+        final payload = result.data;
+        if (payload is! Map ||
+            (payload['contentBase64'] ?? '').toString().isEmpty) {
+          debugPrint('Offline subtitle provider returned no file: $provider');
+          continue;
+        }
+        bytes = base64Decode(payload['contentBase64'].toString());
+        final returnedExtension = (payload['extension'] ?? '').toString()
+            .toLowerCase().replaceFirst('.', '');
+        if (returnedExtension.isNotEmpty) extension = returnedExtension;
+      } else {
+        if (uri == null || uri.host.isEmpty) continue;
+        final rawHeaders = option['headers'];
+        final headers = rawHeaders is Map
+            ? Map<String, String>.from(rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ))
+            : <String, String>{};
+        headers.putIfAbsent('Accept', () =>
+            'text/plain, text/vtt, application/octet-stream, */*');
+        headers.putIfAbsent('User-Agent', () => 'FLIXORA Subtitle Client/1.0');
+        final response = await http.get(uri, headers: headers)
+            .timeout(const Duration(seconds: 25));
+        final type = (response.headers['content-type'] ?? '').toLowerCase();
+        if (response.statusCode != 200 ||
+            type.contains('text/html') ||
+            type.contains('application/json')) {
+          continue;
+        }
+        bytes = response.bodyBytes;
+      }
+
+      if (bytes.length < 16 ||
+          bytes.length > 10 * 1024 * 1024 ||
+          (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b)) {
+        continue;
+      }
+      if (!{'srt', 'ass', 'ssa', 'vtt', 'smi', 'ttml', 'sup'}
+          .contains(extension)) {
+        extension = RegExp(
+          r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',
+          caseSensitive: false,
+        ).firstMatch(uri?.path ?? '')?.group(1)?.toLowerCase() ?? 'srt';
+      }
+      final output = File(
+        '$parent/$base.subtitle_${saved.length + 1}_$language.$extension',
+      );
+      await output.writeAsBytes(bytes, flush: true);
+      saved.add(output.path);
+      downloadedLanguages[language] = (downloadedLanguages[language] ?? 0) + 1;
+    } catch (error) {
+      debugPrint('Offline subtitle download skipped: $error');
+    }
+  }
+  // Preserve both downloaded provider subtitles and imported subtitle files.
+  // The existing Subtitle cache and import workflow remain unchanged.
   try {
     final support = await getApplicationSupportDirectory();
-    final cacheDir = Directory('${support.path}/flixora_subtitles');
+    final subtitleRoot = Directory('${support.path}/flixora_subtitles');
     final mediaId = task.tmdbId > 0 ? task.tmdbId : task.movieId;
     final isSeries = task.mediaType == 'tv' || task.movieBoxIsSeries;
-    final episodeKey = isSeries && task.seasonNumber != null && task.episodeNumber != null
+    final episodeKey = isSeries &&
+            task.seasonNumber != null &&
+            task.episodeNumber != null
         ? '_s${task.seasonNumber}_e${task.episodeNumber}'
         : '';
     final cacheMarker = '_${task.mediaType}_${mediaId}${episodeKey}_';
-    if (await cacheDir.exists()) {
-      await for (final entity in cacheDir.list()) {
-        if (entity is! File) continue;
+    final sourceDirectories = <Directory>[
+      subtitleRoot,
+      Directory('${subtitleRoot.path}/imported'),
+    ];
+
+    for (final directory in sourceDirectories) {
+      if (!await directory.exists()) continue;
+      await for (final entity in directory.list()) {
+        if (entity is! File || !seenFiles.add(entity.path)) continue;
         final cacheName = entity.uri.pathSegments.last;
         final markerIndex = cacheName.indexOf(cacheMarker);
         if (markerIndex <= 0) continue;
         final extension = cacheName.contains('.')
             ? cacheName.split('.').last.toLowerCase()
             : '';
-        if (!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(extension)) continue;
+        if (!{'srt', 'ass', 'ssa', 'vtt', 'smi', 'ttml', 'sup'}
+            .contains(extension)) {
+          continue;
+        }
         if (await entity.length() < 16) continue;
-        final language = cacheName.substring(0, markerIndex)
-            .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
-        final target = File('$parent/$base.cached_subtitle_${saved.length+1}_$language.$extension');
+
+        final prefix = cacheName.substring(0, markerIndex);
+        final languageMatch = RegExp(
+          r'(?:^|_)([a-z]{2,3}(?:\+[a-z]{2,3})?)$',
+          caseSensitive: false,
+        ).firstMatch(prefix);
+        final language = languageMatch?.group(1)?.toLowerCase() ?? 'und';
+        final target = File(
+          '$parent/$base.cached_subtitle_${saved.length + 1}_$language.$extension',
+        );
         await entity.copy(target.path);
         saved.add(target.path);
       }
     }
   } catch (error) {
-    debugPrint('Could not copy cached online subtitles for offline use: $error');
+    debugPrint('Could not copy cached/imported subtitles for offline use: $error');
   }
+
   return saved;
 }
 
@@ -1047,10 +1307,13 @@ class _TimedMovieListCacheEntry {
 
 class TmdbService {
   static const String base = 'https://api.themoviedb.org/3';
+  static const String tvMazeBase = 'https://api.tvmaze.com';
   static const Duration _catalogueCacheDuration = Duration(minutes: 5);
   static const Duration _searchCacheDuration = Duration(minutes: 2);
   static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
   static final Map<String, _TimedMovieListCacheEntry> _searchCache = {};
+  static final Map<String, Future<Map<String, dynamic>>> _titleMetadataCache = {};
+  static final Map<String, DateTime> _titleMetadataCacheAt = {};
 
   static Future<List<Movie>> _rememberMovies(
     Map<String, _TimedMovieListCacheEntry> cache,
@@ -1214,6 +1477,286 @@ class TmdbService {
       },
     );
   }
+  static String _metadataTitleKey(String value) => value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+
+  static String _metadataSearchTitle(String value) {
+    return value
+        .replaceAll(RegExp(r'\s*[\(\[]?(?:19|20)\d{2}[\)\]]?\s*$'), '')
+        .replaceAll(RegExp(r'\s*[-–|]\s*(?:19|20)\d{2}\s*$'), '')
+        .trim();
+  }
+
+  static double _metadataTitleSimilarity(String first, String second) {
+    final a = _metadataTitleKey(_metadataSearchTitle(first))
+        .split(' ').where((part) => part.isNotEmpty).toSet();
+    final b = _metadataTitleKey(_metadataSearchTitle(second))
+        .split(' ').where((part) => part.isNotEmpty).toSet();
+    if (a.isEmpty || b.isEmpty) return 0;
+    if (a.length == b.length && a.containsAll(b)) return 1;
+    final overlap = a.intersection(b).length;
+    final denominator = a.length > b.length ? a.length : b.length;
+    final score = overlap / denominator;
+    final normalizedA = _metadataTitleKey(_metadataSearchTitle(first));
+    final normalizedB = _metadataTitleKey(_metadataSearchTitle(second));
+    if (normalizedA.contains(normalizedB) || normalizedB.contains(normalizedA)) {
+      return score < 0.82 ? 0.82 : score;
+    }
+    return score;
+  }
+
+  static Future<dynamic> _tvMazeGet(String path) async {
+    try {
+      final response = await http.get(Uri.parse('$tvMazeBase$path'))
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode != 200) return null;
+      return jsonDecode(response.body);
+    } catch (error) {
+      debugPrint('TVmaze metadata request failed: $error');
+      return null;
+    }
+  }
+
+  static String _cleanMetadataText(dynamic value) {
+    return value.toString()
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static Future<Map<String, dynamic>> _loadTvMazeMetadata(Movie movie) async {
+    if (movie.mediaType != 'tv' || movie.title.trim().isEmpty) return {};
+    final rawResults = await _tvMazeGet(
+      '/search/shows?q=${Uri.encodeQueryComponent(movie.title.trim())}',
+    );
+    if (rawResults is! List) return {};
+    final wanted = _metadataTitleKey(movie.title);
+    final candidates = <Map<String, dynamic>>[];
+    for (final raw in rawResults.whereType<Map>()) {
+      final show = raw['show'];
+      if (show is! Map) continue;
+      final item = Map<String, dynamic>.from(show);
+      if (_metadataTitleKey((item['name'] ?? '').toString()) == wanted) {
+        candidates.add(item);
+      }
+    }
+    if (candidates.isEmpty) return {};
+    candidates.sort((a, b) {
+      int score(Map<String, dynamic> item) {
+        final premiered = (item['premiered'] ?? '').toString();
+        return movie.year != 'N/A' && premiered.startsWith(movie.year) ? 0 : 1;
+      }
+      return score(a).compareTo(score(b));
+    });
+    final showId = _toInt(candidates.first['id']);
+    if (showId <= 0) return {};
+    final details = await _tvMazeGet('/shows/$showId?embed=cast');
+    final show = details is Map ? Map<String, dynamic>.from(details) : candidates.first;
+    final embedded = show['_embedded'];
+    final rawCast = embedded is Map ? embedded['cast'] : null;
+    final cast = <Map<String, dynamic>>[];
+    if (rawCast is List) {
+      for (final raw in rawCast.whereType<Map>().take(18)) {
+        final person = raw['person'];
+        final character = raw['character'];
+        if (person is! Map) continue;
+        final image = person['image'];
+        cast.add({
+          'id': _toInt(person['id']),
+          'name': (person['name'] ?? 'Cast member').toString(),
+          'character': character is Map ? (character['name'] ?? '').toString() : '',
+          'profile_path': image is Map
+              ? (image['original'] ?? image['medium'] ?? '').toString()
+              : '',
+          'metadata_source': 'tvmaze',
+        });
+      }
+    }
+    return {
+      'metadata_source': 'tvmaze',
+      'tvmaze_id': showId,
+      'overview': _cleanMetadataText(show['summary'] ?? ''),
+      'cast': cast,
+      'details': show,
+    };
+  }
+
+  static Future<Map<String, dynamic>> getTitleMetadata(Movie movie) {
+    final key = [
+      movie.mediaType, movie.tmdbId.toString(),
+      _metadataTitleKey(movie.title), movie.year,
+    ].join(':');
+    final cached = _titleMetadataCache[key];
+    final cachedAt = _titleMetadataCacheAt[key];
+    if (cached != null && cachedAt != null &&
+        DateTime.now().difference(cachedAt) < const Duration(minutes: 5)) {
+      return cached;
+    }
+    _titleMetadataCache.remove(key);
+    _titleMetadataCacheAt.remove(key);
+    final future = _loadTitleMetadata(movie);
+    _titleMetadataCache[key] = future;
+    _titleMetadataCacheAt[key] = DateTime.now();
+    future.then<void>((result) {
+      final overview = (result['overview'] ?? '').toString().trim();
+      final cast = result['cast'];
+      if ((overview.isEmpty || overview == 'No description available.') &&
+          (cast is! List || cast.isEmpty) &&
+          identical(_titleMetadataCache[key], future)) {
+        _titleMetadataCache.remove(key);
+        _titleMetadataCacheAt.remove(key);
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (identical(_titleMetadataCache[key], future)) {
+        _titleMetadataCache.remove(key);
+        _titleMetadataCacheAt.remove(key);
+      }
+    });
+    return future;
+  }
+
+  static Future<Map<String, dynamic>> _loadTitleMetadata(Movie movie) async {
+    final rawFallbackOverview = movie.overview.trim();
+    final fallbackOverview = rawFallbackOverview.toLowerCase() == 'no description available.'
+        ? '' : rawFallbackOverview;
+    final normalizedType = movie.mediaType.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final type = movie.movieBoxIsSeries || normalizedType == 'tv' ||
+            normalizedType.contains('series') || normalizedType.contains('drama') ||
+            normalizedType.contains('anime') || normalizedType.contains('show')
+        ? 'tv' : 'movie';
+    final searchTitle = _metadataSearchTitle(movie.title);
+    if (apiKey.isEmpty) {
+      final tvMaze = await _loadTvMazeMetadata(movie);
+      final alternateOverview = (tvMaze['overview'] ?? '').toString().trim();
+      return {
+        'overview': alternateOverview.isNotEmpty ? alternateOverview : fallbackOverview,
+        'cast': tvMaze['cast'] ?? <Map<String, dynamic>>[],
+        'metadata_source': tvMaze.isNotEmpty ? 'tvmaze' : 'catalogue',
+        'details': tvMaze['details'] ?? <String, dynamic>{},
+      };
+    }
+
+    var id = movie.tmdbId;
+    Map<String, dynamic>? data;
+
+    Future<Map<String, dynamic>?> fetch(int itemId) async {
+      if (itemId <= 0) return null;
+      try {
+        final uri = Uri.parse('$base/$type/$itemId').replace(queryParameters: {
+          'api_key': apiKey,
+          'language': 'en-US',
+          'append_to_response': 'credits,external_ids',
+        });
+        final response = await _getWithRetry(uri);
+        if (response.statusCode != 200) return null;
+        final decoded = jsonDecode(response.body);
+        return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+      } catch (error) {
+        debugPrint('TMDB metadata details request failed: $error');
+        return null;
+      }
+    }
+
+    if (id > 0) {
+      data = await fetch(id);
+      final returned = (data?['title'] ?? data?['name'] ?? '').toString();
+      if (data == null ||
+          _metadataTitleSimilarity(returned, searchTitle) < 0.60) {
+        data = null;
+        id = 0;
+      }
+    }
+
+    // MovieBox/WeFeed records often have no TMDB ID. Search the correct
+    // endpoint directly, include the release year, and rank close title
+    // matches instead of requiring byte-for-byte title equality.
+    if (data == null && searchTitle.isNotEmpty) {
+      try {
+        final parameters = <String, String>{
+          'api_key': apiKey,
+          'query': searchTitle,
+          'language': 'en-US',
+          'page': '1',
+          'include_adult': 'false',
+        };
+        if (movie.year != 'N/A' && RegExp(r'^(19|20)\d{2}$').hasMatch(movie.year)) {
+          parameters[type == 'tv' ? 'first_air_date_year' : 'year'] = movie.year;
+        }
+        final uri = Uri.parse('$base/search/$type').replace(queryParameters: parameters);
+        final response = await _getWithRetry(uri);
+        if (response.statusCode == 200) {
+          final decoded = jsonDecode(response.body);
+          final results = decoded is Map ? decoded['results'] : null;
+          if (results is List) {
+            final candidates = results.whereType<Map>().toList();
+            candidates.sort((a, b) {
+              double score(Map item) {
+                final title = (item['title'] ?? item['name'] ?? '').toString();
+                var value = _metadataTitleSimilarity(title, searchTitle);
+                final date = (item['release_date'] ?? item['first_air_date'] ?? '').toString();
+                if (movie.year != 'N/A' && date.startsWith(movie.year)) {
+                  value += 0.12;
+                }
+                return value;
+              }
+              return score(b).compareTo(score(a));
+            });
+            if (candidates.isNotEmpty) {
+              final best = candidates.first;
+              final bestTitle = (best['title'] ?? best['name'] ?? '').toString();
+              if (_metadataTitleSimilarity(bestTitle, searchTitle) >= 0.60) {
+                id = _toInt(best['id']);
+                data = await fetch(id);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        debugPrint('TMDB title metadata search failed: $error');
+      }
+    }
+
+    final rawCast = data?['credits'] is Map
+        ? (data!['credits'] as Map)['cast']
+        : null;
+    final cast = rawCast is List
+        ? rawCast.whereType<Map>().map((item) => <String, dynamic>{
+              ...Map<String, dynamic>.from(item),
+              'metadata_source': 'tmdb',
+            }).take(18).toList()
+        : <Map<String, dynamic>>[];
+    var overview = (data?['overview'] ?? '').toString().trim();
+    var resolvedCast = cast;
+    var metadataSource = 'tmdb';
+
+    if (overview.isEmpty || resolvedCast.isEmpty) {
+      final tvMaze = await _loadTvMazeMetadata(movie);
+      final alternateOverview = (tvMaze['overview'] ?? '').toString().trim();
+      final alternateCast = tvMaze['cast'];
+      if (type == 'tv' && overview.isEmpty && alternateOverview.isNotEmpty) {
+        overview = alternateOverview;
+        metadataSource = 'tvmaze';
+      }
+      if (type == 'tv' && resolvedCast.isEmpty && alternateCast is List) {
+        resolvedCast = alternateCast.whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item)).toList();
+        if (resolvedCast.isNotEmpty) metadataSource = 'tvmaze';
+      }
+    }
+
+    return {
+      'tmdbId': id,
+      'mediaType': type,
+      'overview': overview.isNotEmpty ? overview : fallbackOverview,
+      'cast': resolvedCast,
+      'details': data ?? <String, dynamic>{},
+      'metadata_source': metadataSource,
+    };
+  }
+
   static Future<List<Map<String, dynamic>>> getCast(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -1233,6 +1776,68 @@ class TmdbService {
     } catch (e) {
       debugPrint('Could not load cast information: $e');
       return [];
+    }
+  }
+
+  static Future<Map<String, dynamic>> getPersonDetails(
+    int personId, {String source = 'tmdb'}
+  ) async {
+    if (personId <= 0) return {};
+    if (source == 'tvmaze') {
+      final rawPerson = await _tvMazeGet('/people/$personId');
+      if (rawPerson is! Map) return {};
+      final person = Map<String, dynamic>.from(rawPerson);
+      final rawCredits = await _tvMazeGet('/people/$personId/castcredits?embed=show');
+      final credits = <Map<String, dynamic>>[];
+      if (rawCredits is List) {
+        for (final raw in rawCredits.whereType<Map>()) {
+          final embedded = raw['_embedded'];
+          final show = embedded is Map ? embedded['show'] : raw['show'];
+          if (show is! Map) continue;
+          final item = Map<String, dynamic>.from(show);
+          final image = item['image'];
+          credits.add({
+            'id': _toInt(item['id']),
+            'name': (item['name'] ?? '').toString(),
+            'title': (item['name'] ?? '').toString(),
+            'overview': _cleanMetadataText(item['summary'] ?? ''),
+            'poster_path': image is Map
+                ? (image['original'] ?? image['medium'] ?? '').toString()
+                : '',
+            'backdrop_path': '',
+            'first_air_date': (item['premiered'] ?? '').toString(),
+            'media_type': 'tv',
+            'vote_average': 0,
+          });
+        }
+      }
+      final image = person['image'];
+      return {
+        ...person,
+        'profile_path': image is Map
+            ? (image['original'] ?? image['medium'] ?? '').toString()
+            : '',
+        'known_for_department': 'Acting',
+        'biography': '',
+        'combined_credits': {'cast': credits},
+        'metadata_source': 'tvmaze',
+      };
+    }
+    if (apiKey.isEmpty) return {};
+    try {
+      final uri = Uri.parse('$base/person/$personId').replace(
+        queryParameters: {
+          'api_key': apiKey,
+          'language': 'en-US',
+          'append_to_response': 'combined_credits',
+        },
+      );
+      final response = await _getWithRetry(uri);
+      if (response.statusCode != 200) return {};
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (error) {
+      debugPrint('Could not load cast member details: $error');
+      return {};
     }
   }
 
@@ -1948,6 +2553,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _activeBackgroundDownloadTasks = 0;
 
   Future<bool> _beginBackgroundDownloadTask() async {
+    // Wait for the saved preference so the initial default cannot skip the service.
+    await (_appSettingsFuture ??= _loadAppSettings());
     if (!_downloadInBackground) return false;
     _activeBackgroundDownloadTasks++;
     if (_activeBackgroundDownloadTasks == 1) {
@@ -1983,7 +2590,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _studyMode = false;
   bool _notificationsEnabled = true;
   bool _familyMode = false;
-  bool _downloadInBackground = false;
+  bool _downloadInBackground = true;
+  Future<void>? _appSettingsFuture;
   bool _autoMiniPlayer = true;
   String _appLanguage = 'English';
   String _preferredQuality = 'Auto';
@@ -2961,7 +3569,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final savedHistoryFuture = MovieCache.getList(MovieCache.historyKey);
       final prefsFuture = SharedPreferences.getInstance();
       unawaited(_loadSavedPreferences().catchError((_) {}));
-      unawaited(_loadAppSettings());
+      unawaited(_appSettingsFuture ??= _loadAppSettings());
 
       await _loadCachedMovies();
       if (!mounted) return;
@@ -5059,6 +5667,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       var completed = false;
       var paused = false;
       final shouldResume = resume && index == firstIndex;
+      final subtitleOptionsFuture = _lookupDownloadSubtitleOptions(task);
 
       await DownloadManager.download(
         url: url,
@@ -5126,6 +5735,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               uniqueId: downloadId,
             ),
           );
+          final discoveredSubtitleOptions = await subtitleOptionsFuture;
+          if (discoveredSubtitleOptions.isNotEmpty) {
+            final knownUrls = task.subtitleOptions
+                .map((item) => (item['downloadUrl'] ?? item['url'] ?? '').toString())
+                .toSet();
+            task.subtitleOptions = [
+              ...task.subtitleOptions,
+              ...discoveredSubtitleOptions.where((item) =>
+                  !knownUrls.contains((item['downloadUrl'] ?? item['url'] ?? '').toString())),
+            ];
+          }
           final subtitlePaths = await _saveDownloadedSubtitleFiles(task, path);
           final publicMediaUri = await _publishDownloadedVideo(
             path,
@@ -5396,6 +6016,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  Future<Movie?> _resolveFilmographySource(Movie credit) async {
+    if (!_online || credit.title.trim().isEmpty) return null;
+    final movieBox = _cachedMovieBoxMatch(credit) ??
+        await _searchMovieBoxMatch(credit).timeout(
+          const Duration(seconds: 6), onTimeout: () => null,
+        ).catchError((_) => null);
+    if (movieBox != null && movieBox.isMovieBox) {
+      return movieBox.withFallbackMetadata(credit);
+    }
+    final admin = _cachedFlixoraMatch(credit);
+    if (admin != null && admin.hasPlayableVideoUrl) {
+      return admin.withFallbackMetadata(credit);
+    }
+    try {
+      final publishedMatches = await FlixoraMovieService.searchPublishedMovies(
+        credit.title,
+      ).timeout(const Duration(seconds: 7));
+      final wantedTitle = _normalizedMovieTitle(credit.title);
+      for (final candidate in publishedMatches) {
+        if (candidate.mediaType != credit.mediaType ||
+            !candidate.hasPlayableVideoUrl) continue;
+        final sameTmdbId = credit.tmdbId > 0 &&
+            candidate.tmdbId > 0 && candidate.tmdbId == credit.tmdbId;
+        final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
+        final sameYear = candidate.year == credit.year ||
+            candidate.year == 'N/A' || credit.year == 'N/A';
+        if (sameTmdbId || (sameTitle && sameYear)) {
+          return candidate.withFallbackMetadata(credit);
+        }
+      }
+    } catch (error) {
+      debugPrint('Cast filmography Admin source lookup failed: $error');
+    }
+    if (credit.hasPlayableVideoUrl) return credit;
+    return null;
+  }
+
   Future<Movie?> _searchMovieBoxMatch(Movie movie) async {
     if (movie.title.trim().isEmpty ||
         (movie.mediaType != 'movie' && movie.mediaType != 'tv')) {
@@ -5485,7 +6142,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       videoUrl: videoUrl,
       mediaType: 'movie',
     );
-    unawaited(_openMovie(movie));
+    _openMovie(movie);
   }
 
   Future<bool> _refreshFromOfflineScreen() async {
@@ -5538,14 +6195,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _openMovie(Movie movie) async {
-    // Poster taps go straight to the resolved player; the MovieBox-first
-    // source policy and Admin-only fallback remain in _playMovie.
-    await _playMovie(movie);
+  void _openMovie(Movie movie) {
+    _openMovieDetails(movie);
+  }
+
+  void _openMovieDetails(Movie movie) {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MovieDetailsScreen(
+          movie: movie,
+          isOnline: _online,
+          isFavourite: _favourites.contains(movie.id),
+          isSaved: _saved.contains(movie.id),
+          onShare: () => Share.share(
+            '${movie.title} (${movie.year}) on FLIXORA',
+          ),
+          onFavourite: () => _toggleFavourite(movie),
+          onSave: () => _toggleSaved(movie),
+          onDownload: () => addDownload(movie),
+          onWatch: () {
+            Navigator.of(context).pop();
+            unawaited(_playMovie(movie));
+          },
+          onMovieSelected: _openMovieDetails,
+          onResolveMovie: _resolveFilmographySource,
+        ),
+      ),
+    );
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
-    await _playMovie(movie, closeCurrentPlayer: true);
+    _openMovieDetails(movie);
   }
 
   Future<void> _playMovie(
@@ -6615,7 +7296,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(8),
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -6758,7 +7439,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // into a small letterboxed image.
                 const heroImageFit = BoxFit.cover;
                 return GestureDetector(
-                  onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                  onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -6878,7 +7559,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
             return GestureDetector(
               key: ValueKey('featured:${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
-              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
               child: Container(
                 width: FeaturedCarouselLayout.cardWidth,
                 margin: const EdgeInsets.symmetric(
@@ -6952,7 +7633,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               IconButton(
                                 onPressed: _isOpeningTitle
                                     ? null
-                                    : () => _playMovie(movie),
+                                    : () => _openMovieDetails(movie),
                                 tooltip: 'Play ${movie.title}',
                                 padding: EdgeInsets.zero,
                                 constraints: const BoxConstraints.tightFor(
@@ -7366,7 +8047,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+          onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
           child: SizedBox(
             height: 94,
             child: Row(
@@ -7501,7 +8182,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
                 IconButton(
                   tooltip: 'Play ${movie.title}',
-                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
+                  onPressed: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                   icon: const CircleAvatar(
                     radius: 15,
                     backgroundColor: gold,
@@ -8085,7 +8766,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(8),
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -8493,7 +9174,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, index) {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-            return GestureDetector(onTap: () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onTap: () => _openMovieDetails(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
@@ -8571,7 +9252,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
         return InkWell(
           borderRadius: BorderRadius.circular(9),
-          onTap: () => _playMovie(movie),
+          onTap: () => _openMovieDetails(movie),
           child: Row(children: [
             ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
               FlixoraCachedImage(imageUrl: image, isOnline: _online),
@@ -8611,7 +9292,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               },
               itemBuilder: (_) => const [PopupMenuItem(value: 'remove', child: Text('Remove from history'))],
             ),
-            IconButton(tooltip: 'Play', onPressed: () => _playMovie(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
+            IconButton(tooltip: 'Play', onPressed: () => _openMovieDetails(movie), icon: const CircleAvatar(radius: 17, backgroundColor: ink70, child: Icon(Icons.play_arrow, color: Colors.white, size: 21))),
           ]),
         );
       },
@@ -10160,7 +10841,7 @@ Entertainment Beyond Boundaries.
               const Spacer(),
               Row(children: [const Icon(Icons.star, color: premiumGold, size: 16), const SizedBox(width: 4), Text(movie.rating.toStringAsFixed(1), style: const TextStyle(color: premiumGold, fontWeight: FontWeight.w800)), const SizedBox(width: 6), Flexible(child: Text(movie.year, overflow: TextOverflow.ellipsis, style: const TextStyle(color: ink54, fontSize: 11)))]),
             ])),
-            IconButton(onPressed: () => _playMovie(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
+            IconButton(onPressed: () => _openMovieDetails(movie), icon: const Icon(Icons.play_circle_fill, color: gold, size: 34), tooltip: 'Play'),
           ])));
         },
       )),
@@ -11609,6 +12290,8 @@ class MovieDetailsScreen extends StatelessWidget {
   final VoidCallback onSave;
   final VoidCallback onDownload;
   final VoidCallback onWatch;
+  final ValueChanged<Movie> onMovieSelected;
+  final Future<Movie?> Function(Movie) onResolveMovie;
 
   const MovieDetailsScreen({
     super.key,
@@ -11621,10 +12304,105 @@ class MovieDetailsScreen extends StatelessWidget {
     required this.onSave,
     required this.onDownload,
     required this.onWatch,
+    required this.onMovieSelected,
+    required this.onResolveMovie,
   });
+
+  void _showMoreInfo(BuildContext context, Future<Map<String, dynamic>> metadataFuture) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: gold, size: 22),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      movie.title,
+                      style: const TextStyle(
+                        color: white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _infoRow('Type', movie.mediaType == 'tv' ? 'TV / Series' : 'Movie'),
+              if (movie.year.isNotEmpty && movie.year != 'N/A')
+                _infoRow('Release year', movie.year),
+              if (movie.releaseDate.isNotEmpty)
+                _infoRow('Release date', movie.releaseDate),
+              if (movie.rating > 0)
+                _infoRow('Rating', '${movie.rating.toStringAsFixed(1)} / 10'),
+              if (movie.runtime != null && movie.runtime! > 0)
+                _infoRow('Runtime', '${movie.runtime!.round()} minutes'),
+              if (movie.originCountry.isNotEmpty)
+                _infoRow('Country', movie.originCountry),
+              if (movie.originalLanguage.isNotEmpty)
+                _infoRow('Original language', movie.originalLanguage.toUpperCase()),
+              if (movie.genres.isNotEmpty)
+                _infoRow('Genres', movie.genres.join(', ')),
+              const SizedBox(height: 8),
+              const Text(
+                'Description',
+                style: TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 7),
+              FutureBuilder<Map<String, dynamic>>(future: metadataFuture, builder: (context, snapshot) {
+                final overview = (snapshot.data?['overview'] ?? '').toString().trim();
+                return Text(overview.isNotEmpty ? overview : 'No description available.',
+                  style: const TextStyle(color: ink70, height: 1.6, fontSize: 13));
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(label, style: const TextStyle(color: ink60, fontSize: 12)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final backdrop = movie.backdropUrl.isNotEmpty
+        ? movie.backdropUrl
+        : movie.posterUrl;
+    // Let the metadata request verify connectivity itself. The app's cached
+    // online flag can briefly be stale when opening a title.
+    final metadataFuture = TmdbService.getTitleMetadata(movie);
+
     return Scaffold(
       backgroundColor: bg,
       body: CustomScrollView(
@@ -11637,18 +12415,16 @@ class MovieDetailsScreen extends StatelessWidget {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  movie.backdropUrl.isNotEmpty
-                      ? FlixoraCachedImage(
-                          isOnline: isOnline,
-                          imageUrl: movie.backdropUrl,
-                          fit: BoxFit.cover,
-                        )
-                      : Container(color: panel),
+                  if (backdrop.isNotEmpty)
+                    FlixoraCachedImage(isOnline: isOnline, imageUrl: backdrop, fit: BoxFit.cover)
+                  else
+                    Container(color: panel),
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        begin: Alignment.topCenter,                        end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, bg],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x22000000), Color(0xFF080808)],
                       ),
                     ),
                   ),
@@ -11658,7 +12434,7 @@ class MovieDetailsScreen extends StatelessWidget {
           ),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 30),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 34),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -11668,8 +12444,8 @@ class MovieDetailsScreen extends StatelessWidget {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: SizedBox(
-                          width: 115,
-                          height: 165,
+                          width: 112,
+                          height: 162,
                           child: movie.posterUrl.isNotEmpty
                               ? FlixoraCachedImage(
                                   isOnline: isOnline,
@@ -11678,15 +12454,11 @@ class MovieDetailsScreen extends StatelessWidget {
                                 )
                               : Container(
                                   color: panel,
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                    size: 40,
-                                  ),
+                                  child: const Icon(Icons.movie, color: gold, size: 40),
                                 ),
                         ),
                       ),
-                      const SizedBox(width: 17),
+                      const SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -11695,66 +12467,42 @@ class MovieDetailsScreen extends StatelessWidget {
                               movie.title,
                               style: const TextStyle(
                                 color: white,
-                                fontSize: 23,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                            const SizedBox(height: 9),
+                            const SizedBox(height: 8),
                             Text(
-                              movie.mediaType == 'tv' ? 'TV SERIES' : 'MOVIE',
+                              movie.mediaType == 'tv' ? 'TV / SERIES' : 'MOVIE',
                               style: const TextStyle(
                                 color: gold,
                                 fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w800,
                                 letterSpacing: 1.2,
                               ),
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              movie.year,
-                              style: const TextStyle(
-                                color: ink60,
-                              ),
-                            ),                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.star,
-                                  color: gold,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  movie.rating.toStringAsFixed(1),
-                                  style: const TextStyle(
-                                    color: white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (movie.originCountry.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                'Country: ${movie.originCountry}',
-                                style: const TextStyle(color: ink60),
-                              ),
-                            ],
-                            if (movie.originalLanguage.isNotEmpty) ...[
+                            if (movie.year.isNotEmpty && movie.year != 'N/A') ...[
                               const SizedBox(height: 6),
-                              Text(
-                                'Language: ${movie.originalLanguage.toUpperCase()}',
-                                style: const TextStyle(color: ink60),
+                              Text(movie.year, style: const TextStyle(color: ink60)),
+                            ],
+                            if (movie.rating > 0) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(Icons.star_rounded, color: gold, size: 18),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    movie.rating.toStringAsFixed(1),
+                                    style: const TextStyle(color: white, fontWeight: FontWeight.w800),
+                                  ),
+                                ],
                               ),
                             ],
-                            if (movie.runtime != null &&
-                                movie.runtime! > 0) ...[
-                              const SizedBox(height: 8),
+                            if (movie.genres.isNotEmpty) ...[
+                              const SizedBox(height: 9),
                               Text(
-                                '${movie.runtime} min',
-                                style: const TextStyle(
-                                  color: ink60,
-                                ),
+                                movie.genres.take(3).join(' • '),
+                                style: const TextStyle(color: ink60, fontSize: 11),
                               ),
                             ],
                           ],
@@ -11763,152 +12511,448 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  if (movie.genres.isNotEmpty)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: movie.genres
-                          .map(
-                            (genre) => Chip(
-                              label: Text(genre),
-                              backgroundColor: panel,
-                              labelStyle: const TextStyle(
-                                color: goldLight,
-                                fontSize: 11,
-                              ),
-                              side: BorderSide.none,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 50,
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: gold,
+                              foregroundColor: Colors.black,
+                              disabledBackgroundColor: panel,
+                              disabledForegroundColor: ink60,
                             ),
-                          )
-                          .toList(),
-                    ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Overview',
-                    style: TextStyle(
-                      color: white,
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 9),
-                  Text(
-                    movie.overview.isEmpty
-                        ? 'No description available.'
-                        : movie.overview,
-                    style: const TextStyle(
-                      color: ink70,
-                      height: 1.6,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 25),
-                  if (movie.canAttemptPlayback)
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: gold,
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: onWatch,
-                        icon: const Icon(
-                          Icons.play_arrow_rounded,
-                          size: 27,
-                        ),
-                        label: const Text(
-                          'WATCH NOW',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Text(
-                        'No supported FLIXORA playback source is linked to this title yet.',
-                        style: TextStyle(color: ink60, fontSize: 13),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onSave,
-                          icon: const Icon(Icons.playlist_add, color: gold),
-                          label: const Text('Add to list', style: TextStyle(color: white)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onShare,
-                          icon: const Icon(Icons.share_outlined, color: gold),
-                          label: const Text('Share', style: TextStyle(color: white)),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onFavourite,
-                          icon: Icon(
-                            isFavourite
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                            color: gold,
-                          ),
-                          label: Text(
-                            isFavourite ? 'Liked' : 'Favourite',
-                            style: const TextStyle(color: white),
+                            onPressed: movie.canAttemptPlayback ? onWatch : null,
+                            icon: const Icon(Icons.play_arrow_rounded, size: 25),
+                            label: const Text(
+                              'WATCH',
+                              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+                            ),
                           ),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onSave,
-                          icon: Icon(
-                            isSaved
-                                ? Icons.bookmark
-                                : Icons.bookmark_border,
-                            color: gold,
-                          ),
-                          label: Text(
-                            isSaved ? 'Saved' : 'Save',
-                            style: const TextStyle(color: white),
+                        child: SizedBox(
+                          height: 50,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: white,
+                              side: const BorderSide(color: gold),
+                            ),
+                            onPressed: () => _showMoreInfo(context, metadataFuture),
+                            icon: const Icon(Icons.info_outline_rounded, color: gold, size: 20),
+                            label: const Text(
+                              'MORE INFO',
+                              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.4),
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  if (movie.canAttemptPlayback)
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: onDownload,
-                        icon: const Icon(
-                          Icons.download,
-                          color: gold,
+                  const SizedBox(height: 18),
+                  Wrap(
+                    spacing: 9,
+                    runSpacing: 9,
+                    children: [
+                      _actionChip(
+                        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                        label: isSaved ? 'Saved' : 'Save',
+                        onTap: onSave,
+                      ),
+                      _actionChip(
+                        icon: isFavourite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                        label: isFavourite ? 'Liked' : 'Favourite',
+                        onTap: onFavourite,
+                      ),
+                      _actionChip(
+                        icon: Icons.share_outlined,
+                        label: 'Share',
+                        onTap: onShare,
+                      ),
+                      if (movie.canAttemptPlayback)
+                        _actionChip(
+                          icon: Icons.download_outlined,
+                          label: 'Download',
+                          onTap: onDownload,
                         ),
-                        label: const Text(
-                          'Download Movie',
-                          style: TextStyle(color: white),
+                    ],
+                  ),
+                  const SizedBox(height: 26),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Cast',
+                          style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900),
                         ),
                       ),
-                    ),
+                      const Text(
+                        'Tap a person to view filmography',
+                        style: TextStyle(color: ink60, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  FutureBuilder<Map<String, dynamic>>(
+                    future: metadataFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 128,
+                          child: Center(child: CircularProgressIndicator(color: gold)),
+                        );
+                      }
+                      final rawCast = snapshot.data?['cast'];
+                      final cast = rawCast is List ? rawCast.whereType<Map>()
+                        .map((item) => Map<String, dynamic>.from(item)).toList() : <Map<String, dynamic>>[];
+                      if (cast.isEmpty) {
+                        return const Text(
+                          'Cast information is not available for this title.',
+                          style: TextStyle(color: ink60, fontSize: 12),
+                        );
+                      }
+                      return SizedBox(
+                        height: 145,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: cast.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 12),
+                          itemBuilder: (context, index) {
+                            final person = cast[index];
+                            final personId = _toInt(person['id']);
+                            final profile = (person['profile_path'] ?? '').toString();
+                            final name = (person['name'] ?? 'Cast member').toString();
+                            final character = (person['character'] ?? '').toString();
+                            return InkWell(
+                              borderRadius: BorderRadius.circular(11),
+                              onTap: personId <= 0
+                                  ? null
+                                  : () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => CastProfileScreen(
+                                            personId: personId,
+                                            personName: name,
+                                            personSource: (person['metadata_source'] ?? 'tmdb').toString(),
+                                            isOnline: isOnline,
+                                            onMovieSelected: onMovieSelected,
+                                            onResolveMovie: onResolveMovie,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                              child: SizedBox(
+                                width: 82,
+                                child: Column(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(11),
+                                      child: SizedBox(
+                                        width: 76,
+                                        height: 91,
+                                        child: profile.isEmpty
+                                            ? Container(
+                                                color: panel,
+                                                child: const Icon(Icons.person, color: gold, size: 34),
+                                              )
+                                            : FlixoraCachedImage(
+                                                imageUrl: profile.startsWith('http') ? profile : '${imageBase}w185$profile',
+                                                isOnline: isOnline,
+                                                fit: BoxFit.cover,
+                                              ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    if (character.isNotEmpty)
+                                      Text(
+                                        character,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: ink60, fontSize: 9),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Description',
+                    style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 9),
+                  FutureBuilder<Map<String, dynamic>>(future: metadataFuture, builder: (context, snapshot) {
+                    final overview = (snapshot.data?['overview'] ?? '').toString().trim();
+                    return Text(overview.isNotEmpty ? overview : 'No description available.',
+                      style: const TextStyle(color: ink70, height: 1.65, fontSize: 14));
+                  }),
                 ],
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionChip({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ActionChip(
+      avatar: Icon(icon, color: gold, size: 17),
+      label: Text(label, style: const TextStyle(color: white, fontSize: 11)),
+      backgroundColor: panel,
+      side: BorderSide.none,
+      onPressed: onTap,
+    );
+  }
+}
+
+class CastProfileScreen extends StatefulWidget {
+  final int personId;
+  final String personName;
+  final String personSource;
+  final bool isOnline;
+  final ValueChanged<Movie> onMovieSelected;
+  final Future<Movie?> Function(Movie) onResolveMovie;
+
+  const CastProfileScreen({
+    super.key,
+    required this.personId,
+    required this.personName,
+    this.personSource = 'tmdb',
+    required this.isOnline,
+    required this.onMovieSelected,
+    required this.onResolveMovie,
+  });
+
+  @override
+  State<CastProfileScreen> createState() => _CastProfileScreenState();
+}
+
+class _CastProfileScreenState extends State<CastProfileScreen> {
+  late Future<Map<String, dynamic>> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = TmdbService.getPersonDetails(widget.personId, source: widget.personSource);
+  }
+
+  List<Movie> _filmography(Map<String, dynamic> profile) {
+    final combined = profile['combined_credits'];
+    final rawCredits = combined is Map ? combined['cast'] : null;
+    if (rawCredits is! List) return [];
+    final seen = <String>{};
+    final movies = <Movie>[];
+    for (final raw in rawCredits.whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final mediaType = (item['media_type'] ?? '').toString();
+      if (mediaType != 'movie' && mediaType != 'tv') continue;
+      final id = _toInt(item['id']);
+      if (id <= 0 || !seen.add('$mediaType:$id')) continue;
+      movies.add(Movie.fromJson(item, mediaType: mediaType));
+    }
+    movies.sort((a, b) => b.releaseDate.compareTo(a.releaseDate));
+    return movies;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: bg,
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _profileFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: gold));
+          }
+          final profile = snapshot.data ?? const <String, dynamic>{};
+          if (profile.isEmpty) {
+            return Center(
+              child: Text(
+                'Cast profile is not available right now.',
+                style: const TextStyle(color: ink60),
+              ),
+            );
+          }
+
+          final name = (profile['name'] ?? widget.personName).toString();
+          final biography = (profile['biography'] ?? '').toString();
+          final department = (profile['known_for_department'] ?? 'Artist').toString();
+          final birthday = (profile['birthday'] ?? '').toString();
+          final deathday = (profile['deathday'] ?? '').toString();
+          final place = (profile['place_of_birth'] ?? '').toString();
+          final profilePath = (profile['profile_path'] ?? '').toString();
+          final credits = _filmography(profile);
+
+          return CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 330,
+                pinned: true,
+                backgroundColor: bg,
+                foregroundColor: white,
+                flexibleSpace: FlexibleSpaceBar(
+                  title: Text(name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  background: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (profilePath.isNotEmpty)
+                        FlixoraCachedImage(
+                          imageUrl: profilePath.startsWith('http') ? profilePath : '${imageBase}w500$profilePath',
+                          isOnline: widget.isOnline,
+                          fit: BoxFit.cover,
+                        )
+                      else
+                        Container(color: panel),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x33000000), Color(0xFF080808)],
+                            stops: [0.25, 1],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 30),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        department.toUpperCase(),
+                        style: const TextStyle(color: gold, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.2),
+                      ),
+                      const SizedBox(height: 12),
+                      if (birthday.isNotEmpty) _profileInfo('Born', birthday),
+                      if (deathday.isNotEmpty) _profileInfo('Died', deathday),
+                      if (place.isNotEmpty) _profileInfo('Birthplace', place),
+                      if (biography.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Text('Biography', style: TextStyle(color: white, fontSize: 18, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 8),
+                        Text(biography, style: const TextStyle(color: ink70, height: 1.65, fontSize: 13)),
+                      ],
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text('Filmography', style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900)),
+                          ),
+                          Text('${credits.length} titles', style: const TextStyle(color: ink60, fontSize: 11)),
+                        ],
+                      ),
+                      const SizedBox(height: 13),
+                      if (credits.isEmpty)
+                        const Text('No filmography is available yet.', style: TextStyle(color: ink60, fontSize: 12))
+                      else
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: credits.length,
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            childAspectRatio: 0.57,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 15,
+                          ),
+                          itemBuilder: (context, index) {
+                            final credit = credits[index];
+                            return FutureBuilder<Movie?>(
+                              future: widget.onResolveMovie(credit),
+                              builder: (context, matchSnapshot) {
+                                final matchedMovie = matchSnapshot.data;
+                                final isMatched = matchedMovie != null &&
+                                    (matchedMovie.isMovieBox ||
+                                     (matchedMovie.isFlixora && matchedMovie.hasPlayableVideoUrl) ||
+                                     matchedMovie.hasPlayableVideoUrl);
+                                final matchedPoster = matchedMovie?.posterUrl ?? '';
+                                final poster = matchedPoster.isNotEmpty
+                                    ? matchedPoster : credit.posterUrl;
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(9),
+                                  onTap: isMatched ? () {
+                                    Navigator.of(context).pop();
+                                    widget.onMovieSelected(matchedMovie!);
+                                  } : null,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: SizedBox(
+                                            width: double.infinity,
+                                            child: poster.isEmpty
+                                                ? Container(color: panel, child: const Icon(Icons.movie, color: gold, size: 30))
+                                                : FlixoraCachedImage(imageUrl: poster, isOnline: widget.isOnline, fit: BoxFit.cover),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(credit.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800)),
+                                      Text(
+                                        matchSnapshot.connectionState == ConnectionState.waiting
+                                            ? 'Checking FLIXORA sources…'
+                                            : isMatched ? 'Available to watch' : 'Not available in FLIXORA yet',
+                                        maxLines: 2,
+                                        style: TextStyle(color: isMatched ? gold : ink60, fontSize: 9),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _profileInfo(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 86, child: Text(label, style: const TextStyle(color: ink60, fontSize: 11))),
+          Expanded(child: Text(value, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600))),
         ],
       ),
     );
@@ -12049,6 +13093,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
   List<Map<String, dynamic>> _automaticSubtitleOptions = [];
+  List<String> _localDownloadedSubtitlePaths = [];
   int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
@@ -14966,6 +16011,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     try {
       // mpv's software volume ceiling: 200% permits up to 2x amplification.
       await platformPlayer.setProperty('volume-max', '200');
+      // Prefer Android hardware decoding when available; keep the existing
+      // playback/network configuration running if this decoder option is unavailable.
+      try {
+        await platformPlayer.setProperty('hwdec', 'auto-safe');
+      } catch (error) {
+        debugPrint('FLIXORA hardware decoder preference unavailable: $error');
+      }
 
       if (widget.localFilePath == null) {
         // Explicitly enable the network demuxer cache for MovieBox/WeFeed and
@@ -15321,45 +16373,42 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _activateLocalDownloadedSubtitles(List<String> paths) async {
     if (_isDisposed) return;
+    final available = <String>[];
+    final seen = <String>{};
+    for (final path in paths) {
+      if (!seen.add(path)) continue;
+      try {
+        final file = File(path);
+        if (await file.exists() && await file.length() >= 8) {
+          available.add(path);
+        }
+      } catch (error) {
+        debugPrint('Offline subtitle file check failed: $error');
+      }
+    }
+
+    // Downloaded videos always start with subtitles OFF. Files become choices
+    // in the existing Subtitle panel and are activated only after a user tap.
     try {
-      await _player.setSubtitleTrack(SubtitleTrack.auto());
-    } catch (_) {}
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', 'no');
+      }
+    } catch (error) {
+      debugPrint('Could not reset downloaded-video subtitle visibility: $error');
+    }
+    _localDownloadedSubtitlePaths = available;
     _subtitleManuallySelected = false;
     _automaticEnglishTrack = null;
     _selectedSubtitleLanguageCode = '';
-    if (paths.isEmpty) {
-      if (mounted && !_isDisposed) {
-        setState(() => _automaticSubtitleMessage = null);
-      }
-      return;
-    }
-    for (final path in paths) {
-      if (_isDisposed) return;
-      try {
-        final file = File(path);
-        if (!await file.exists() || await file.length() < 8) continue;
-        final name = file.uri.pathSegments.last;
-        final match = RegExp(r'subtitle_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?)\.', caseSensitive: false).firstMatch(name);
-        final language = match?.group(1)?.toLowerCase() ?? 'und';
-        final track = SubtitleTrack.uri(
-          Uri.file(path).toString(),
-          title: _subtitleLanguageName(language),
-          language: language,
-        );
-        await _activateSubtitleTrack(track);
-        _subtitleManuallySelected = true;
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _automaticEnglishTrack = track;
-            _selectedSubtitleLanguageCode = language;
-            _subtitleVisibilityEnabled = true;
-            _automaticSubtitleMessage = 'Offline subtitle active';
-          });
-        }
-        return;
-      } catch (error) {
-        debugPrint('Offline subtitle activation skipped: $error');
-      }
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _subtitleVisibilityEnabled = false;
+        _automaticSubtitleMessage = available.isEmpty
+            ? null
+            : '${available.length} offline subtitle(s) available';
+      });
     }
   }
 
@@ -15784,7 +16833,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                   : ''))
           .toLowerCase();
       final decodedText = _decodeSubtitleText(bytes);
-      final detectedExtension = _detectSubtitleExtension(decodedText, ext);
+      final detectedExtension = _detectImportedSubtitleExtension(decodedText, ext);
       // Preserve valid MicroDVD .sub files; libmpv supports them as external tracks.
       final normalizedBytes = utf8.encode(decodedText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'));
 
@@ -15802,14 +16851,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final baseName = safeName.contains('.')
           ? safeName.substring(0, safeName.lastIndexOf('.'))
           : safeName;
-      final storedFile = File(
-        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
-      );
-      await storedFile.writeAsBytes(normalizedBytes, flush: true);
-
       final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it|nl|pl|th|id|ms|fa)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
-      final language = match?.group(1)?.toLowerCase() ?? 'external';
+      final language = match?.group(1)?.toLowerCase() ?? 'und';
+      final isSeries = widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries;
+      final episodePart = isSeries &&
+              _selectedSeasonNumber > 0 &&
+              _selectedEpisodeNumber > 0
+          ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+          : '';
+      final mediaMarker = '${widget.movie.mediaType}_${_automaticSubtitleMediaId()}${episodePart}';
+      final storedFile = File(
+        '${importDir.path}/imported_${language}_${mediaMarker}_${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
+      );
+      await storedFile.writeAsBytes(normalizedBytes, flush: true);
       final track = SubtitleTrack.uri(Uri.file(storedFile.path).toString(),
           title: picked.name, language: language);
       await _activateSubtitleTrack(track);
@@ -16585,6 +17640,37 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         : 0;
     final text = utf8.decode(bytes.sublist(start), allowMalformed: true);
     return text.replaceAll('\u0000', '').replaceFirst('\uFEFF', '');
+  }
+
+  // Import-only ASS/SSA validation. Keep the shared detector below unchanged.
+  // Automatic subtitle downloads continue using the original detector.
+  String _detectImportedSubtitleExtension(String source, String preferred) {
+    final normalizedPreferred = preferred.trim().toLowerCase();
+    if (normalizedPreferred == 'ass' || normalizedPreferred == 'ssa') {
+      final normalizedText = source
+          .replaceFirst('\uFEFF', '')
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .trim();
+      final lines = normalizedText.split('\n');
+      final eventsIndex = lines.indexWhere(
+        (line) => line.trim().toLowerCase() == '[events]',
+      );
+      if (eventsIndex < 0) {
+        throw StateError('The ASS/SSA subtitle has no Events section.');
+      }
+      final hasDialogue = lines.skip(eventsIndex + 1).any((line) {
+        final trimmed = line.trimLeft();
+        return trimmed.length >= 9 &&
+            trimmed.substring(0, 8).toLowerCase() == 'dialogue' &&
+            trimmed.substring(8).trimLeft().startsWith(':');
+      });
+      if (!hasDialogue) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return normalizedPreferred;
+    }
+    return _detectSubtitleExtension(source, preferred);
   }
 
   String _detectSubtitleExtension(String source, String preferred) {
@@ -17369,6 +18455,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       if (code.isNotEmpty) entries.putIfAbsent(code, () => {...option, 'kind': 'automatic'});
                     }
                   }
+                  for (final path in _localDownloadedSubtitlePaths) {
+                    final name = File(path).uri.pathSegments.last;
+                    final match = RegExp(
+                      r'(?:subtitle|cached_subtitle)_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?|und)\.',
+                      caseSensitive: false,
+                    ).firstMatch(name);
+                    final code = match?.group(1)?.toLowerCase() ?? 'und';
+                    entries['downloaded:$path'] = {
+                      'kind': 'local',
+                      'language': code,
+                      'filePath': path,
+                      'releaseName': 'Downloaded · ${_subtitleLanguageName(code)}',
+                    };
+                  }
                   final movieBoxOptions = _movieBoxSubtitleOptions();
                   for (var index = 0; index < movieBoxOptions.length; index++) {
                     final option = movieBoxOptions[index];
@@ -17381,6 +18481,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     final code = (item['language'] ?? '').toString().toLowerCase();
                     if (item['kind'] == 'embedded' && item['track'] is SubtitleTrack) {
                       await _selectSubtitleTrack(item['track'] as SubtitleTrack);
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else if (item['kind'] == 'local') {
+                      final path = (item['filePath'] ?? '').toString();
+                      if (path.isEmpty || !await File(path).exists()) return;
+                      await _selectSubtitleTrack(SubtitleTrack.uri(
+                        Uri.file(path).toString(),
+                        title: _subtitleLanguageName(code),
+                        language: code,
+                      ));
                       if (!mounted || _isDisposed) return;
                       setState(() {
                         _selectedSubtitleLanguageCode = code;
