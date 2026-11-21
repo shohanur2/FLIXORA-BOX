@@ -131,6 +131,47 @@ List<Map<String, dynamic>> _extractDownloadSubtitleOptions(
   return output;
 }
 
+Future<List<Map<String, dynamic>>> _lookupDownloadSubtitleOptions(
+  DownloadTask task,
+) async {
+  final client = supabaseClient;
+  if (client == null || task.title.trim().isEmpty) return [];
+  final isTv = task.mediaType == 'tv' || task.movieBoxIsSeries;
+  if (isTv && ((task.seasonNumber ?? 0) <= 0 ||
+      (task.episodeNumber ?? 0) <= 0)) return [];
+
+  Future<List<Map<String, dynamic>>> search(String action) async {
+    final response = await client.functions.invoke(
+      'flixora-subtitles',
+      body: {
+        if (action.isNotEmpty) 'action': action,
+        'tmdbId': task.tmdbId,
+        'title': task.title,
+        'year': '',
+        'mediaType': isTv ? 'tv' : 'movie',
+        'languages': 'BN,EN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+        if (isTv) 'season': task.seasonNumber,
+        if (isTv) 'episode': task.episodeNumber,
+      },
+    ).timeout(const Duration(seconds: 38));
+    final payload = response.data;
+    if (payload is! Map || payload['subtitles'] is! List) return [];
+    return (payload['subtitles'] as List)
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  try {
+    var options = await search('');
+    if (options.isEmpty) options = await search('search_title_fallback');
+    return options;
+  } catch (error) {
+    debugPrint('Could not find subtitles for offline download: $error');
+    return [];
+  }
+}
+
 Future<List<String>> _saveDownloadedSubtitleFiles(
   DownloadTask task,
   String videoPath,
@@ -156,61 +197,105 @@ Future<List<String>> _saveDownloadedSubtitleFiles(
       return rank(a).compareTo(rank(b));
     });
 
-  for (final option in options) {
-    final url = (option['url'] ?? '').toString().trim();
+  final downloadedLanguages = <String, int>{};
+  for (final option in options.take(30)) {
+    final url = (option['downloadUrl'] ?? option['url'] ?? '').toString().trim();
     final uri = Uri.tryParse(url);
-    if (uri == null ||
-        (uri.scheme != 'http' && uri.scheme != 'https') ||
-        uri.host.isEmpty ||
-        !seenUrls.add(url)) {
+    final provider = (option['provider'] ?? option['providerSource'] ?? '')
+        .toString().toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final language = (option['language'] ?? 'und')
+        .toString().toLowerCase().replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
+    final isSubSource = provider == 'subsource';
+    if (url.isEmpty ||
+        (!isSubSource && (uri == null ||
+            (uri.scheme != 'http' && uri.scheme != 'https') ||
+            uri.host.isEmpty)) ||
+        !seenUrls.add(url) ||
+        (downloadedLanguages[language] ?? 0) >= 2) {
       continue;
     }
     try {
-      final rawHeaders = option['headers'];
-      final headers = rawHeaders is Map
-          ? Map<String, String>.from(rawHeaders.map(
-              (key, value) => MapEntry(key.toString(), value.toString()),
-            ))
-          : <String, String>{};
-      headers.putIfAbsent('Accept', () =>
-          'text/plain, text/vtt, application/octet-stream, */*');
-      headers.putIfAbsent('User-Agent', () => 'FLIXORA Subtitle Client/1.0');
-      final response = await http.get(uri, headers: headers)
-          .timeout(const Duration(seconds: 25));
-      final bytes = response.bodyBytes;
-      final type = (response.headers['content-type'] ?? '').toLowerCase();
-      if (response.statusCode != 200 ||
-          bytes.length < 16 ||
-          bytes.length > 10 * 1024 * 1024 ||
-          (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) ||
-          type.contains('text/html') ||
-          type.contains('application/json')) {
-        continue;
-      }
-
+      late List<int> bytes;
       var extension = (option['format'] ?? '').toString()
           .toLowerCase().replaceFirst('.', '');
+      if (provider.isNotEmpty && provider != 'moviebox') {
+        final client = supabaseClient;
+        if (client == null) continue;
+        final result = await client.functions.invoke(
+          'flixora-subtitles',
+          body: {
+            'action': isSubSource
+                ? 'download_subsource'
+                : 'download_provider_subtitle',
+            'provider': provider,
+            if (isSubSource) 'subtitleId': option['subsourceId'],
+            if (!isSubSource) 'downloadUrl': url,
+            'pageUrl': option['pageUrl'] ?? '',
+            'releaseName': option['releaseName'] ?? '',
+            'language': language,
+            'mediaType': task.mediaType == 'tv' || task.movieBoxIsSeries
+                ? 'tv'
+                : 'movie',
+            if (task.mediaType == 'tv' || task.movieBoxIsSeries) ...{
+              'season': task.seasonNumber ?? 0,
+              'episode': task.episodeNumber ?? 0,
+            },
+          },
+        ).timeout(const Duration(seconds: 35));
+        final payload = result.data;
+        if (payload is! Map ||
+            (payload['contentBase64'] ?? '').toString().isEmpty) {
+          debugPrint('Offline subtitle provider returned no file: $provider');
+          continue;
+        }
+        bytes = base64Decode(payload['contentBase64'].toString());
+        final returnedExtension = (payload['extension'] ?? '').toString()
+            .toLowerCase().replaceFirst('.', '');
+        if (returnedExtension.isNotEmpty) extension = returnedExtension;
+      } else {
+        if (uri == null || uri.host.isEmpty) continue;
+        final rawHeaders = option['headers'];
+        final headers = rawHeaders is Map
+            ? Map<String, String>.from(rawHeaders.map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ))
+            : <String, String>{};
+        headers.putIfAbsent('Accept', () =>
+            'text/plain, text/vtt, application/octet-stream, */*');
+        headers.putIfAbsent('User-Agent', () => 'FLIXORA Subtitle Client/1.0');
+        final response = await http.get(uri, headers: headers)
+            .timeout(const Duration(seconds: 25));
+        final type = (response.headers['content-type'] ?? '').toLowerCase();
+        if (response.statusCode != 200 ||
+            type.contains('text/html') ||
+            type.contains('application/json')) {
+          continue;
+        }
+        bytes = response.bodyBytes;
+      }
+
+      if (bytes.length < 16 ||
+          bytes.length > 10 * 1024 * 1024 ||
+          (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b)) {
+        continue;
+      }
       if (!{'srt', 'ass', 'ssa', 'vtt', 'smi', 'ttml', 'sup'}
           .contains(extension)) {
         extension = RegExp(
           r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',
           caseSensitive: false,
-        ).firstMatch(uri.path)?.group(1)?.toLowerCase() ?? 'srt';
+        ).firstMatch(uri?.path ?? '')?.group(1)?.toLowerCase() ?? 'srt';
       }
-      final language = (option['language'] ?? 'und')
-          .toString()
-          .toLowerCase()
-          .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
       final output = File(
         '$parent/$base.subtitle_${saved.length + 1}_$language.$extension',
       );
       await output.writeAsBytes(bytes, flush: true);
       saved.add(output.path);
+      downloadedLanguages[language] = (downloadedLanguages[language] ?? 0) + 1;
     } catch (error) {
       debugPrint('Offline subtitle download skipped: $error');
     }
   }
-
   // Preserve both downloaded provider subtitles and imported subtitle files.
   // The existing Subtitle cache and import workflow remain unchanged.
   try {
@@ -1228,6 +1313,7 @@ class TmdbService {
   static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
   static final Map<String, _TimedMovieListCacheEntry> _searchCache = {};
   static final Map<String, Future<Map<String, dynamic>>> _titleMetadataCache = {};
+  static final Map<String, DateTime> _titleMetadataCacheAt = {};
 
   static Future<List<Movie>> _rememberMovies(
     Map<String, _TimedMovieListCacheEntry> cache,
@@ -1503,12 +1589,44 @@ class TmdbService {
       movie.mediaType, movie.tmdbId.toString(),
       _metadataTitleKey(movie.title), movie.year,
     ].join(':');
-    return _titleMetadataCache.putIfAbsent(key, () => _loadTitleMetadata(movie));
+    final cached = _titleMetadataCache[key];
+    final cachedAt = _titleMetadataCacheAt[key];
+    if (cached != null && cachedAt != null &&
+        DateTime.now().difference(cachedAt) < const Duration(minutes: 5)) {
+      return cached;
+    }
+    _titleMetadataCache.remove(key);
+    _titleMetadataCacheAt.remove(key);
+    final future = _loadTitleMetadata(movie);
+    _titleMetadataCache[key] = future;
+    _titleMetadataCacheAt[key] = DateTime.now();
+    future.then<void>((result) {
+      final overview = (result['overview'] ?? '').toString().trim();
+      final cast = result['cast'];
+      if ((overview.isEmpty || overview == 'No description available.') &&
+          (cast is! List || cast.isEmpty) &&
+          identical(_titleMetadataCache[key], future)) {
+        _titleMetadataCache.remove(key);
+        _titleMetadataCacheAt.remove(key);
+      }
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (identical(_titleMetadataCache[key], future)) {
+        _titleMetadataCache.remove(key);
+        _titleMetadataCacheAt.remove(key);
+      }
+    });
+    return future;
   }
 
   static Future<Map<String, dynamic>> _loadTitleMetadata(Movie movie) async {
-    final fallbackOverview = movie.overview.trim();
-    final type = movie.mediaType == 'tv' ? 'tv' : 'movie';
+    final rawFallbackOverview = movie.overview.trim();
+    final fallbackOverview = rawFallbackOverview.toLowerCase() == 'no description available.'
+        ? '' : rawFallbackOverview;
+    final normalizedType = movie.mediaType.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    final type = movie.movieBoxIsSeries || normalizedType == 'tv' ||
+            normalizedType.contains('series') || normalizedType.contains('drama') ||
+            normalizedType.contains('anime') || normalizedType.contains('show')
+        ? 'tv' : 'movie';
     final searchTitle = _metadataSearchTitle(movie.title);
     if (apiKey.isEmpty) {
       final tvMaze = await _loadTvMazeMetadata(movie);
@@ -1614,15 +1732,15 @@ class TmdbService {
     var resolvedCast = cast;
     var metadataSource = 'tmdb';
 
-    if (type == 'tv' && (overview.isEmpty || resolvedCast.isEmpty)) {
+    if (overview.isEmpty || resolvedCast.isEmpty) {
       final tvMaze = await _loadTvMazeMetadata(movie);
       final alternateOverview = (tvMaze['overview'] ?? '').toString().trim();
       final alternateCast = tvMaze['cast'];
-      if (overview.isEmpty && alternateOverview.isNotEmpty) {
+      if (type == 'tv' && overview.isEmpty && alternateOverview.isNotEmpty) {
         overview = alternateOverview;
         metadataSource = 'tvmaze';
       }
-      if (resolvedCast.isEmpty && alternateCast is List) {
+      if (type == 'tv' && resolvedCast.isEmpty && alternateCast is List) {
         resolvedCast = alternateCast.whereType<Map>()
             .map((item) => Map<String, dynamic>.from(item)).toList();
         if (resolvedCast.isNotEmpty) metadataSource = 'tvmaze';
@@ -5549,6 +5667,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       var completed = false;
       var paused = false;
       final shouldResume = resume && index == firstIndex;
+      final subtitleOptionsFuture = _lookupDownloadSubtitleOptions(task);
 
       await DownloadManager.download(
         url: url,
@@ -5616,6 +5735,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               uniqueId: downloadId,
             ),
           );
+          final discoveredSubtitleOptions = await subtitleOptionsFuture;
+          if (discoveredSubtitleOptions.isNotEmpty) {
+            final knownUrls = task.subtitleOptions
+                .map((item) => (item['downloadUrl'] ?? item['url'] ?? '').toString())
+                .toSet();
+            task.subtitleOptions = [
+              ...task.subtitleOptions,
+              ...discoveredSubtitleOptions.where((item) =>
+                  !knownUrls.contains((item['downloadUrl'] ?? item['url'] ?? '').toString())),
+            ];
+          }
           final subtitlePaths = await _saveDownloadedSubtitleFiles(task, path);
           final publicMediaUri = await _publishDownloadedVideo(
             path,
@@ -5896,7 +6026,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return movieBox.withFallbackMetadata(credit);
     }
     final admin = _cachedFlixoraMatch(credit);
-    if (admin != null && admin.hasPlayableVideoUrl) return admin.withFallbackMetadata(credit);
+    if (admin != null && admin.hasPlayableVideoUrl) {
+      return admin.withFallbackMetadata(credit);
+    }
+    try {
+      final publishedMatches = await FlixoraMovieService.searchPublishedMovies(
+        credit.title,
+      ).timeout(const Duration(seconds: 7));
+      final wantedTitle = _normalizedMovieTitle(credit.title);
+      for (final candidate in publishedMatches) {
+        if (candidate.mediaType != credit.mediaType ||
+            !candidate.hasPlayableVideoUrl) continue;
+        final sameTmdbId = credit.tmdbId > 0 &&
+            candidate.tmdbId > 0 && candidate.tmdbId == credit.tmdbId;
+        final sameTitle = _normalizedMovieTitle(candidate.title) == wantedTitle;
+        final sameYear = candidate.year == credit.year ||
+            candidate.year == 'N/A' || credit.year == 'N/A';
+        if (sameTmdbId || (sameTitle && sameYear)) {
+          return candidate.withFallbackMetadata(credit);
+        }
+      }
+    } catch (error) {
+      debugPrint('Cast filmography Admin source lookup failed: $error');
+    }
     if (credit.hasPlayableVideoUrl) return credit;
     return null;
   }
@@ -12941,6 +13093,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
   String? _automaticSubtitleMessage;
   SubtitleTrack? _automaticEnglishTrack;
   List<Map<String, dynamic>> _automaticSubtitleOptions = [];
+  List<String> _localDownloadedSubtitlePaths = [];
   int _automaticSubtitleRequestToken = 0;
 
   double _videoZoom = 1.0;
@@ -16220,77 +16373,42 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
   Future<void> _activateLocalDownloadedSubtitles(List<String> paths) async {
     if (_isDisposed) return;
+    final available = <String>[];
+    final seen = <String>{};
+    for (final path in paths) {
+      if (!seen.add(path)) continue;
+      try {
+        final file = File(path);
+        if (await file.exists() && await file.length() >= 8) {
+          available.add(path);
+        }
+      } catch (error) {
+        debugPrint('Offline subtitle file check failed: $error');
+      }
+    }
+
+    // Downloaded videos always start with subtitles OFF. Files become choices
+    // in the existing Subtitle panel and are activated only after a user tap.
     try {
-      await _player.setSubtitleTrack(SubtitleTrack.auto());
-    } catch (_) {}
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', 'no');
+      }
+    } catch (error) {
+      debugPrint('Could not reset downloaded-video subtitle visibility: $error');
+    }
+    _localDownloadedSubtitlePaths = available;
     _subtitleManuallySelected = false;
     _automaticEnglishTrack = null;
     _selectedSubtitleLanguageCode = '';
-    if (paths.isEmpty) {
-      if (mounted && !_isDisposed) {
-        setState(() => _automaticSubtitleMessage = null);
-      }
-      return;
-    }
-
-    final localTracks = <({SubtitleTrack track, String language})>[];
-    final uniquePaths = <String>{};
-    for (final path in paths) {
-      if (_isDisposed) return;
-      try {
-        if (!uniquePaths.add(path)) continue;
-        final file = File(path);
-        if (!await file.exists() || await file.length() < 8) continue;
-        final name = file.uri.pathSegments.last;
-        final match = RegExp(
-          r'(?:subtitle|cached_subtitle)_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?|und)\.',
-          caseSensitive: false,
-        ).firstMatch(name);
-        final language = match?.group(1)?.toLowerCase() ?? 'und';
-        final track = SubtitleTrack.uri(
-          Uri.file(path).toString(),
-          title: _subtitleLanguageName(language),
-          language: language,
-        );
-
-        // Register every downloaded track in the existing subtitle selector.
-        // No video, audio, seek or buffering behavior is changed here.
-        await _player.setSubtitleTrack(track);
-        await Future<void>.delayed(const Duration(milliseconds: 120));
-        localTracks.add((track: track, language: language));
-      } catch (error) {
-        debugPrint('Offline subtitle track skipped: $error');
-      }
-    }
-
-    if (localTracks.isEmpty || _isDisposed) {
-      if (mounted && !_isDisposed) {
-        setState(() => _automaticSubtitleMessage = null);
-      }
-      return;
-    }
-
-    int rank(String language) {
-      if (language == 'bn') return 0;
-      if (language == 'bn+en') return 1;
-      if (language == 'en') return 2;
-      return 3;
-    }
-    localTracks.sort((a, b) => rank(a.language).compareTo(rank(b.language)));
-    final preferred = localTracks.first;
-    try {
-      await _activateSubtitleTrack(preferred.track);
-      _subtitleManuallySelected = true;
-      if (mounted && !_isDisposed) {
-        setState(() {
-          _automaticEnglishTrack = preferred.track;
-          _selectedSubtitleLanguageCode = preferred.language;
-          _subtitleVisibilityEnabled = true;
-          _automaticSubtitleMessage = 'Offline subtitle active';
-        });
-      }
-    } catch (error) {
-      debugPrint('Could not select the preferred offline subtitle: $error');
+    if (mounted && !_isDisposed) {
+      setState(() {
+        _subtitleVisibilityEnabled = false;
+        _automaticSubtitleMessage = available.isEmpty
+            ? null
+            : '${available.length} offline subtitle(s) available';
+      });
     }
   }
 
@@ -18337,6 +18455,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                       if (code.isNotEmpty) entries.putIfAbsent(code, () => {...option, 'kind': 'automatic'});
                     }
                   }
+                  for (final path in _localDownloadedSubtitlePaths) {
+                    final name = File(path).uri.pathSegments.last;
+                    final match = RegExp(
+                      r'(?:subtitle|cached_subtitle)_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?|und)\.',
+                      caseSensitive: false,
+                    ).firstMatch(name);
+                    final code = match?.group(1)?.toLowerCase() ?? 'und';
+                    entries['downloaded:$path'] = {
+                      'kind': 'local',
+                      'language': code,
+                      'filePath': path,
+                      'releaseName': 'Downloaded · ${_subtitleLanguageName(code)}',
+                    };
+                  }
                   final movieBoxOptions = _movieBoxSubtitleOptions();
                   for (var index = 0; index < movieBoxOptions.length; index++) {
                     final option = movieBoxOptions[index];
@@ -18349,6 +18481,19 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     final code = (item['language'] ?? '').toString().toLowerCase();
                     if (item['kind'] == 'embedded' && item['track'] is SubtitleTrack) {
                       await _selectSubtitleTrack(item['track'] as SubtitleTrack);
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else if (item['kind'] == 'local') {
+                      final path = (item['filePath'] ?? '').toString();
+                      if (path.isEmpty || !await File(path).exists()) return;
+                      await _selectSubtitleTrack(SubtitleTrack.uri(
+                        Uri.file(path).toString(),
+                        title: _subtitleLanguageName(code),
+                        language: code,
+                      ));
                       if (!mounted || _isDisposed) return;
                       setState(() {
                         _selectedSubtitleLanguageCode = code;
