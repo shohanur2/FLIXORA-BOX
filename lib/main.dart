@@ -1411,6 +1411,25 @@ class TmdbService {
     }
   }
 
+  static Future<Map<String, dynamic>> getPersonDetails(int personId) async {
+    if (apiKey.isEmpty || personId <= 0) return {};
+    try {
+      final uri = Uri.parse('$base/person/$personId').replace(
+        queryParameters: {
+          'api_key': apiKey,
+          'language': 'en-US',
+          'append_to_response': 'combined_credits',
+        },
+      );
+      final response = await _getWithRetry(uri);
+      if (response.statusCode != 200) return {};
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (error) {
+      debugPrint('Could not load cast member details: $error');
+      return {};
+    }
+  }
+
   static Future<Map<String, dynamic>> seasonDetails(int tvId, int seasonNumber) async {
     if (apiKey.isEmpty || tvId <= 0 || seasonNumber < 0) {
       throw Exception('TV season information is not available.');
@@ -5716,10 +5735,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _openMovie(Movie movie) async {
-    // Poster taps go straight to the resolved player; the MovieBox-first
-    // source policy and Admin-only fallback remain in _playMovie.
-    await _playMovie(movie);
+  void _openMovie(Movie movie) {
+    _openMovieDetails(movie);
+  }
+
+  void _openMovieDetails(Movie movie) {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MovieDetailsScreen(
+          movie: movie,
+          isOnline: _online,
+          isFavourite: _favourites.contains(movie.id),
+          isSaved: _saved.contains(movie.id),
+          onShare: () => Share.share(
+            '${movie.title} (${movie.year}) on FLIXORA',
+          ),
+          onFavourite: () => _toggleFavourite(movie),
+          onSave: () => _toggleSaved(movie),
+          onDownload: () => addDownload(movie),
+          onWatch: () {
+            Navigator.of(context).pop();
+            unawaited(_playMovie(movie));
+          },
+          onMovieSelected: _openMovieDetails,
+        ),
+      ),
+    );
   }
 
   Future<void> _playMovieFromPlayer(Movie movie) async {
@@ -6793,7 +6835,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(8),
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -6936,7 +6978,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 // into a small letterboxed image.
                 const heroImageFit = BoxFit.cover;
                 return GestureDetector(
-                  onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+                  onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
@@ -7056,7 +7098,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
             return GestureDetector(
               key: ValueKey('featured:${movie.mediaType}:${movie.tmdbId > 0 ? movie.tmdbId : movie.id}'),
-              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
               child: Container(
                 width: FeaturedCarouselLayout.cardWidth,
                 margin: const EdgeInsets.symmetric(
@@ -7544,7 +7586,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+          onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
           child: SizedBox(
             height: 94,
             child: Row(
@@ -8263,7 +8305,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(8),
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: _isOpeningTitle ? null : () => _playMovie(movie),
+              onTap: _isOpeningTitle ? null : () => _openMovieDetails(movie),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -8671,7 +8713,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           itemBuilder: (context, index) {
             final movie = _watchHistory[index];
             final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
-            return GestureDetector(onTap: () => _playMovie(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            return GestureDetector(onTap: () => _openMovieDetails(movie), child: SizedBox(width: 148, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 148, height: 78, child: FlixoraCachedImage(imageUrl: image, isOnline: _online))),
               const SizedBox(height: 5),
               Text(movie.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600, fontStyle: FontStyle.italic)),
@@ -8749,7 +8791,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final image = movie.backdropUrl.isNotEmpty ? movie.backdropUrl : movie.posterUrl;
         return InkWell(
           borderRadius: BorderRadius.circular(9),
-          onTap: () => _playMovie(movie),
+          onTap: () => _openMovieDetails(movie),
           child: Row(children: [
             ClipRRect(borderRadius: BorderRadius.circular(8), child: SizedBox(width: 116, height: 78, child: Stack(fit: StackFit.expand, children: [
               FlixoraCachedImage(imageUrl: image, isOnline: _online),
@@ -11787,6 +11829,7 @@ class MovieDetailsScreen extends StatelessWidget {
   final VoidCallback onSave;
   final VoidCallback onDownload;
   final VoidCallback onWatch;
+  final ValueChanged<Movie> onMovieSelected;
 
   const MovieDetailsScreen({
     super.key,
@@ -11799,10 +11842,101 @@ class MovieDetailsScreen extends StatelessWidget {
     required this.onSave,
     required this.onDownload,
     required this.onWatch,
+    required this.onMovieSelected,
   });
+
+  void _showMoreInfo(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: panel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: gold, size: 22),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      movie.title,
+                      style: const TextStyle(
+                        color: white,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _infoRow('Type', movie.mediaType == 'tv' ? 'TV / Series' : 'Movie'),
+              if (movie.year.isNotEmpty && movie.year != 'N/A')
+                _infoRow('Release year', movie.year),
+              if (movie.releaseDate.isNotEmpty)
+                _infoRow('Release date', movie.releaseDate),
+              if (movie.rating > 0)
+                _infoRow('Rating', '${movie.rating.toStringAsFixed(1)} / 10'),
+              if (movie.runtime != null && movie.runtime! > 0)
+                _infoRow('Runtime', '${movie.runtime!.round()} minutes'),
+              if (movie.originCountry.isNotEmpty)
+                _infoRow('Country', movie.originCountry),
+              if (movie.originalLanguage.isNotEmpty)
+                _infoRow('Original language', movie.originalLanguage.toUpperCase()),
+              if (movie.genres.isNotEmpty)
+                _infoRow('Genres', movie.genres.join(', ')),
+              const SizedBox(height: 8),
+              const Text(
+                'Description',
+                style: TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 7),
+              Text(
+                movie.overview.isEmpty ? 'No description available.' : movie.overview,
+                style: const TextStyle(color: ink70, height: 1.6, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(label, style: const TextStyle(color: ink60, fontSize: 12)),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final backdrop = movie.backdropUrl.isNotEmpty
+        ? movie.backdropUrl
+        : movie.posterUrl;
+    final mediaType = movie.mediaType == 'tv' ? 'tv' : 'movie';
+
     return Scaffold(
       backgroundColor: bg,
       body: CustomScrollView(
@@ -11815,18 +11949,25 @@ class MovieDetailsScreen extends StatelessWidget {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  movie.backdropUrl.isNotEmpty
-                      ? FlixoraCachedImage(
-                          isOnline: isOnline,
-                          imageUrl: movie.backdropUrl,
-                          fit: BoxFit.cover,
-                        )
-                      : Container(color: panel),
+                  if (backdrop.isNotEmpty)
+                    FlixoraCachedImage(
+                      isOnline: isOnline,
+                      imageUrl: backdrop,
+                      fit: BoxFit.cover,
+                    )
+                  else
+                    Container(color: panel),
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        begin: Alignment.topCenter,                        end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, bg],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x55000000),
+                          Color(0x12000000),
+                          Color(0xFF080808),
+                        ],
+                        stops: [0, 0.42, 1],
                       ),
                     ),
                   ),
@@ -11836,7 +11977,7 @@ class MovieDetailsScreen extends StatelessWidget {
           ),
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 30),
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 34),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -11846,8 +11987,8 @@ class MovieDetailsScreen extends StatelessWidget {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: SizedBox(
-                          width: 115,
-                          height: 165,
+                          width: 112,
+                          height: 162,
                           child: movie.posterUrl.isNotEmpty
                               ? FlixoraCachedImage(
                                   isOnline: isOnline,
@@ -11856,15 +11997,11 @@ class MovieDetailsScreen extends StatelessWidget {
                                 )
                               : Container(
                                   color: panel,
-                                  child: const Icon(
-                                    Icons.movie,
-                                    color: gold,
-                                    size: 40,
-                                  ),
+                                  child: const Icon(Icons.movie, color: gold, size: 40),
                                 ),
                         ),
                       ),
-                      const SizedBox(width: 17),
+                      const SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -11873,66 +12010,42 @@ class MovieDetailsScreen extends StatelessWidget {
                               movie.title,
                               style: const TextStyle(
                                 color: white,
-                                fontSize: 23,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
-                            const SizedBox(height: 9),
+                            const SizedBox(height: 8),
                             Text(
-                              movie.mediaType == 'tv' ? 'TV SERIES' : 'MOVIE',
+                              movie.mediaType == 'tv' ? 'TV / SERIES' : 'MOVIE',
                               style: const TextStyle(
                                 color: gold,
                                 fontSize: 11,
-                                fontWeight: FontWeight.bold,
+                                fontWeight: FontWeight.w800,
                                 letterSpacing: 1.2,
                               ),
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              movie.year,
-                              style: const TextStyle(
-                                color: ink60,
-                              ),
-                            ),                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                const Icon(
-                                  Icons.star,
-                                  color: gold,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 5),
-                                Text(
-                                  movie.rating.toStringAsFixed(1),
-                                  style: const TextStyle(
-                                    color: white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (movie.originCountry.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                'Country: ${movie.originCountry}',
-                                style: const TextStyle(color: ink60),
-                              ),
-                            ],
-                            if (movie.originalLanguage.isNotEmpty) ...[
+                            if (movie.year.isNotEmpty && movie.year != 'N/A') ...[
                               const SizedBox(height: 6),
-                              Text(
-                                'Language: ${movie.originalLanguage.toUpperCase()}',
-                                style: const TextStyle(color: ink60),
+                              Text(movie.year, style: const TextStyle(color: ink60)),
+                            ],
+                            if (movie.rating > 0) ...[
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  const Icon(Icons.star_rounded, color: gold, size: 18),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    movie.rating.toStringAsFixed(1),
+                                    style: const TextStyle(color: white, fontWeight: FontWeight.w800),
+                                  ),
+                                ],
                               ),
                             ],
-                            if (movie.runtime != null &&
-                                movie.runtime! > 0) ...[
-                              const SizedBox(height: 8),
+                            if (movie.genres.isNotEmpty) ...[
+                              const SizedBox(height: 9),
                               Text(
-                                '${movie.runtime} min',
-                                style: const TextStyle(
-                                  color: ink60,
-                                ),
+                                movie.genres.take(3).join(' • '),
+                                style: const TextStyle(color: ink60, fontSize: 11),
                               ),
                             ],
                           ],
@@ -11941,152 +12054,438 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 20),
-                  if (movie.genres.isNotEmpty)
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: movie.genres
-                          .map(
-                            (genre) => Chip(
-                              label: Text(genre),
-                              backgroundColor: panel,
-                              labelStyle: const TextStyle(
-                                color: goldLight,
-                                fontSize: 11,
-                              ),
-                              side: BorderSide.none,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 50,
+                          child: FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: gold,
+                              foregroundColor: Colors.black,
+                              disabledBackgroundColor: panel,
+                              disabledForegroundColor: ink60,
                             ),
-                          )
-                          .toList(),
-                    ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Overview',
-                    style: TextStyle(
-                      color: white,
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 9),
-                  Text(
-                    movie.overview.isEmpty
-                        ? 'No description available.'
-                        : movie.overview,
-                    style: const TextStyle(
-                      color: ink70,
-                      height: 1.6,
-                      fontSize: 14,
-                    ),
-                  ),
-                  const SizedBox(height: 25),
-                  if (movie.canAttemptPlayback)
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: gold,
-                          foregroundColor: Colors.white,
-                        ),
-                        onPressed: onWatch,
-                        icon: const Icon(
-                          Icons.play_arrow_rounded,
-                          size: 27,
-                        ),
-                        label: const Text(
-                          'WATCH NOW',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Text(
-                        'No supported FLIXORA playback source is linked to this title yet.',
-                        style: TextStyle(color: ink60, fontSize: 13),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onSave,
-                          icon: const Icon(Icons.playlist_add, color: gold),
-                          label: const Text('Add to list', style: TextStyle(color: white)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onShare,
-                          icon: const Icon(Icons.share_outlined, color: gold),
-                          label: const Text('Share', style: TextStyle(color: white)),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onFavourite,
-                          icon: Icon(
-                            isFavourite
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                            color: gold,
-                          ),
-                          label: Text(
-                            isFavourite ? 'Liked' : 'Favourite',
-                            style: const TextStyle(color: white),
+                            onPressed: movie.canAttemptPlayback ? onWatch : null,
+                            icon: const Icon(Icons.play_arrow_rounded, size: 25),
+                            label: const Text(
+                              'WATCH',
+                              style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+                            ),
                           ),
                         ),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onSave,
-                          icon: Icon(
-                            isSaved
-                                ? Icons.bookmark
-                                : Icons.bookmark_border,
-                            color: gold,
-                          ),
-                          label: Text(
-                            isSaved ? 'Saved' : 'Save',
-                            style: const TextStyle(color: white),
+                        child: SizedBox(
+                          height: 50,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: white,
+                              side: const BorderSide(color: gold),
+                            ),
+                            onPressed: () => _showMoreInfo(context),
+                            icon: const Icon(Icons.info_outline_rounded, color: gold, size: 20),
+                            label: const Text(
+                              'MORE INFO',
+                              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.4),
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  if (movie.canAttemptPlayback)
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: onDownload,
-                        icon: const Icon(
-                          Icons.download,
-                          color: gold,
+                  const SizedBox(height: 18),
+                  Wrap(
+                    spacing: 9,
+                    runSpacing: 9,
+                    children: [
+                      _actionChip(
+                        icon: isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                        label: isSaved ? 'Saved' : 'Save',
+                        onTap: onSave,
+                      ),
+                      _actionChip(
+                        icon: isFavourite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                        label: isFavourite ? 'Liked' : 'Favourite',
+                        onTap: onFavourite,
+                      ),
+                      _actionChip(
+                        icon: Icons.share_outlined,
+                        label: 'Share',
+                        onTap: onShare,
+                      ),
+                      if (movie.canAttemptPlayback)
+                        _actionChip(
+                          icon: Icons.download_outlined,
+                          label: 'Download',
+                          onTap: onDownload,
                         ),
-                        label: const Text(
-                          'Download Movie',
-                          style: TextStyle(color: white),
+                    ],
+                  ),
+                  const SizedBox(height: 26),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Cast',
+                          style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900),
                         ),
                       ),
-                    ),
+                      const Text(
+                        'Tap a person to view filmography',
+                        style: TextStyle(color: ink60, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  FutureBuilder<List<Map<String, dynamic>>>(
+                    future: TmdbService.getCast(movie.tmdbId, mediaType: mediaType),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 128,
+                          child: Center(child: CircularProgressIndicator(color: gold)),
+                        );
+                      }
+                      final cast = snapshot.data ?? const <Map<String, dynamic>>[];
+                      if (cast.isEmpty) {
+                        return const Text(
+                          'Cast information is not available for this title.',
+                          style: TextStyle(color: ink60, fontSize: 12),
+                        );
+                      }
+                      return SizedBox(
+                        height: 145,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: cast.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 12),
+                          itemBuilder: (context, index) {
+                            final person = cast[index];
+                            final personId = _toInt(person['id']);
+                            final profile = (person['profile_path'] ?? '').toString();
+                            final name = (person['name'] ?? 'Cast member').toString();
+                            final character = (person['character'] ?? '').toString();
+                            return InkWell(
+                              borderRadius: BorderRadius.circular(11),
+                              onTap: personId <= 0
+                                  ? null
+                                  : () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => CastProfileScreen(
+                                            personId: personId,
+                                            personName: name,
+                                            isOnline: isOnline,
+                                            onMovieSelected: onMovieSelected,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                              child: SizedBox(
+                                width: 82,
+                                child: Column(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(11),
+                                      child: SizedBox(
+                                        width: 76,
+                                        height: 91,
+                                        child: profile.isEmpty
+                                            ? Container(
+                                                color: panel,
+                                                child: const Icon(Icons.person, color: gold, size: 34),
+                                              )
+                                            : FlixoraCachedImage(
+                                                imageUrl: '${imageBase}w185$profile',
+                                                isOnline: isOnline,
+                                                fit: BoxFit.cover,
+                                              ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    if (character.isNotEmpty)
+                                      Text(
+                                        character,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: ink60, fontSize: 9),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'Description',
+                    style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 9),
+                  Text(
+                    movie.overview.isEmpty ? 'No description available.' : movie.overview,
+                    style: const TextStyle(color: ink70, height: 1.65, fontSize: 14),
+                  ),
                 ],
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionChip({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return ActionChip(
+      avatar: Icon(icon, color: gold, size: 17),
+      label: Text(label, style: const TextStyle(color: white, fontSize: 11)),
+      backgroundColor: panel,
+      side: BorderSide.none,
+      onPressed: onTap,
+    );
+  }
+}
+
+class CastProfileScreen extends StatefulWidget {
+  final int personId;
+  final String personName;
+  final bool isOnline;
+  final ValueChanged<Movie> onMovieSelected;
+
+  const CastProfileScreen({
+    super.key,
+    required this.personId,
+    required this.personName,
+    required this.isOnline,
+    required this.onMovieSelected,
+  });
+
+  @override
+  State<CastProfileScreen> createState() => _CastProfileScreenState();
+}
+
+class _CastProfileScreenState extends State<CastProfileScreen> {
+  late Future<Map<String, dynamic>> _profileFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _profileFuture = TmdbService.getPersonDetails(widget.personId);
+  }
+
+  List<Movie> _filmography(Map<String, dynamic> profile) {
+    final combined = profile['combined_credits'];
+    final rawCredits = combined is Map ? combined['cast'] : null;
+    if (rawCredits is! List) return [];
+    final seen = <String>{};
+    final movies = <Movie>[];
+    for (final raw in rawCredits.whereType<Map>()) {
+      final item = Map<String, dynamic>.from(raw);
+      final mediaType = (item['media_type'] ?? '').toString();
+      if (mediaType != 'movie' && mediaType != 'tv') continue;
+      final id = _toInt(item['id']);
+      if (id <= 0 || !seen.add('$mediaType:$id')) continue;
+      movies.add(Movie.fromJson(item, mediaType: mediaType));
+    }
+    movies.sort((a, b) => b.releaseDate.compareTo(a.releaseDate));
+    return movies;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: bg,
+      body: FutureBuilder<Map<String, dynamic>>(
+        future: _profileFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: gold));
+          }
+          final profile = snapshot.data ?? const <String, dynamic>{};
+          if (profile.isEmpty) {
+            return Center(
+              child: Text(
+                'Cast profile is not available right now.',
+                style: const TextStyle(color: ink60),
+              ),
+            );
+          }
+
+          final name = (profile['name'] ?? widget.personName).toString();
+          final biography = (profile['biography'] ?? '').toString();
+          final department = (profile['known_for_department'] ?? 'Artist').toString();
+          final birthday = (profile['birthday'] ?? '').toString();
+          final deathday = (profile['deathday'] ?? '').toString();
+          final place = (profile['place_of_birth'] ?? '').toString();
+          final profilePath = (profile['profile_path'] ?? '').toString();
+          final credits = _filmography(profile);
+
+          return CustomScrollView(
+            slivers: [
+              SliverAppBar(
+                expandedHeight: 330,
+                pinned: true,
+                backgroundColor: bg,
+                foregroundColor: white,
+                flexibleSpace: FlexibleSpaceBar(
+                  title: Text(name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                  background: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (profilePath.isNotEmpty)
+                        FlixoraCachedImage(
+                          imageUrl: '${imageBase}w500$profilePath',
+                          isOnline: widget.isOnline,
+                          fit: BoxFit.cover,
+                        )
+                      else
+                        Container(color: panel),
+                      const DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x33000000), Color(0xFF080808)],
+                            stops: [0.25, 1],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 30),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        department.toUpperCase(),
+                        style: const TextStyle(color: gold, fontSize: 11, fontWeight: FontWeight.w900, letterSpacing: 1.2),
+                      ),
+                      const SizedBox(height: 12),
+                      if (birthday.isNotEmpty) _profileInfo('Born', birthday),
+                      if (deathday.isNotEmpty) _profileInfo('Died', deathday),
+                      if (place.isNotEmpty) _profileInfo('Birthplace', place),
+                      if (biography.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        const Text('Biography', style: TextStyle(color: white, fontSize: 18, fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 8),
+                        Text(biography, style: const TextStyle(color: ink70, height: 1.65, fontSize: 13)),
+                      ],
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text('Filmography', style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900)),
+                          ),
+                          Text('${credits.length} titles', style: const TextStyle(color: ink60, fontSize: 11)),
+                        ],
+                      ),
+                      const SizedBox(height: 13),
+                      if (credits.isEmpty)
+                        const Text('No filmography is available yet.', style: TextStyle(color: ink60, fontSize: 12))
+                      else
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: credits.length,
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            childAspectRatio: 0.57,
+                            crossAxisSpacing: 10,
+                            mainAxisSpacing: 15,
+                          ),
+                          itemBuilder: (context, index) {
+                            final movie = credits[index];
+                            return InkWell(
+                              borderRadius: BorderRadius.circular(9),
+                              onTap: () {
+                                Navigator.of(context).pop();
+                                widget.onMovieSelected(movie);
+                              },
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: SizedBox(
+                                        width: double.infinity,
+                                        child: movie.posterUrl.isEmpty
+                                            ? Container(
+                                                color: panel,
+                                                child: const Icon(Icons.movie, color: gold, size: 30),
+                                              )
+                                            : FlixoraCachedImage(
+                                                imageUrl: movie.posterUrl,
+                                                isOnline: widget.isOnline,
+                                                fit: BoxFit.cover,
+                                              ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    movie.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800),
+                                  ),
+                                  Text(
+                                    [
+                                      if (movie.year != 'N/A') movie.year,
+                                      movie.mediaType == 'tv' ? 'Series' : 'Movie',
+                                    ].join(' • '),
+                                    maxLines: 1,
+                                    style: const TextStyle(color: ink60, fontSize: 9),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _profileInfo(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 86, child: Text(label, style: const TextStyle(color: ink60, fontSize: 11))),
+          Expanded(child: Text(value, style: const TextStyle(color: white, fontSize: 12, fontWeight: FontWeight.w600))),
         ],
       ),
     );
