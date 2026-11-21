@@ -7106,7 +7106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: isMobile ? (width * 0.1).clamp(34.0, 48.0) : (width * 0.054).clamp(38.0, 76.0),
+                                fontSize: isMobile ? (width * 0.1).clamp(34.0, 48.0).toDouble() : (width * 0.054).clamp(38.0, 76.0).toDouble(),
                                 height: 0.98,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: -1.2,
