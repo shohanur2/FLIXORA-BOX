@@ -16,7 +16,6 @@ import 'package:app_settings/app_settings.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart' as cache_manager;
 import 'package:share_plus/share_plus.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/notification_service.dart';
 import 'package:media_kit/media_kit.dart';
@@ -1566,36 +1565,6 @@ class TmdbService {
       'details': data ?? <String, dynamic>{},
       'metadata_source': metadataSource,
     };
-  }
-
-  static Future<String?> getTrailerKey(int id, {String mediaType = 'movie'}) async {
-    if (apiKey.isEmpty || id <= 0) return null;
-    final type = mediaType == 'tv' ? 'tv' : 'movie';
-    try {
-      final uri = Uri.parse('$base/$type/$id/videos').replace(
-        queryParameters: {'api_key': apiKey, 'language': 'en-US'});
-      final response = await _getWithRetry(uri);
-      if (response.statusCode != 200) return null;
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final videos = (data['results'] as List? ?? []).whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .where((item) => (item['site'] ?? '').toString().toLowerCase() == 'youtube' &&
-          (item['key'] ?? '').toString().trim().isNotEmpty).toList();
-      if (videos.isEmpty) return null;
-      videos.sort((a, b) {
-        int score(Map<String, dynamic> item) {
-          final kind = (item['type'] ?? '').toString().toLowerCase();
-          final official = item['official'] == true;
-          if (kind == 'trailer' && official) return 0;
-          if (kind == 'trailer') return 1;
-          if (kind == 'teaser' && official) return 2;
-          if (kind == 'teaser') return 3;
-          return 4;
-        }
-        return score(a).compareTo(score(b));
-      });
-      return (videos.first['key'] ?? '').toString().trim();
-    } catch (_) { return null; }
   }
 
   static Future<List<Map<String, dynamic>>> getCast(
@@ -5845,6 +5814,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     return null;
   }
 
+  Future<Movie?> _resolveFilmographySource(Movie credit) async {
+    if (!_online || credit.title.trim().isEmpty) return null;
+    final movieBox = _cachedMovieBoxMatch(credit) ??
+        await _searchMovieBoxMatch(credit).timeout(
+          const Duration(seconds: 6), onTimeout: () => null,
+        ).catchError((_) => null);
+    if (movieBox != null && movieBox.isMovieBox) {
+      return movieBox.withFallbackMetadata(credit);
+    }
+    final admin = _cachedFlixoraMatch(credit);
+    if (admin != null && admin.hasPlayableVideoUrl) return admin.withFallbackMetadata(credit);
+    if (credit.hasPlayableVideoUrl) return credit;
+    return null;
+  }
+
   Future<Movie?> _searchMovieBoxMatch(Movie movie) async {
     if (movie.title.trim().isEmpty ||
         (movie.mediaType != 'movie' && movie.mediaType != 'tv')) {
@@ -6011,6 +5995,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             unawaited(_playMovie(movie));
           },
           onMovieSelected: _openMovieDetails,
+          onResolveMovie: _resolveFilmographySource,
         ),
       ),
     );
@@ -12071,73 +12056,6 @@ class _HotShortsScreenState extends State<HotShortsScreen> {
   }
 }
 
-class TmdbTrailerPreview extends StatefulWidget {
-  final Movie movie;
-  final bool isOnline;
-  final String fallbackImage;
-  const TmdbTrailerPreview({super.key, required this.movie, required this.isOnline, required this.fallbackImage});
-  @override
-  State<TmdbTrailerPreview> createState() => _TmdbTrailerPreviewState();
-}
-
-class _TmdbTrailerPreviewState extends State<TmdbTrailerPreview> {
-  late final Future<String?> _trailerKeyFuture;
-  WebViewController? _controller;
-  String? _loadedKey;
-  @override
-  void initState() { super.initState(); _trailerKeyFuture = _loadTrailerKey(); }
-
-  Future<String?> _loadTrailerKey() async {
-    final metadata = await TmdbService.getTitleMetadata(widget.movie);
-    final id = _toInt(metadata['tmdbId']);
-    return TmdbService.getTrailerKey(id > 0 ? id : widget.movie.tmdbId,
-      mediaType: (metadata['mediaType'] ?? widget.movie.mediaType).toString());
-  }
-
-  Widget _fallback() => Stack(
-    fit: StackFit.expand,
-    children: [
-      if (widget.fallbackImage.isNotEmpty)
-        FlixoraCachedImage(isOnline: widget.isOnline, imageUrl: widget.fallbackImage, fit: BoxFit.cover)
-      else
-        Container(color: panel),
-      const DecoratedBox(decoration: BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-          colors: [Color(0x33000000), Color(0xFF080808)]))),
-      const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.movie_outlined, color: white, size: 38),
-        SizedBox(height: 8),
-        Text('Trailer unavailable', style: TextStyle(color: white, fontSize: 13, fontWeight: FontWeight.w700)),
-      ])),
-    ],
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.isOnline) return _fallback();
-    return FutureBuilder<String?>(
-      future: _trailerKeyFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Stack(fit: StackFit.expand, children: [
-            _fallback(), const Center(child: CircularProgressIndicator(color: gold)),
-          ]);
-        }
-        final key = snapshot.data?.trim() ?? '';
-        if (!RegExp(r'^[A-Za-z0-9_-]{6,}$').hasMatch(key)) return _fallback();
-        if (_loadedKey != key || _controller == null) {
-          _loadedKey = key;
-          _controller = WebViewController()
-            ..setJavaScriptMode(JavaScriptMode.unrestricted)
-            ..setBackgroundColor(Colors.black)
-            ..loadRequest(Uri.parse('https://www.youtube-nocookie.com/embed/$key?autoplay=0&playsinline=1&rel=0'));
-        }
-        return WebViewWidget(controller: _controller!);
-      },
-    );
-  }
-}
-
 class MovieDetailsScreen extends StatelessWidget {
   final Movie movie;
   final bool isOnline;
@@ -12149,6 +12067,7 @@ class MovieDetailsScreen extends StatelessWidget {
   final VoidCallback onDownload;
   final VoidCallback onWatch;
   final ValueChanged<Movie> onMovieSelected;
+  final Future<Movie?> Function(Movie) onResolveMovie;
 
   const MovieDetailsScreen({
     super.key,
@@ -12162,6 +12081,7 @@ class MovieDetailsScreen extends StatelessWidget {
     required this.onDownload,
     required this.onWatch,
     required this.onMovieSelected,
+    required this.onResolveMovie,
   });
 
   void _showMoreInfo(BuildContext context, Future<Map<String, dynamic>> metadataFuture) {
@@ -12267,7 +12187,24 @@ class MovieDetailsScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: bg,
             flexibleSpace: FlexibleSpaceBar(
-              background: TmdbTrailerPreview(movie: movie, isOnline: isOnline, fallbackImage: backdrop),
+              background: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (backdrop.isNotEmpty)
+                    FlixoraCachedImage(isOnline: isOnline, imageUrl: backdrop, fit: BoxFit.cover)
+                  else
+                    Container(color: panel),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Color(0x22000000), Color(0xFF080808)],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           SliverToBoxAdapter(
@@ -12477,6 +12414,8 @@ class MovieDetailsScreen extends StatelessWidget {
                                             personSource: (person['metadata_source'] ?? 'tmdb').toString(),
                                             isOnline: isOnline,
                                             onMovieSelected: onMovieSelected,
+                                            onResolveMovie: onResolveMovie,
+                                            onResolveMovie: onResolveMovie,
                                           ),
                                         ),
                                       );
@@ -12572,6 +12511,7 @@ class CastProfileScreen extends StatefulWidget {
   final String personSource;
   final bool isOnline;
   final ValueChanged<Movie> onMovieSelected;
+  final Future<Movie?> Function(Movie) onResolveMovie;
 
   const CastProfileScreen({
     super.key,
@@ -12580,6 +12520,7 @@ class CastProfileScreen extends StatefulWidget {
     this.personSource = 'tmdb',
     required this.isOnline,
     required this.onMovieSelected,
+    required this.onResolveMovie,
   });
 
   @override
@@ -12720,51 +12661,51 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
                             mainAxisSpacing: 15,
                           ),
                           itemBuilder: (context, index) {
-                            final movie = credits[index];
-                            return InkWell(
-                              borderRadius: BorderRadius.circular(9),
-                              onTap: () {
-                                Navigator.of(context).pop();
-                                widget.onMovieSelected(movie);
-                              },
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: SizedBox(
-                                        width: double.infinity,
-                                        child: movie.posterUrl.isEmpty
-                                            ? Container(
-                                                color: panel,
-                                                child: const Icon(Icons.movie, color: gold, size: 30),
-                                              )
-                                            : FlixoraCachedImage(
-                                                imageUrl: movie.posterUrl,
-                                                isOnline: widget.isOnline,
-                                                fit: BoxFit.cover,
-                                              ),
+                            final credit = credits[index];
+                            return FutureBuilder<Movie?>(
+                              future: widget.onResolveMovie(credit),
+                              builder: (context, matchSnapshot) {
+                                final matchedMovie = matchSnapshot.data;
+                                final isMatched = matchedMovie != null &&
+                                    (matchedMovie.isMovieBox ||
+                                     (matchedMovie.isFlixora && matchedMovie.hasPlayableVideoUrl) ||
+                                     matchedMovie.hasPlayableVideoUrl);
+                                final poster = matchedMovie?.posterUrl.isNotEmpty == true
+                                    ? matchedMovie!.posterUrl : credit.posterUrl;
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(9),
+                                  onTap: isMatched ? () {
+                                    Navigator.of(context).pop();
+                                    widget.onMovieSelected(matchedMovie!);
+                                  } : null,
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: SizedBox(
+                                            width: double.infinity,
+                                            child: poster.isEmpty
+                                                ? Container(color: panel, child: const Icon(Icons.movie, color: gold, size: 30))
+                                                : FlixoraCachedImage(imageUrl: poster, isOnline: widget.isOnline, fit: BoxFit.cover),
+                                          ),
+                                        ),
                                       ),
-                                    ),
+                                      const SizedBox(height: 6),
+                                      Text(credit.title, maxLines: 2, overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800)),
+                                      Text(
+                                        matchSnapshot.connectionState == ConnectionState.waiting
+                                            ? 'Checking FLIXORA sources…'
+                                            : isMatched ? 'Available to watch' : 'Not available in FLIXORA yet',
+                                        maxLines: 2,
+                                        style: TextStyle(color: isMatched ? gold : ink60, fontSize: 9),
+                                      ),
+                                    ],
                                   ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    movie.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: white, fontSize: 11, fontWeight: FontWeight.w800),
-                                  ),
-                                  Text(
-                                    [
-                                      if (movie.year != 'N/A') movie.year,
-                                      movie.mediaType == 'tv' ? 'Series' : 'Movie',
-                                    ].join(' • '),
-                                    maxLines: 1,
-                                    style: const TextStyle(color: ink60, fontSize: 9),
-                                  ),
-                                ],
-                              ),
+                                );
+                              },
                             );
                           },
                         ),
