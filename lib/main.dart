@@ -3140,7 +3140,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
 
     _timer = Timer.periodic(
-      const Duration(seconds: 5),
+      const Duration(milliseconds: 6500),
       (_) {
         final lastInteraction = _lastCarouselInteractionAt;
         if (!mounted ||
@@ -6949,15 +6949,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final width = MediaQuery.sizeOf(context).width;
     final isMobile = width < 760;
     final heroHeight = isMobile
-        ? (width * 1.28).clamp(440.0, 560.0).toDouble()
-        : (width * 0.43).clamp(380.0, 590.0).toDouble();
+        ? (width * 1.28).clamp(465.0, 570.0).toDouble()
+        : (width * 0.43).clamp(420.0, 590.0).toDouble();
     final pixelRatio = MediaQuery.devicePixelRatioOf(context);
     final heroCacheWidth = (width * pixelRatio).round().clamp(720, 1800).toInt();
     final heroCacheHeight =
         (heroHeight * pixelRatio).round().clamp(450, 1200).toInt();
 
     return Padding(
-      padding: EdgeInsets.symmetric(horizontal: isMobile ? 12 : 18),
+      padding: EdgeInsets.symmetric(horizontal: width * (isMobile ? 0.03 : 0.045)),
       child: SizedBox(
         height: heroHeight,
         child: ClipRRect(
@@ -6986,8 +6986,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     final movie = slides[index];
                     final hasBackdrop = movie.backdrop.trim().isNotEmpty &&
                         movie.backdropUrl.isNotEmpty;
-                    final imageUrl =
-                        hasBackdrop ? movie.backdropUrl : movie.posterUrl;
+                    final imageUrl = isMobile
+                        ? (movie.posterUrl.isNotEmpty ? movie.posterUrl : movie.backdropUrl)
+                        : (hasBackdrop ? movie.backdropUrl : movie.posterUrl);
                     return Stack(
                       fit: StackFit.expand,
                       children: [
@@ -7057,10 +7058,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   return Stack(
                     children: [
                       Positioned(
-                        left: isMobile ? 22 : 48,
-                        right: isMobile ? 22 : 48,
-                        bottom: isMobile ? 82 : 78,
+                        left: isMobile ? 22 : width * 0.06,
+                        right: isMobile ? 22 : width * 0.42,
+                        top: isMobile ? null : 0,
+                        bottom: isMobile ? 82 : 0,
                         child: Column(
+                          mainAxisAlignment: isMobile ? MainAxisAlignment.end : MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -7103,7 +7106,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: isMobile ? 34 : 54,
+                                fontSize: isMobile ? (width * 0.1).clamp(34.0, 48.0) : (width * 0.054).clamp(38.0, 76.0),
                                 height: 0.98,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: -1.2,
@@ -7147,7 +7150,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               const SizedBox(height: 12),
                               ConstrainedBox(
                                 constraints: BoxConstraints(
-                                  maxWidth: isMobile ? 520 : 450,
+                                  maxWidth: isMobile ? 520 : 440,
                                 ),
                                 child: Text(
                                   movie.overview,
@@ -7162,42 +7165,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               ),
                             ],
                             const SizedBox(height: 17),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: ElevatedButton.icon(
-                                onPressed: _isOpeningTitle
-                                    ? null
-                                    : () => _playMovie(movie),
-                                style: ElevatedButton.styleFrom(
-                                  foregroundColor: Colors.white,
-                                  backgroundColor:
-                                      const Color(0xAA7654C8),
-                                  elevation: 0,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 18, vertical: 13),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                    side: const BorderSide(
-                                        color: Color(0x99D8C9FF)),
+                            Wrap(
+                              spacing: 11,
+                              runSpacing: 10,
+                              children: [
+                                ElevatedButton.icon(
+                                  onPressed: _isOpeningTitle ? null : () => _playMovie(movie),
+                                  style: ElevatedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: const Color(0xAA7654C8),
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      side: const BorderSide(color: Color(0x99D8C9FF)),
+                                    ),
                                   ),
+                                  icon: const Icon(Icons.play_circle_fill_rounded, size: 19),
+                                  label: const Text('Watch now', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
                                 ),
-                                icon: const Icon(
-                                    Icons.play_circle_fill_rounded,
-                                    size: 19),
-                                label: const Text(
-                                  'Watch now',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w800),
+                                OutlinedButton.icon(
+                                  onPressed: () => _openHeroDetails(movie),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: const Color(0x55212A3D),
+                                    padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 13),
+                                    side: const BorderSide(color: Color(0x66FFFFFF)),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  ),
+                                  icon: const Icon(Icons.info_outline_rounded, size: 18),
+                                  label: const Text('More info', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
                                 ),
-                              ),
-                            ),
+                              ],
+                            )
                           ],
                         ),
                       ),
                       Positioned(
-                        top: 16,
-                        right: 16,
+                        bottom: isMobile ? 29 : 31,
+                        right: isMobile ? 22 : 28,
                         child: LiquidGlassSurface(
                           borderRadius: BorderRadius.circular(20),
                           padding: const EdgeInsets.symmetric(
@@ -7330,6 +7336,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       safeIndex,
       duration: const Duration(milliseconds: 420),
       curve: Curves.easeInOutCubic,
+    );
+  }
+
+  void _openHeroDetails(Movie movie) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MovieDetailsScreen(
+          movie: movie,
+          isOnline: _online,
+          isFavourite: _favourites.contains(movie.id),
+          isSaved: _saved.contains(movie.id),
+          onShare: () => Share.share('${movie.title} (${movie.year}) on FLIXORA'),
+          onFavourite: () => _toggleFavourite(movie),
+          onSave: () => _toggleSaved(movie),
+          onDownload: () => addDownload(movie),
+          onWatch: () => _playMovie(movie),
+        ),
+      ),
     );
   }
 
@@ -15736,11 +15760,11 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
           right: viewPadding.right + miniRight,
           bottom: viewPadding.bottom + viewInsets.bottom + miniBottom,
           child: Material(
-            color: const Color(0xDD182438),
+            color: Colors.black,
             elevation: 20,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(13),
-              side: const BorderSide(color: Color(0x88E5EEFF)),
+              side: const BorderSide(color: Color(0x55D9B45B)),
             ),
             clipBehavior: Clip.antiAlias,
             child: SizedBox(
@@ -15750,16 +15774,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                 children: [
                   Container(
                     height: 32,
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xCC40516A), Color(0xEE101827)],
-                      ),
-                      border: Border(
-                        bottom: BorderSide(color: Color(0x55FFFFFF)),
-                      ),
-                    ),
+                    color: const Color(0xFF171717),
                     padding: const EdgeInsets.only(left: 6, right: 2),
                     child: Row(
                       children: [
@@ -18896,19 +18911,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       required String tooltip,
       required VoidCallback onPressed,
     }) {
-      return LiquidGlassSurface(
-        borderRadius: BorderRadius.circular(30),
-        blur: 14,
-        child: SizedBox(
-          width: 46,
-          height: 46,
-          child: IconButton(
+      return Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.48),
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0x55FFFFFF)),
+        ),
+        child: IconButton(
           tooltip: tooltip,
           visualDensity: VisualDensity.compact,
           padding: EdgeInsets.zero,
           onPressed: onPressed,
-            icon: Icon(icon, color: playerWhite, size: 25),
-          ),
+          icon: Icon(icon, color: playerWhite, size: 25),
         ),
       );
     }
@@ -18993,9 +19009,13 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
         compact ? 10 : 66,
         compact ? 6 : 18,
       ),
-      child: LiquidGlassSurface(
-        borderRadius: BorderRadius.circular(compact ? 12 : 18),
-        blur: compact ? 12 : 20,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          gradient: null,
+          borderRadius: BorderRadius.circular(compact ? 12 : 18),
+          border: Border.all(color: const Color(0x2EFFFFFF)),
+        ),
         child: Padding(
           padding: EdgeInsets.fromLTRB(
             compact ? 8 : 12,
@@ -19193,10 +19213,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      child: LiquidGlassSurface(
-        borderRadius: BorderRadius.circular(18),
-        blur: 16,
-        child: Row(
+      child: Row(
         children: [
           Material(
             color: Colors.black.withValues(alpha: 0.48),
@@ -19370,7 +19387,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
             ),
           ),
         ],
-        ),
       ),
     );
   }
@@ -19886,7 +19902,6 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
     return result;
   }
 
-
   Widget _movieRail(String title, List<Movie> movies) {
     if (movies.isEmpty) return const SizedBox.shrink();
 
@@ -19988,7 +20003,7 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
         foregroundColor: playerWhite,
-        side: const BorderSide(color: Color(0x88E5EEFF), width: 0.9),
+        side: const BorderSide(color: Color(0x3DFFFFFF)),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       ),
       icon: Icon(icon, color: playerGold, size: 18),
@@ -20595,10 +20610,8 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
                     ),
             ),
         SliverToBoxAdapter(
-          child: LiquidGlassSurface(
-            padding: const EdgeInsets.fromLTRB(16, 13, 12, 14),
-            borderRadius: BorderRadius.circular(22),
-            blur: 20,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 13, 12, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
