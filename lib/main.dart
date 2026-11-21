@@ -12415,7 +12415,6 @@ class MovieDetailsScreen extends StatelessWidget {
                                             isOnline: isOnline,
                                             onMovieSelected: onMovieSelected,
                                             onResolveMovie: onResolveMovie,
-                                            onResolveMovie: onResolveMovie,
                                           ),
                                         ),
                                       );
