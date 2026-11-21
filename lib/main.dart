@@ -1396,8 +1396,6 @@ class TmdbService {
       .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
       .trim();
 
-  /// Resolve catalogue items without a TMDB ID by exact title, then fetch
-  /// description and credits together from the matched TMDB details endpoint.
   static Future<Map<String, dynamic>> getTitleMetadata(Movie movie) {
     final cacheKey = [
       movie.mediaType == 'tv' ? 'tv' : 'movie',
@@ -1420,7 +1418,6 @@ class TmdbService {
         'cast': <Map<String, dynamic>>[],
       };
     }
-
     final type = movie.mediaType == 'tv' ? 'tv' : 'movie';
     var resolvedId = movie.tmdbId;
     Map<String, dynamic>? detailsData;
@@ -1437,14 +1434,15 @@ class TmdbService {
         );
         final response = await _getWithRetry(uri);
         if (response.statusCode != 200) {
-          debugPrint('TMDB details request failed: \${response.statusCode} ($type/$id)');
+          debugPrint('TMDB details request failed with HTTP status ' +
+              response.statusCode.toString());
           return null;
         }
         final decoded = jsonDecode(response.body);
         if (decoded is! Map) return null;
         return Map<String, dynamic>.from(decoded);
       } catch (error) {
-        debugPrint('TMDB details lookup failed for $type/$id: $error');
+        debugPrint('TMDB details lookup failed: ' + error.toString());
         return null;
       }
     }
@@ -1473,10 +1471,11 @@ class TmdbService {
       try {
         final matches = await search(movie.title);
         final wantedTitle = _metadataTitleKey(movie.title);
-        final sameType = matches.where((item) => item.mediaType == type);
-        final exactMatches = sameType.where(
-          (item) => _metadataTitleKey(item.title) == wantedTitle,
-        ).toList();
+        final exactMatches = matches
+            .where((item) =>
+                item.mediaType == type &&
+                _metadataTitleKey(item.title) == wantedTitle)
+            .toList();
         if (exactMatches.isNotEmpty) {
           exactMatches.sort((a, b) {
             final aYear = a.year == movie.year && movie.year != 'N/A' ? 0 : 1;
@@ -1487,7 +1486,7 @@ class TmdbService {
           detailsData = await fetchDetails(resolvedId);
         }
       } catch (error) {
-        debugPrint('TMDB title search fallback failed for "\${movie.title}": $error');
+        debugPrint('TMDB title search fallback failed: ' + error.toString());
       }
     }
 
@@ -1502,7 +1501,6 @@ class TmdbService {
             .toList(growable: false)
         : <Map<String, dynamic>>[];
     final resolvedOverview = (detailsData?['overview'] ?? '').toString().trim();
-
     return <String, dynamic>{
       'tmdbId': resolvedId,
       'mediaType': type,
@@ -1512,6 +1510,45 @@ class TmdbService {
       'cast': cast,
       'details': detailsData ?? <String, dynamic>{},
     };
+  }
+
+  static Future<String?> getTrailerKey(
+    int id, {String mediaType = 'movie'}
+  ) async {
+    if (apiKey.isEmpty || id <= 0) return null;
+    final type = mediaType == 'tv' ? 'tv' : 'movie';
+    try {
+      final uri = Uri.parse('$base/$type/$id/videos').replace(
+        queryParameters: {'api_key': apiKey, 'language': 'en-US'},
+      );
+      final response = await _getWithRetry(uri);
+      if (response.statusCode != 200) return null;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final videos = (data['results'] as List? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) =>
+              (item['site'] ?? '').toString().toLowerCase() == 'youtube' &&
+              (item['key'] ?? '').toString().trim().isNotEmpty)
+          .toList();
+      if (videos.isEmpty) return null;
+      videos.sort((a, b) {
+        int score(Map<String, dynamic> item) {
+          final typeName = (item['type'] ?? '').toString().toLowerCase();
+          final official = item['official'] == true;
+          if (typeName == 'trailer' && official) return 0;
+          if (typeName == 'trailer') return 1;
+          if (typeName == 'teaser' && official) return 2;
+          if (typeName == 'teaser') return 3;
+          return 4;
+        }
+        return score(a).compareTo(score(b));
+      });
+      return (videos.first['key'] ?? '').toString().trim();
+    } catch (error) {
+      debugPrint('Could not load title trailer: ' + error.toString());
+      return null;
+    }
   }
 
   static Future<List<Map<String, dynamic>>> getCast(
@@ -1533,45 +1570,6 @@ class TmdbService {
     } catch (e) {
       debugPrint('Could not load cast information: $e');
       return [];
-    }
-  }
-
-  static Future<String?> getTrailerKey(
-    int id, {String mediaType = 'movie'}
-  ) async {
-    if (apiKey.isEmpty || id <= 0) return null;
-    final normalizedType = mediaType == 'tv' ? 'tv' : 'movie';
-    try {
-      final uri = Uri.parse('$base/$normalizedType/$id/videos').replace(
-        queryParameters: {'api_key': apiKey, 'language': 'en-US'},
-      );
-      final response = await _getWithRetry(uri);
-      if (response.statusCode != 200) return null;
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final videos = (data['results'] as List? ?? [])
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .where((item) =>
-              (item['site'] ?? '').toString().toLowerCase() == 'youtube' &&
-              (item['key'] ?? '').toString().trim().isNotEmpty)
-          .toList();
-      if (videos.isEmpty) return null;
-      videos.sort((a, b) {
-        int score(Map<String, dynamic> item) {
-          final type = (item['type'] ?? '').toString().toLowerCase();
-          final official = item['official'] == true;
-          if (type == 'trailer' && official) return 0;
-          if (type == 'trailer') return 1;
-          if (type == 'teaser' && official) return 2;
-          if (type == 'teaser') return 3;
-          return 4;
-        }
-        return score(a).compareTo(score(b));
-      });
-      return (videos.first['key'] ?? '').toString().trim();
-    } catch (error) {
-      debugPrint('Could not load title trailer: $error');
-      return null;
     }
   }
 
@@ -12001,13 +11999,22 @@ class TmdbTrailerPreview extends StatefulWidget {
 
 class _TmdbTrailerPreviewState extends State<TmdbTrailerPreview> {
   late final Future<String?> _trailerKeyFuture;
+  WebViewController? _controller;
+  String? _loadedKey;
 
   @override
   void initState() {
     super.initState();
-    _trailerKeyFuture = TmdbService.getTrailerKey(
-      widget.movie.tmdbId,
-      mediaType: widget.movie.mediaType == 'tv' ? 'tv' : 'movie',
+    _trailerKeyFuture = _loadTrailerKey();
+  }
+
+  Future<String?> _loadTrailerKey() async {
+    final metadata = await TmdbService.getTitleMetadata(widget.movie);
+    final id = _toInt(metadata['tmdbId']);
+    final mediaType = (metadata['mediaType'] ?? widget.movie.mediaType).toString();
+    return TmdbService.getTrailerKey(
+      id > 0 ? id : widget.movie.tmdbId,
+      mediaType: mediaType,
     );
   }
 
@@ -12059,21 +12066,17 @@ class _TmdbTrailerPreviewState extends State<TmdbTrailerPreview> {
     return FutureBuilder<String?>(
       future: _trailerKeyFuture,
       builder: (context, snapshot) {
-        final key = snapshot.data?.trim() ?? '';
         if (snapshot.connectionState == ConnectionState.waiting) {
           return Stack(
             fit: StackFit.expand,
             children: [
               _fallback(),
-              const Center(
-                child: CircularProgressIndicator(color: gold),
-              ),
+              const Center(child: CircularProgressIndicator(color: gold)),
             ],
           );
         }
-        if (key.isEmpty ||
-            !RegExp(r'^[A-Za-z0-9_-]{6,}
-  final Movie movie;
+        final key = snapshot.data?.trim() ?? '';
+        if (!RegExp(r'^[A-Za-z0-9_-]{6,}  final Movie movie;
   final bool isOnline;
   final bool isFavourite;
   final bool isSaved;
@@ -12202,10 +12205,27 @@ class _TmdbTrailerPreviewState extends State<TmdbTrailerPreview> {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  TmdbTrailerPreview(
-                    movie: movie,
-                    isOnline: isOnline,
-                    fallbackImage: backdrop,
+                  if (backdrop.isNotEmpty)
+                    FlixoraCachedImage(
+                      isOnline: isOnline,
+                      imageUrl: backdrop,
+                      fit: BoxFit.cover,
+                    )
+                  else
+                    Container(color: panel),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x55000000),
+                          Color(0x12000000),
+                          Color(0xFF080808),
+                        ],
+                        stops: [0, 0.42, 1],
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -21039,14 +21059,17 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
 }).hasMatch(key)) {
           return _fallback();
         }
-        final controller = WebViewController()
-          ..setJavaScriptMode(JavaScriptMode.unrestricted)
-          ..setBackgroundColor(Colors.black)
-          ..loadRequest(Uri.parse(
-            'https://www.youtube-nocookie.com/embed/$key'
-            '?autoplay=0&playsinline=1&rel=0',
-          ));
-        return WebViewWidget(controller: controller);
+        if (_loadedKey != key || _controller == null) {
+          _loadedKey = key;
+          _controller = WebViewController()
+            ..setJavaScriptMode(JavaScriptMode.unrestricted)
+            ..setBackgroundColor(Colors.black)
+            ..loadRequest(Uri.parse(
+              'https://www.youtube-nocookie.com/embed/$key'
+              '?autoplay=0&playsinline=1&rel=0',
+            ));
+        }
+        return WebViewWidget(controller: _controller!);
       },
     );
   }
@@ -21193,32 +21216,10 @@ class MovieDetailsScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: bg,
             flexibleSpace: FlexibleSpaceBar(
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (backdrop.isNotEmpty)
-                    FlixoraCachedImage(
-                      isOnline: isOnline,
-                      imageUrl: backdrop,
-                      fit: BoxFit.cover,
-                    )
-                  else
-                    Container(color: panel),
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x55000000),
-                          Color(0x12000000),
-                          Color(0xFF080808),
-                        ],
-                        stops: [0, 0.42, 1],
-                      ),
-                    ),
-                  ),
-                ],
+              background: TmdbTrailerPreview(
+                movie: movie,
+                isOnline: isOnline,
+                fallbackImage: backdrop,
               ),
             ),
           ),
