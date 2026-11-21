@@ -141,35 +141,51 @@ Future<List<Map<String, dynamic>>> _lookupDownloadSubtitleOptions(
       (task.episodeNumber ?? 0) <= 0)) return [];
 
   Future<List<Map<String, dynamic>>> search(String action) async {
-    final response = await client.functions.invoke(
-      'flixora-subtitles',
-      body: {
-        if (action.isNotEmpty) 'action': action,
-        'tmdbId': task.tmdbId,
-        'title': task.title,
-        'year': '',
-        'mediaType': isTv ? 'tv' : 'movie',
-        'languages': 'BN,EN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
-        if (isTv) 'season': task.seasonNumber,
-        if (isTv) 'episode': task.episodeNumber,
-      },
-    ).timeout(const Duration(seconds: 38));
-    final payload = response.data;
-    if (payload is! Map || payload['subtitles'] is! List) return [];
-    return (payload['subtitles'] as List)
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList(growable: false);
+    try {
+      final response = await client.functions.invoke(
+        'flixora-subtitles',
+        body: {
+          if (action.isNotEmpty) 'action': action,
+          'tmdbId': task.tmdbId,
+          'title': task.title,
+          'year': task.year,
+          'mediaType': isTv ? 'tv' : 'movie',
+          'languages': 'BN,EN,HI,UR,AR,ES,FR,DE,PT,RU,JA,KO,ZH,TR,IT,NL,PL,TH,ID,MS,FA',
+          if (isTv) 'season': task.seasonNumber,
+          if (isTv) 'episode': task.episodeNumber,
+        },
+      ).timeout(const Duration(seconds: 38));
+      final payload = response.data;
+      if (payload is! Map || payload['subtitles'] is! List) return [];
+      return (payload['subtitles'] as List)
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    } catch (error) {
+      debugPrint('FLIXORA subtitle source lookup (' + action + ') failed: $error');
+      return [];
+    }
   }
 
-  try {
-    var options = await search('');
-    if (options.isEmpty) options = await search('search_title_fallback');
-    return options;
-  } catch (error) {
-    debugPrint('Could not find subtitles for offline download: $error');
-    return [];
+  // Search the configured subtitle providers using both ID-based and
+  // title/year fallback lookup. Do not skip fallback sources after one hit.
+  final primary = await search('');
+  final fallback = await search('search_title_fallback');
+  final merged = <Map<String, dynamic>>[];
+  final seen = <String>{};
+  for (final option in [...task.subtitleOptions, ...primary, ...fallback]) {
+    final url = (option['downloadUrl'] ?? option['url'] ?? '').toString().trim();
+    final provider = (option['provider'] ?? option['providerSource'] ?? '')
+        .toString().toLowerCase();
+    final language = (option['language'] ?? 'und').toString().toLowerCase();
+    final identity = provider + '|' + language + '|' + url + '|' +
+        (option['subsourceId'] ?? '').toString();
+    if (seen.add(identity) && (url.isNotEmpty ||
+        (option['subsourceId'] ?? '').toString().isNotEmpty)) {
+      merged.add(option);
+    }
   }
+  return merged;
 }
 
 Future<List<String>> _saveDownloadedSubtitleFiles(
@@ -1618,6 +1634,38 @@ class TmdbService {
     return future;
   }
 
+  static Future<String> _loadTmdbPersonProfileImage(int personId) async {
+    if (apiKey.isEmpty || personId <= 0) return '';
+    try {
+      final uri = Uri.parse('$base/person/$personId/images').replace(
+        queryParameters: {'api_key': apiKey},
+      );
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return '';
+      final payload = jsonDecode(response.body);
+      final profiles = payload is Map ? payload['profiles'] : null;
+      if (profiles is! List) return '';
+      for (final profile in profiles.whereType<Map>()) {
+        final path = (profile['file_path'] ?? '').toString().trim();
+        if (path.isNotEmpty) return path;
+      }
+    } catch (error) {
+      debugPrint('TMDB cast profile image fallback failed: $error');
+    }
+    return '';
+  }
+
+  static String _tmdbLocaleForLanguage(String language) {
+    const locales = <String, String>{
+      'bn': 'bn-BD', 'hi': 'hi-IN', 'ur': 'ur-PK', 'ja': 'ja-JP',
+      'ko': 'ko-KR', 'zh': 'zh-CN', 'ar': 'ar-SA', 'fr': 'fr-FR',
+      'de': 'de-DE', 'es': 'es-ES', 'pt': 'pt-BR', 'ru': 'ru-RU',
+      'tr': 'tr-TR', 'it': 'it-IT',
+    };
+    final code = language.trim().toLowerCase();
+    return locales[code] ?? code;
+  }
+
   static Future<Map<String, dynamic>> _loadTitleMetadata(Movie movie) async {
     final rawFallbackOverview = movie.overview.trim();
     final fallbackOverview = rawFallbackOverview.toLowerCase() == 'no description available.'
@@ -1642,12 +1690,14 @@ class TmdbService {
     var id = movie.tmdbId;
     Map<String, dynamic>? data;
 
-    Future<Map<String, dynamic>?> fetch(int itemId) async {
+    Future<Map<String, dynamic>?> fetch(
+      int itemId, {String language = 'en-US'}
+    ) async {
       if (itemId <= 0) return null;
       try {
         final uri = Uri.parse('$base/$type/$itemId').replace(queryParameters: {
           'api_key': apiKey,
-          'language': 'en-US',
+          'language': language,
           'append_to_response': 'credits,external_ids',
         });
         final response = await _getWithRetry(uri);
@@ -1719,6 +1769,23 @@ class TmdbService {
       }
     }
 
+    // If TMDB has no English overview, retry in the original language.
+    final currentOverview = (data?['overview'] ?? '').toString().trim();
+    final originalLocale = _tmdbLocaleForLanguage(movie.originalLanguage);
+    if (data != null && currentOverview.isEmpty &&
+        originalLocale.isNotEmpty && originalLocale != 'en-US') {
+      final localized = await fetch(id, language: originalLocale);
+      final localizedOverview = (localized?['overview'] ?? '').toString().trim();
+      if (localizedOverview.isNotEmpty) {
+        data = {
+          ...data!,
+          'overview': localizedOverview,
+          if (data!['credits'] == null && localized?['credits'] != null)
+            'credits': localized!['credits'],
+        };
+      }
+    }
+
     final rawCast = data?['credits'] is Map
         ? (data!['credits'] as Map)['cast']
         : null;
@@ -1731,6 +1798,25 @@ class TmdbService {
     var overview = (data?['overview'] ?? '').toString().trim();
     var resolvedCast = cast;
     var metadataSource = 'tmdb';
+
+    // Fill missing TMDB credit portraits from the person's available images.
+    if (resolvedCast.isNotEmpty) {
+      final imageFallbacks = await Future.wait(
+        resolvedCast.take(12).map((person) async {
+          final existing = (person['profile_path'] ?? '').toString().trim();
+          final personId = _toInt(person['id']);
+          if (existing.isNotEmpty || personId <= 0) return person;
+          final imagePath = await _loadTmdbPersonProfileImage(personId);
+          return imagePath.isEmpty
+              ? person
+              : <String, dynamic>{...person, 'profile_path': imagePath};
+        }),
+      );
+      resolvedCast = [
+        ...imageFallbacks,
+        ...resolvedCast.skip(imageFallbacks.length),
+      ];
+    }
 
     if (overview.isEmpty || resolvedCast.isEmpty) {
       final tvMaze = await _loadTvMazeMetadata(movie);
@@ -2084,6 +2170,7 @@ class DownloadTask {
   final String movieBoxDetailPath;
   final bool movieBoxIsSeries;
   final String title;
+  final String year;
   final String poster;
   String videoUrl;
   final String quality;
@@ -2106,6 +2193,7 @@ class DownloadTask {
     required this.movieId,
     this.downloadId = 0,
     required this.title,
+    this.year = '',
     required this.poster,
     this.tmdbId = 0,
     this.mediaType = 'movie',
@@ -2148,6 +2236,7 @@ class DownloadTask {
         'movieBoxDetailPath': movieBoxDetailPath,
         'movieBoxIsSeries': movieBoxIsSeries,
         'title': title,
+        'year': year,
         'poster': poster,
         'videoUrl': videoUrl,
         'quality': quality,
@@ -2185,6 +2274,7 @@ class DownloadTask {
             (_toInt(json['seasonNumber']) > 0 &&
                 _toInt(json['episodeNumber']) > 0),
         title: (json['title'] ?? 'Downloaded Movie').toString(),
+        year: (json['year'] ?? '').toString(),
         poster: (json['poster'] ?? '').toString(),
         videoUrl: (json['videoUrl'] ?? '').toString(),
         quality: (json['quality'] ?? 'Original').toString(),
@@ -5400,6 +5490,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       movieId: movie.id,
       downloadId: DateTime.now().microsecondsSinceEpoch,
       title: movie.title,
+      year: movie.year,
       poster: movie.posterUrl,
       tmdbId: movie.tmdbId,
       mediaType: movie.mediaType,
@@ -12523,7 +12614,8 @@ class MovieDetailsScreen extends StatelessWidget {
                               disabledBackgroundColor: panel,
                               disabledForegroundColor: ink60,
                             ),
-                            onPressed: movie.canAttemptPlayback ? onWatch : null,
+                            // Metadata-only Cast titles can still attempt source resolution.
+                            onPressed: onWatch,
                             icon: const Icon(Icons.play_arrow_rounded, size: 25),
                             label: const Text(
                               'WATCH',
@@ -12899,10 +12991,12 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
                                     ? matchedPoster : credit.posterUrl;
                                 return InkWell(
                                   borderRadius: BorderRadius.circular(9),
-                                  onTap: isMatched ? () {
+                                  onTap: () {
                                     Navigator.of(context).pop();
-                                    widget.onMovieSelected(matchedMovie!);
-                                  } : null,
+                                    // Open every filmography title; Watch Now retries
+                                    // source resolution if the first lookup timed out.
+                                    widget.onMovieSelected(matchedMovie ?? credit);
+                                  },
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
@@ -12923,7 +13017,7 @@ class _CastProfileScreenState extends State<CastProfileScreen> {
                                       Text(
                                         matchSnapshot.connectionState == ConnectionState.waiting
                                             ? 'Checking FLIXORA sources…'
-                                            : isMatched ? 'Available to watch' : 'Not available in FLIXORA yet',
+                                            : isMatched ? 'Available to watch' : 'Tap to check playback source',
                                         maxLines: 2,
                                         style: TextStyle(color: isMatched ? gold : ink60, fontSize: 9),
                                       ),
