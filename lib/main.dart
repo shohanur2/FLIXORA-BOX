@@ -1227,6 +1227,7 @@ class TmdbService {
   static const Duration _searchCacheDuration = Duration(minutes: 2);
   static final Map<String, _TimedMovieListCacheEntry> _catalogueCache = {};
   static final Map<String, _TimedMovieListCacheEntry> _searchCache = {};
+  static final Map<String, Future<Map<String, dynamic>>> _titleMetadataCache = {};
 
   static Future<List<Movie>> _rememberMovies(
     Map<String, _TimedMovieListCacheEntry> cache,
@@ -1390,6 +1391,129 @@ class TmdbService {
       },
     );
   }
+  static String _metadataTitleKey(String value) => value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+      .trim();
+
+  /// Resolve catalogue items without a TMDB ID by exact title, then fetch
+  /// description and credits together from the matched TMDB details endpoint.
+  static Future<Map<String, dynamic>> getTitleMetadata(Movie movie) {
+    final cacheKey = [
+      movie.mediaType == 'tv' ? 'tv' : 'movie',
+      movie.tmdbId,
+      _metadataTitleKey(movie.title),
+      movie.year,
+    ].join(':');
+    return _titleMetadataCache.putIfAbsent(
+      cacheKey,
+      () => _loadTitleMetadata(movie),
+    );
+  }
+
+  static Future<Map<String, dynamic>> _loadTitleMetadata(Movie movie) async {
+    final fallbackOverview = movie.overview.trim();
+    if (apiKey.isEmpty) {
+      debugPrint('TMDB metadata unavailable: TMDB_API_KEY is empty.');
+      return <String, dynamic>{
+        'overview': fallbackOverview,
+        'cast': <Map<String, dynamic>>[],
+      };
+    }
+
+    final type = movie.mediaType == 'tv' ? 'tv' : 'movie';
+    var resolvedId = movie.tmdbId;
+    Map<String, dynamic>? detailsData;
+
+    Future<Map<String, dynamic>?> fetchDetails(int id) async {
+      if (id <= 0) return null;
+      try {
+        final uri = Uri.parse('$base/$type/$id').replace(
+          queryParameters: {
+            'api_key': apiKey,
+            'language': 'en-US',
+            'append_to_response': 'credits,external_ids',
+          },
+        );
+        final response = await _getWithRetry(uri);
+        if (response.statusCode != 200) {
+          debugPrint('TMDB details request failed: \${response.statusCode} ($type/$id)');
+          return null;
+        }
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map) return null;
+        return Map<String, dynamic>.from(decoded);
+      } catch (error) {
+        debugPrint('TMDB details lookup failed for $type/$id: $error');
+        return null;
+      }
+    }
+
+    if (resolvedId > 0) {
+      detailsData = await fetchDetails(resolvedId);
+      if (detailsData != null) {
+        final returnedTitle = (detailsData!['title'] ??
+                detailsData['name'] ??
+                '')
+            .toString();
+        final wantedKey = _metadataTitleKey(movie.title);
+        final returnedKey = _metadataTitleKey(returnedTitle);
+        if (wantedKey.isNotEmpty &&
+            returnedKey.isNotEmpty &&
+            wantedKey != returnedKey) {
+          detailsData = null;
+          resolvedId = 0;
+        }
+      } else {
+        resolvedId = 0;
+      }
+    }
+
+    if (detailsData == null && movie.title.trim().isNotEmpty) {
+      try {
+        final matches = await search(movie.title);
+        final wantedTitle = _metadataTitleKey(movie.title);
+        final sameType = matches.where((item) => item.mediaType == type);
+        final exactMatches = sameType.where(
+          (item) => _metadataTitleKey(item.title) == wantedTitle,
+        ).toList();
+        if (exactMatches.isNotEmpty) {
+          exactMatches.sort((a, b) {
+            final aYear = a.year == movie.year && movie.year != 'N/A' ? 0 : 1;
+            final bYear = b.year == movie.year && movie.year != 'N/A' ? 0 : 1;
+            return aYear.compareTo(bYear);
+          });
+          resolvedId = exactMatches.first.tmdbId;
+          detailsData = await fetchDetails(resolvedId);
+        }
+      } catch (error) {
+        debugPrint('TMDB title search fallback failed for "\${movie.title}": $error');
+      }
+    }
+
+    final rawCast = detailsData?['credits'] is Map
+        ? (detailsData!['credits'] as Map)['cast']
+        : null;
+    final cast = rawCast is List
+        ? rawCast
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .take(18)
+            .toList(growable: false)
+        : <Map<String, dynamic>>[];
+    final resolvedOverview = (detailsData?['overview'] ?? '').toString().trim();
+
+    return <String, dynamic>{
+      'tmdbId': resolvedId,
+      'mediaType': type,
+      'overview': resolvedOverview.isNotEmpty
+          ? resolvedOverview
+          : fallbackOverview,
+      'cast': cast,
+      'details': detailsData ?? <String, dynamic>{},
+    };
+  }
+
   static Future<List<Map<String, dynamic>>> getCast(
     int id, {String mediaType = 'movie'}
   ) async {
@@ -20954,7 +21078,10 @@ class MovieDetailsScreen extends StatelessWidget {
     required this.onMovieSelected,
   });
 
-  void _showMoreInfo(BuildContext context) {
+  void _showMoreInfo(
+    BuildContext context,
+    Future<Map<String, dynamic>> metadataFuture,
+  ) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -21007,9 +21134,15 @@ class MovieDetailsScreen extends StatelessWidget {
                 style: TextStyle(color: white, fontSize: 15, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 7),
-              Text(
-                movie.overview.isEmpty ? 'No description available.' : movie.overview,
-                style: const TextStyle(color: ink70, height: 1.6, fontSize: 13),
+              FutureBuilder<Map<String, dynamic>>(
+                future: metadataFuture,
+                builder: (context, snapshot) {
+                  final overview = (snapshot.data?['overview'] ?? '').toString().trim();
+                  return Text(
+                    overview.isNotEmpty ? overview : 'No description available.',
+                    style: const TextStyle(color: ink70, height: 1.6, fontSize: 13),
+                  );
+                },
               ),
             ],
           ),
@@ -21044,7 +21177,12 @@ class MovieDetailsScreen extends StatelessWidget {
     final backdrop = movie.backdropUrl.isNotEmpty
         ? movie.backdropUrl
         : movie.posterUrl;
-    final mediaType = movie.mediaType == 'tv' ? 'tv' : 'movie';
+    final metadataFuture = isOnline
+        ? TmdbService.getTitleMetadata(movie)
+        : Future<Map<String, dynamic>>.value({
+            'overview': movie.overview,
+            'cast': <Map<String, dynamic>>[],
+          });
 
     return Scaffold(
       backgroundColor: bg,
@@ -21193,7 +21331,7 @@ class MovieDetailsScreen extends StatelessWidget {
                               foregroundColor: white,
                               side: const BorderSide(color: gold),
                             ),
-                            onPressed: () => _showMoreInfo(context),
+                            onPressed: () => _showMoreInfo(context, metadataFuture),
                             icon: const Icon(Icons.info_outline_rounded, color: gold, size: 20),
                             label: const Text(
                               'MORE INFO',
@@ -21248,8 +21386,8 @@ class MovieDetailsScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  FutureBuilder<List<Map<String, dynamic>>>(
-                    future: TmdbService.getCast(movie.tmdbId, mediaType: mediaType),
+                  FutureBuilder<Map<String, dynamic>>(
+                    future: metadataFuture,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const SizedBox(
@@ -21257,7 +21395,10 @@ class MovieDetailsScreen extends StatelessWidget {
                           child: Center(child: CircularProgressIndicator(color: gold)),
                         );
                       }
-                      final cast = snapshot.data ?? const <Map<String, dynamic>>[];
+                      final rawCast = snapshot.data?['cast'];
+                      final cast = rawCast is List
+                          ? rawCast.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList(growable: false)
+                          : const <Map<String, dynamic>>[];
                       if (cast.isEmpty) {
                         return const Text(
                           'Cast information is not available for this title.',
@@ -21348,9 +21489,15 @@ class MovieDetailsScreen extends StatelessWidget {
                     style: TextStyle(color: white, fontSize: 19, fontWeight: FontWeight.w900),
                   ),
                   const SizedBox(height: 9),
-                  Text(
-                    movie.overview.isEmpty ? 'No description available.' : movie.overview,
-                    style: const TextStyle(color: ink70, height: 1.65, fontSize: 14),
+                  FutureBuilder<Map<String, dynamic>>(
+                    future: metadataFuture,
+                    builder: (context, snapshot) {
+                      final overview = (snapshot.data?['overview'] ?? '').toString().trim();
+                      return Text(
+                        overview.isNotEmpty ? overview : 'No description available.',
+                        style: const TextStyle(color: ink70, height: 1.65, fontSize: 14),
+                      );
+                    },
                   ),
                 ],
               ),
