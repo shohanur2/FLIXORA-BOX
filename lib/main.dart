@@ -7328,68 +7328,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _heroSliderControl({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback onPressed,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: LiquidGlassSurface(
-        borderRadius: BorderRadius.circular(30),
-        blur: 18,
-        child: SizedBox(
-          width: 35,
-          height: 35,
-          child: IconButton(
-            onPressed: onPressed,
-            padding: EdgeInsets.zero,
-            icon: Icon(icon, color: Colors.white, size: 20),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _moveHeroSlide(int delta, int count) {
-    if (count < 2 || !_sliderController.hasClients) return;
-    final current = _sliderController.page?.round() ?? _slide;
-    final next = (current + delta + count) % count;
-    _sliderController.animateToPage(
-      next,
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeInOutCubic,
-    );
-  }
-
-  void _moveHeroSlideTo(int index, int count) {
-    if (count < 2 || !_sliderController.hasClients) return;
-    final safeIndex = index.clamp(0, count - 1);
-    _sliderController.animateToPage(
-      safeIndex,
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeInOutCubic,
-    );
-  }
-
-  void _openHeroDetails(Movie movie) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MovieDetailsScreen(
-          movie: movie,
-          isOnline: _online,
-          isFavourite: _favourites.contains(movie.id),
-          isSaved: _saved.contains(movie.id),
-          onShare: () => Share.share('${movie.title} (${movie.year}) on FLIXORA'),
-          onFavourite: () => _toggleFavourite(movie),
-          onSave: () => _toggleSaved(movie),
-          onDownload: () => addDownload(movie),
-          onWatch: () => _playMovie(movie),
-        ),
-      ),
-    );
-  }
-
   String _homeCategory = 'Trending';
   final Map<String, String> _sectionFilters = {};
 
