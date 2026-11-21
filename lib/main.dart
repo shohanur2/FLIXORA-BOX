@@ -7358,6 +7358,251 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  String _homeCategory = 'Trending';
+  final Map<String, String> _sectionFilters = {};
+
+  List<Movie> _moviesForHomeCategory(String category) {
+    switch (category) {
+      case 'Trending':
+        return _deduplicateMovies([
+          ...flixoraMovies,
+          ..._regularMovieBoxItems,
+          ...trending,
+          ...trendingTv,
+        ]);
+      case 'Movies':
+        return _deduplicateMovies([
+          ...flixoraMovies,
+          ..._regularMovieBoxItems,
+          ...trending, ...popular, ...latest, ...topRated,
+        ].where((movie) => movie.mediaType == 'movie').toList());
+      case 'TV Series':
+        return _deduplicateMovies([
+          ...flixoraMovies.where((title) => title.mediaType == 'tv'),
+          ..._regularMovieBoxItems
+              .where((title) => title.mediaType == 'tv'),
+          ...trendingTv, ...popularTv, ...topRatedTv, ...koreanDrama, ...bengaliTv,
+        ]);
+      case 'Anime':
+        return _deduplicateMovies([
+          ...flixoraMovies.where(_isAnimeTitle),
+          ..._regularMovieBoxItems
+              .where(_isAnimeTitle),
+          ...anime,
+        ]);
+      case 'Korean Drama':
+        return _deduplicateMovies([
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'tv' &&
+              title.originalLanguage.toLowerCase() == 'ko'),
+          ..._regularMovieBoxItems.where((title) =>
+              title.mediaType == 'tv' &&
+              (title.originCountry.toLowerCase().contains('korea') ||
+               title.originCountry.toUpperCase().contains('KR'))),
+          ...koreanDrama,
+        ]);
+      case 'Bengali':
+        return _deduplicateMovies([
+          ...flixoraMovies.where((title) =>
+              title.originalLanguage.toLowerCase() == 'bn' ||
+              title.originCountry.toUpperCase().contains('BD')),
+          ..._regularMovieBoxItems.where((title) =>
+              title.originCountry.toUpperCase().contains('BD') ||
+              title.originCountry.toLowerCase().contains('bangladesh')),
+          ...bengaliMovies, ...bengaliTv,
+        ]);
+      case 'Bengali Movies':
+        return _deduplicateMovies([
+          ...flixoraMovies.where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originalLanguage.toLowerCase() == 'bn' ||
+               title.originCountry.toUpperCase().contains('BD'))),
+          ..._regularMovieBoxItems.where((title) =>
+              title.mediaType == 'movie' &&
+              (title.originCountry.toUpperCase().contains('BD') ||
+               title.originCountry.toLowerCase().contains('bangladesh'))),
+          ...bengaliMovies,
+        ]);
+      case 'Drama':
+        return _deduplicateMovies(_allMovies().where((title) =>
+            title.genres.any((genre) =>
+                genre.toLowerCase().contains('drama'))).toList());
+      default:
+        return [];
+    }
+  }
+
+  void _scrollFeaturedCardTo(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_featuredCardsController.hasClients) return;
+      final position = _featuredCardsController.position;
+      if (!position.hasContentDimensions) return;
+      final target = FeaturedCarouselLayout.targetScrollOffset(
+        index: index,
+        viewportWidth: position.viewportDimension,
+        maxScrollExtent: position.maxScrollExtent,
+      );
+      if ((position.pixels - target).abs() < 1) return;
+      _featuredCardsController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _syncFeaturedCarouselAfterDataChange() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final visibleCount = _homeTrendingMovies().length;
+      if (visibleCount == 0) {
+        if (_sliderController.hasClients) _sliderController.jumpToPage(0);
+        if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
+        return;
+      }
+      final currentPage = _sliderController.hasClients
+          ? (_sliderController.page?.round() ?? 0)
+          : 0;
+      if (currentPage >= visibleCount) {
+        _slide = 0;
+        if (_sliderController.hasClients) _sliderController.jumpToPage(0);
+        if (_featuredCardsController.hasClients) _featuredCardsController.jumpTo(0);
+        return;
+      }
+      final selectedIndex = _slide.clamp(0, visibleCount - 1).toInt();
+      _slide = selectedIndex;
+      _scrollFeaturedCardTo(selectedIndex);
+    });
+  }
+
+  bool _hasHindiAudio(Movie movie) {
+    return TrendingMovieEligibility.hasHindiAudioVariant(movie.audioLanguages) ||
+        movie.originalLanguage.toLowerCase() == 'hi';
+  }
+
+  String _displayTitle(Movie movie) {
+    if (_hasHindiAudio(movie) &&
+        !movie.title.toLowerCase().contains('[hindi]')) {
+      return '${movie.title} [Hindi]';
+    }
+    return movie.title;
+  }
+
+  List<Movie> _searchDiscoveryMovies() {
+    final titles = List<Movie>.of(_allMovies());
+    titles.sort((a, b) {
+      final rating = b.rating.compareTo(a.rating);
+      return rating != 0 ? rating : b.year.compareTo(a.year);
+    });
+    return titles;
+  }
+
+  List<Movie> _searchSuggestions() {
+    final titles = _deduplicateMovies([
+      ...trending,
+      ...popular,
+      ...trendingTv,
+      ...popularTv,
+      ...flixoraMovies,
+    ]);
+    if (titles.isEmpty) return _searchDiscoveryMovies().take(4).toList();
+    return titles.take(4).toList();
+  }
+
+  List<Movie> _filterSearchMovies(List<Movie> source, String category) {
+    switch (category) {
+      case 'Movies':
+        return source.where((movie) => movie.mediaType == 'movie').toList();
+      case 'Series':
+        return source.where((movie) =>
+            movie.mediaType == 'tv' && !_isAnimeTitle(movie)).toList();
+      case 'Anime':
+        return source.where(_isAnimeTitle).toList();
+      case 'Drama':
+        return source.where((movie) => movie.genres.any(
+          (genre) => genre.toLowerCase().contains('drama'),
+        )).toList();
+      case 'Bengali':
+        return source.where((movie) =>
+            movie.originalLanguage.toLowerCase() == 'bn' ||
+            movie.originCountry.toUpperCase().contains('BD')).toList();
+      default:
+        return source;
+    }
+  }
+
+  List<String> _availableSearchFilters(List<Movie> source) {
+    const filters = ['All', 'Movies', 'Series', 'Anime', 'Drama', 'Bengali'];
+    return filters.where((filter) =>
+        filter == 'All' || _filterSearchMovies(source, filter).isNotEmpty
+    ).toList();
+  }
+
+  Future<void> _openSearch() async {
+    if (_searchOpen) {
+      _searchFocusNode.requestFocus();
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _tab = 0;
+      _showRanking = false;
+      _searchOpen = true;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+
+    // Focus immediately; connection monitoring runs independently.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  void _closeSearch() {
+    _searchRequestToken++;
+    _searchTimer?.cancel();
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _searchOpen = false;
+      _search = '';
+      _searchCategory = 'All';
+      searchResults = [];
+      _searchError = null;
+      _searchLoading = false;
+      _searchController.clear();
+    });
+  }
+
+  Future<void> _saveSearchHistory(String value) async {
+    final query = value.trim();
+    if (query.isEmpty) return;
+
+    final updated = <String>[
+      query,
+      ..._searchHistory.where(
+        (item) => item.toLowerCase() != query.toLowerCase(),
+      ),
+    ].take(20).toList(growable: false);
+
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
+  Future<void> _removeSearchHistory(String value) async {
+    final updated = _searchHistory
+        .where((item) => item.toLowerCase() != value.toLowerCase())
+        .toList(growable: false);
+    if (mounted) setState(() => _searchHistory = updated);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_searchHistoryPrefsKey, updated);
+  }
+
   Widget _searchHistoryBlock() {
     final items = _searchHistory.take(10).toList(growable: false);
     if (items.isEmpty) return const SizedBox.shrink();
