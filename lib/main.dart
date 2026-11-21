@@ -17715,7 +17715,3615 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
       var nextSectionIndex = -1;
       for (var i = eventsIndex + 1; i < lines.length; i++) {
-        if (RegExp(r'^\s*\[[^]]+\]\s*$').hasMatch(lines[i].trim())) {
+        if (RegExp(r'^\s*\[[^\]]+\]\s*) {
+          nextSectionIndex = i;
+          break;
+        }
+      }
+      final eventLines = lines.sublist(
+        eventsIndex + 1,
+        nextSectionIndex < 0 ? lines.length : nextSectionIndex,
+      );
+      final hasDialogue = eventLines.any(
+        (line) => RegExp(r'^\s*Dialogue\s*:', caseSensitive: false)
+            .hasMatch(line),
+      );
+      if (!hasDialogue) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return normalizedPreferred == 'ssa' ? 'ssa' : 'ass';
+    }
+    return _detectSubtitleExtension(normalizedText, normalizedPreferred);
+  }
+
+  String _detectSubtitleExtension(String source, String preferred) {
+    final text = source.replaceFirst('\uFEFF', '').trim();
+    final lower = text.toLowerCase();
+    if (text.isEmpty) throw StateError('The downloaded subtitle file is empty.');
+    if (lower.startsWith('<!doctype html') || lower.startsWith('<html') ||
+        lower.startsWith('{') ||
+        (lower.startsWith('[') && !lower.startsWith('[script info]'))) {
+      throw StateError('The provider returned a web page or data response, not a subtitle file.');
+    }
+    if (lower.startsWith('webvtt')) return 'vtt';
+    if (lower.contains('[script info]') || lower.contains('[v4+ styles]') || lower.contains(r'{\an')) {
+      if (!lower.contains('[events]') || !lower.contains('dialogue:')) {
+        throw StateError('The ASS/SSA subtitle is missing dialogue events.');
+      }
+      return preferred == 'ssa' ? 'ssa' : 'ass';
+    }
+    if (lower.contains('<sami') || lower.contains('<sync')) return 'smi';
+    if (lower.contains('<tt') || lower.contains('<ttml')) return 'ttml';
+    if (text.contains('-->')) {
+      final hasCueTime = RegExp(
+        r'^\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s+-->\s+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}',
+        multiLine: true,
+      ).hasMatch(text);
+      if (!hasCueTime) {
+        throw StateError('The selected subtitle has no valid SRT/VTT cue timestamps.');
+      }
+      return lower.contains('webvtt') ? 'vtt' : 'srt';
+    }
+    if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(text) || lower.contains('[subtitle]')) return 'sub';
+    if (RegExp(r'^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]', multiLine: true).hasMatch(text)) return 'lrc';
+    if (RegExp(r'^\s*\d{2}:\d{2}:\d{2};\d{2}', multiLine: true).hasMatch(text) || lower.contains('scenarist_scc')) return 'scc';
+    if (lower.contains('<time') || lower.contains('<window')) return 'rt';
+    if (preferred == 'sub' || preferred == 'smi' || preferred == 'ttml' ||
+        preferred == 'scc' || preferred == 'lrc' || preferred == 'rt' ||
+        preferred == 'ass' || preferred == 'ssa' || preferred == 'srt' || preferred == 'vtt') {
+      return preferred;
+    }
+    throw StateError('Unsupported subtitle format: $preferred');
+  }
+
+  Future<File> _downloadAutomaticSubtitle(Map<String, dynamic> option) async {
+    final languageCode = (option['language'] ?? 'en').toString().toLowerCase();
+    final downloadUrl = (option['downloadUrl'] ?? '').toString();
+    final uri = Uri.tryParse(downloadUrl);
+    final provider = (option['provider'] ?? '').toString().toLowerCase();
+    final isSubSource = provider == 'subsource';
+    final isISubtitles = provider == 'isubtitles';
+    final isBollyNook = provider == 'bollynook';
+    final isGestdown = provider == 'gestdown';
+    final isTVSubtitles = provider == 'tvsubtitles';
+    final isSubDl = uri?.host == 'dl.subdl.com';
+    final isOpenSubtitles = uri != null &&
+        (uri.host == 'opensubtitles.com' || uri.host.endsWith('.opensubtitles.com'));
+    final isMovieBoxSubtitle = provider == 'moviebox';
+    final isProviderDownload = (isSubSource || isISubtitles || isBollyNook ||
+        isGestdown || isTVSubtitles || isSubDl || isOpenSubtitles);
+    if (isMovieBoxSubtitle) {
+      if (uri == null || uri.scheme != 'https' || uri.host.isEmpty || uri.userInfo.isNotEmpty) {
+        throw StateError('MovieBox returned an invalid HTTPS subtitle link.');
+      }
+    } else if (isSubSource) {
+      final id = int.tryParse((option['subsourceId'] ?? '').toString()) ?? 0;
+      if (id <= 0) throw StateError('SubSource returned an invalid subtitle ID.');
+    } else if (isISubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          !(uri.host == 'isubtitles.org' || uri.host == 'www.isubtitles.org') ||
+          !uri.path.startsWith('/download/')) {
+        throw StateError('iSubtitles returned an invalid download link.');
+      }
+    } else if (isBollyNook) {
+      if (uri == null || uri.scheme != 'https' ||
+          !(uri.host == 'bollynook.com' || uri.host == 'www.bollynook.com')) {
+        throw StateError('BollyNook returned an invalid download link.');
+      }
+    } else if (isGestdown) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'api.gestdown.info' || !uri.path.startsWith('/')) {
+        throw StateError('Gestdown returned an invalid download link.');
+      }
+    } else if (isTVSubtitles) {
+      if (uri == null || uri.scheme != 'https' ||
+          uri.host != 'www.tvsubtitles.net') {
+        throw StateError('TVSubtitles returned an invalid download link.');
+      }
+    } else if (uri == null || uri.scheme != 'https' ||
+        !(isSubDl || isOpenSubtitles) ||
+        (isSubDl && !uri.path.startsWith('/subtitle/'))) {
+      throw StateError('Subtitle provider returned an invalid file link.');
+    }
+
+    final preferredExtension = _subtitleExtensionForOption(option);
+    final support = await getApplicationSupportDirectory();
+    final cacheDir = Directory('${support.path}/flixora_subtitles');
+    if (!await cacheDir.exists()) await cacheDir.create(recursive: true);
+    // Do not include expiring signed download URLs in the cache key.
+    // The same release should reuse its validated local subtitle after relaunch.
+    // Deduplicate equivalent releases across independent extensions. The
+    // media/language cache prefix already isolates each movie or episode.
+    final releaseIdentity = [
+      option['releaseName'] ?? '',
+      option['fileName'] ?? '',
+      if ((option['releaseName'] ?? '').toString().isEmpty && (option['fileName'] ?? '').toString().isEmpty) uri?.path ?? '',
+    ].join('_').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    final cacheBase = '${_automaticSubtitleCacheKey(languageCode)}_${_stableSubtitleCacheHash(releaseIdentity)}';
+    final preferredCache = File('${cacheDir.path}/${cacheBase}.$preferredExtension');
+    if (await preferredCache.exists() && await preferredCache.length() > 16) {
+      try {
+        final cachedBytes = await preferredCache.readAsBytes();
+        if (preferredExtension == 'sup' ||
+            _detectSubtitleExtension(_decodeSubtitleText(cachedBytes), preferredExtension) == preferredExtension) {
+          return preferredCache;
+        }
+      } catch (_) {}
+      await preferredCache.delete();
+    }
+
+    late http.Response download;
+    if (isProviderDownload) {
+      final client = supabaseClient;
+      if (client == null) throw StateError('Subtitle service is unavailable.');
+      final result = await client.functions.invoke(
+        'flixora-subtitles',
+        body: {
+          'action': isSubSource ? 'download_subsource' : 'download_provider_subtitle',
+          'provider': provider,
+          if (isSubSource) 'subtitleId': option['subsourceId'],
+          if (!isSubSource) 'downloadUrl': downloadUrl,
+          if (!isSubSource) 'pageUrl': option['pageUrl'] ?? '',
+          'releaseName': option['releaseName'] ?? '',
+          'language': languageCode,
+          'mediaType': (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ? 'tv' : 'movie',
+          if (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries) ...{
+            'season': _selectedSeasonNumber,
+            'episode': _selectedEpisodeNumber,
+          },
+        },
+      ).timeout(const Duration(seconds: 35));
+      final payload = result.data;
+      if (payload is! Map || (payload['contentBase64'] ?? '').toString().isEmpty) {
+        final message = payload is Map
+            ? (payload['error'] ?? 'Subtitle provider download failed.')
+            : 'Subtitle provider download failed.';
+        throw StateError(message.toString());
+      }
+      final bytes = base64Decode(payload['contentBase64'].toString());
+      download = http.Response.bytes(bytes, 200, headers: {
+        'content-type': 'application/octet-stream',
+      });
+    } else {
+      download = await http.get(uri!, headers: const {
+        'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+        'User-Agent': 'FLIXORA Subtitle Client/1.0',
+      }).timeout(const Duration(seconds: 25));
+      if (isMovieBoxSubtitle && download.request?.url.scheme != 'https') throw StateError('MovieBox subtitle download redirected to an insecure URL.');
+      // Providers may briefly rate-limit a valid subtitle link. Respect their
+      // Retry-After hint once, then let the caller fall back to another result.
+      if (download.statusCode == 429) {
+        final retryAfter = int.tryParse(download.headers['retry-after'] ?? '');
+        final waitSeconds = (retryAfter ?? 2).clamp(1, 8).toInt();
+        await Future<void>.delayed(Duration(seconds: waitSeconds));
+        download = await http.get(uri, headers: const {
+          'Accept': 'text/plain, text/vtt, application/octet-stream, */*',
+          'User-Agent': 'FLIXORA Subtitle Client/1.0',
+        }).timeout(const Duration(seconds: 25));
+      }
+    }
+    if (download.statusCode != 200 || download.bodyBytes.length < 16 ||
+        download.bodyBytes.length > 10 * 1024 * 1024) {
+      throw StateError('Could not download the selected subtitle (HTTP ${download.statusCode}).');
+    }
+    final bytes = download.bodyBytes;
+    if (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) {
+      throw StateError('The provider returned a ZIP archive instead of an unpacked subtitle file.');
+    }
+    final contentType = (download.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('text/html') || contentType.contains('application/json')) {
+      throw StateError('The provider returned an error page, not a subtitle file.');
+    }
+    final isPgs = preferredExtension == 'sup' &&
+        bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x47;
+    final subtitleText = _decodeSubtitleText(bytes);
+    final actualExtension = isPgs ? 'sup' : _detectSubtitleExtension(subtitleText, preferredExtension);
+    if (actualExtension == 'sup' && !isPgs) {
+      throw StateError('The PGS subtitle data is incomplete or invalid.');
+    }
+    final cachedFile = File('${cacheDir.path}/${cacheBase}.$actualExtension');
+    if (await cachedFile.exists()) await cachedFile.delete();
+    if (actualExtension == 'sup') {
+      await cachedFile.writeAsBytes(bytes, flush: true);
+    } else {
+      await cachedFile.writeAsString(
+        subtitleText.replaceAll('\r\n', '\n').replaceAll('\r', '\n'),
+        encoding: utf8,
+        flush: true,
+      );
+    }
+    return cachedFile;
+  }
+
+  Future<bool> _activateEmbeddedSubtitleIfAvailable() async {
+    if (_isDisposed || widget.localFilePath != null ||
+        _subtitleManuallySelected || _automaticSubtitleLoading ||
+        _automaticEnglishTrack != null) return false;
+    final embeddedTracks = _tracks.subtitle
+        .where((track) => track.id != 'auto' && track.id != 'no')
+        .toList(growable: false);
+    if (embeddedTracks.isEmpty) return false;
+    final orderedTracks = <SubtitleTrack>[
+      ...embeddedTracks.where(_isBanglaSubtitleTrack),
+      ...embeddedTracks.where(_isEnglishSubtitleTrack),
+      ...embeddedTracks.where((track) =>
+          !_isBanglaSubtitleTrack(track) && !_isEnglishSubtitleTrack(track)),
+    ];
+    for (final track in orderedTracks) {
+      if (_isDisposed || _subtitleManuallySelected) return false;
+      try {
+        await _player.setSubtitleTrack(track);
+        final native = _player.platform;
+        if (native is NativePlayer) {
+          await native.setProperty('sub-visibility', 'yes');
+        }
+        await _applySubtitleDelay(_subtitleDelay, showFeedback: false);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (_isDisposed) return false;
+        final activeId = _player.state.track.subtitle.id;
+        if (activeId != track.id) {
+          debugPrint('FLIXORA embedded subtitle not active: requested=${track.id}, active=$activeId');
+          continue;
+        }
+        if (mounted) {
+          setState(() {
+            _automaticEnglishTrack = track;
+            _subtitleVisibilityEnabled = true;
+            _selectedSubtitleLanguageCode = (track.language ?? '').toLowerCase();
+            _automaticSubtitleMessage =
+                'Available in this video · ${_subtitleLanguageName(track.language ?? '')}';
+          });
+        }
+        debugPrint('FLIXORA embedded subtitle activated: id=${track.id}, language=${track.language}');
+        return true;
+      } catch (error) {
+        debugPrint('FLIXORA embedded subtitle selection failed for ${track.id}: $error');
+      }
+    }
+    return false;
+  }
+
+  String _movieBoxSubtitleLanguage(Map<String, dynamic> subtitle) {
+    // WeFeed has returned multiple metadata shapes across MovieBox releases.
+    // Prefer ISO language codes, then display-name fields such as lanName.
+    final rawValue = <dynamic>[
+      subtitle['language'],
+      subtitle['lang'],
+      subtitle['lan'],
+      subtitle['languageCode'],
+      subtitle['langCode'],
+      subtitle['lanCode'],
+      subtitle['languageName'],
+      subtitle['langName'],
+      subtitle['lanName'],
+      subtitle['language_name'],
+      subtitle['lang_name'],
+      subtitle['lan_name'],
+      subtitle['label'],
+      subtitle['name'],
+      subtitle['fileName'],
+      subtitle['filename'],
+    ].firstWhere(
+      (value) => value != null && value.toString().trim().isNotEmpty,
+      orElse: () => '',
+    );
+    final raw = (rawValue is Map
+            ? (rawValue['code'] ?? rawValue['lang'] ?? rawValue['name'] ?? '')
+            : rawValue)
+        .toString()
+        .trim()
+        .toLowerCase();
+    final parts = raw
+        .split(RegExp(r'[+/,;|]'))
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .toList(growable: false);
+    String normalize(String value) {
+      final token = value
+          .split(RegExp(r'[-_\\s]'))
+          .firstWhere((part) => part.isNotEmpty, orElse: () => value)
+          .toLowerCase();
+      const aliases = <String, String>{
+        'english': 'en', 'eng': 'en', 'en': 'en',
+        'bengali': 'bn', 'bangla': 'bn', 'ben': 'bn', 'beng': 'bn', 'bn': 'bn',
+        'hindi': 'hi', 'hin': 'hi', 'hi': 'hi',
+        'urdu': 'ur', 'urd': 'ur', 'ur': 'ur',
+        'arabic': 'ar', 'ara': 'ar', 'ar': 'ar',
+        'japanese': 'ja', 'jpn': 'ja', 'ja': 'ja',
+        'korean': 'ko', 'kor': 'ko', 'ko': 'ko',
+        'chinese': 'zh', 'chi': 'zh', 'zho': 'zh', 'zh': 'zh',
+        'spanish': 'es', 'spa': 'es', 'es': 'es',
+        'french': 'fr', 'fre': 'fr', 'fra': 'fr', 'fr': 'fr',
+        'german': 'de', 'ger': 'de', 'deu': 'de', 'de': 'de',
+        'portuguese': 'pt', 'por': 'pt', 'pt': 'pt',
+        'russian': 'ru', 'rus': 'ru', 'ru': 'ru',
+        'turkish': 'tr', 'tur': 'tr', 'tr': 'tr',
+        'italian': 'it', 'ita': 'it', 'it': 'it',
+        'dutch': 'nl', 'nld': 'nl', 'nl': 'nl',
+        'polish': 'pl', 'pol': 'pl', 'pl': 'pl',
+        'thai': 'th', 'tha': 'th', 'th': 'th',
+        'indonesian': 'id', 'ind': 'id', 'id': 'id',
+        'malay': 'ms', 'may': 'ms', 'msa': 'ms', 'ms': 'ms',
+        'persian': 'fa', 'per': 'fa', 'fas': 'fa', 'fa': 'fa',
+        'tamil': 'ta', 'tam': 'ta', 'ta': 'ta',
+        'telugu': 'te', 'tel': 'te', 'te': 'te',
+        'kannada': 'kn', 'kan': 'kn', 'kn': 'kn',
+        'malayalam': 'ml', 'mal': 'ml', 'ml': 'ml',
+        'vietnamese': 'vi', 'vie': 'vi', 'vi': 'vi',
+        'filipino': 'tl', 'tagalog': 'tl', 'tgl': 'tl', 'tl': 'tl',
+        'ukrainian': 'uk', 'ukr': 'uk', 'uk': 'uk',
+        'greek': 'el', 'ell': 'el', 'el': 'el',
+        'hebrew': 'he', 'heb': 'he', 'he': 'he',
+        'swedish': 'sv', 'swe': 'sv', 'sv': 'sv',
+        'norwegian': 'no', 'nor': 'no', 'no': 'no',
+        'danish': 'da', 'dan': 'da', 'da': 'da',
+        'finnish': 'fi', 'fin': 'fi', 'fi': 'fi',
+        'czech': 'cs', 'ces': 'cs', 'cze': 'cs', 'cs': 'cs',
+        'hungarian': 'hu', 'hun': 'hu', 'hu': 'hu',
+        'romanian': 'ro', 'ron': 'ro', 'rum': 'ro', 'ro': 'ro',
+        'bulgarian': 'bg', 'bul': 'bg', 'bg': 'bg',
+        'croatian': 'hr', 'hrv': 'hr', 'hr': 'hr',
+        'serbian': 'sr', 'srp': 'sr', 'sr': 'sr',
+        'slovak': 'sk', 'slk': 'sk', 'slo': 'sk', 'sk': 'sk',
+        'slovenian': 'sl', 'slv': 'sl', 'sl': 'sl',
+        'estonian': 'et', 'est': 'et', 'et': 'et',
+        'latvian': 'lv', 'lav': 'lv', 'lv': 'lv',
+        'lithuanian': 'lt', 'lit': 'lt', 'lt': 'lt',
+      };
+      return aliases[token] ?? token;
+    }
+    final normalized = parts.map(normalize).toSet().toList(growable: false);
+    if (normalized.length > 1 && normalized.contains('bn') && normalized.contains('en')) {
+      return 'bn+en';
+    }
+    if (normalized.isNotEmpty) return normalized.first;
+    return 'und';
+  }
+
+  List<Map<String, dynamic>> _extractMovieBoxSubtitleItems(
+    Map<String, dynamic> response,
+  ) {
+    const listKeys = <String>{
+      'subtitles',
+      'subtitle',
+      'subTitleList',
+      'subtitleList',
+      'subtitle_list',
+      'subtitle_list_data',
+      'captions',
+      'captionList',
+      'caption_list',
+      'externalSubtitles',
+      'external_subtitles',
+    };
+    const nestedKeys = <String>{
+      'data',
+      'result',
+      'results',
+      'stream',
+      'playInfo',
+      'play_info',
+      'payload',
+      'response',
+    };
+
+    List<Map<String, dynamic>> asSubtitleMaps(dynamic value) {
+      if (value is! List) return const <Map<String, dynamic>>[];
+      return value
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+    }
+
+    List<Map<String, dynamic>>? find(dynamic value, int depth) {
+      if (depth > 5 || value is! Map) return null;
+      final map = Map<String, dynamic>.from(value);
+      for (final entry in map.entries) {
+        if (listKeys.contains(entry.key.toString())) {
+          final items = asSubtitleMaps(entry.value);
+          if (items.isNotEmpty) return items;
+          if (entry.value is Map) {
+            final nested = find(entry.value, depth + 1);
+            if (nested != null && nested.isNotEmpty) return nested;
+          }
+        }
+      }
+      for (final key in nestedKeys) {
+        final child = map[key];
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      // Some wrappers place the play-info object under an unlabelled key.
+      for (final child in map.values) {
+        if (child is Map) {
+          final items = find(child, depth + 1);
+          if (items != null && items.isNotEmpty) return items;
+        }
+      }
+      return null;
+    }
+
+    final items = find(response, 0) ?? const <Map<String, dynamic>>[];
+    return items.where((item) => _movieBoxSubtitleUrl(item).isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String _movieBoxSubtitleUrl(Map<String, dynamic> subtitle) {
+    const urlKeys = <String>[
+      'url',
+      'downloadUrl',
+      'download_url',
+      'subtitleUrl',
+      'subtitle_url',
+      'fileUrl',
+      'file_url',
+      'captionUrl',
+      'caption_url',
+      'srtUrl',
+      'vttUrl',
+      'src',
+      'link',
+      'path',
+    ];
+    for (final key in urlKeys) {
+      final value = subtitle[key];
+      final candidate = value is Map
+          ? (value['url'] ?? value['uri'] ?? value['link'] ?? '').toString().trim()
+          : (value ?? '').toString().trim();
+      if (candidate.isEmpty) continue;
+      final uri = Uri.tryParse(candidate);
+      if (uri != null &&
+          (uri.scheme == 'https' || uri.scheme == 'http') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty) {
+        return candidate;
+      }
+    }
+    return '';
+  }
+
+  List<Map<String, dynamic>> _movieBoxSubtitleOptions([List<Map<String, dynamic>>? source]) {
+    final subtitles = source ?? _movieBoxSubtitles;
+    final options = <Map<String, dynamic>>[];
+    for (var index = 0; index < subtitles.length; index++) {
+      final subtitle = subtitles[index];
+      final url = _movieBoxSubtitleUrl(subtitle);
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty) {
+        continue;
+      }
+      final language = _movieBoxSubtitleLanguage(subtitle);
+      final fileName = (subtitle['fileName'] ??
+              subtitle['filename'] ??
+              subtitle['file_name'] ??
+              subtitle['releaseName'] ??
+              subtitle['title'] ??
+              (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
+          .toString()
+          .trim();
+      final releaseName = (subtitle['releaseName'] ??
+              subtitle['name'] ??
+              subtitle['title'] ??
+              subtitle['label'] ??
+              fileName)
+          .toString()
+          .trim()
+          .replaceAll(RegExp('moviebox', caseSensitive: false), 'FLIXORA');
+      final format = (subtitle['format'] ??
+              (fileName.contains('.') ? fileName.split('.').last : 'srt'))
+          .toString()
+          .toLowerCase();
+      options.add(<String, dynamic>{
+        'provider': 'moviebox',
+        'providerSource': 'moviebox',
+        'language': language,
+        'releaseName': releaseName.isEmpty
+            ? '${_subtitleLanguageName(language)} · Subtitle ${index + 1}'
+            : releaseName,
+        'fileName': fileName,
+        'downloadUrl': url,
+        'format': format,
+        'movieBoxSubtitle': subtitle,
+        'movieBoxIndex': index,
+      });
+    }
+    options.sort((a, b) {
+      int priority(Map<String, dynamic> option) {
+        final code = (option['language'] ?? '').toString();
+        return code == 'bn' ? 0 : (code == 'bn+en' ? 1 : (code == 'en' ? 2 : 3));
+      }
+      return priority(a).compareTo(priority(b));
+    });
+    return options;
+  }
+
+  Future<void> _ensureAutomaticEnglishSubtitle() async {
+    if (_isDisposed || widget.localFilePath != null || !_playerIsOnline || _automaticSubtitleLoading || _subtitleManuallySelected) return;
+    final requestToken = ++_automaticSubtitleRequestToken;
+    if (mounted) setState(() { _automaticSubtitleLoading = true; _automaticSubtitleMessage = 'Loading available subtitles…'; });
+    try {
+      var embeddedTrackSelected = false;
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+        embeddedTrackSelected = await _activateEmbeddedSubtitleIfAvailable();
+        if (embeddedTrackSelected) break;
+        if (attempt < 11) await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      if (requestToken != _automaticSubtitleRequestToken || _isDisposed) return;
+      final available = widget.movie.isMovieBox ? _movieBoxSubtitleOptions() : <Map<String,dynamic>>[];
+      if (mounted && !_isDisposed) setState(() {
+        _automaticSubtitleOptions = available;
+        _automaticSubtitleMessage = available.isNotEmpty ? available.length.toString() + ' subtitle(s) available' : (widget.movie.isMovieBox ? 'No subtitles were returned for this title or episode.' : (embeddedTrackSelected ? 'Embedded subtitle track is active' : 'No embedded subtitle tracks are available. You can import a subtitle file.'));
+      });
+    } catch (error) {
+      debugPrint('FLIXORA MovieBox subtitles: $error');
+      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() { _automaticSubtitleMessage = 'Subtitles could not be loaded. You can import a subtitle file.'; });
+    } finally {
+      if (mounted && !_isDisposed && requestToken == _automaticSubtitleRequestToken) setState(() => _automaticSubtitleLoading = false);
+    }
+  }
+  Future<void> _selectAutomaticSubtitleLanguage(Map<String, dynamic> option) async {
+    final code = (option['language'] ?? 'en').toString().toLowerCase();
+    try {
+      // Keep the chosen language, but try its other provider/release results
+      // if the selected link is expired or rate-limited.
+      final candidates = <Map<String, dynamic>>[
+        option,
+        ..._automaticSubtitleOptions.where((candidate) =>
+            (candidate['language'] ?? '').toString().toLowerCase() == code &&
+            (candidate['downloadUrl'] ?? '') != (option['downloadUrl'] ?? '')),
+      ];
+      File? file;
+      Object? lastDownloadError;
+      for (final candidate in candidates) {
+        try {
+          file = await _downloadAutomaticSubtitle(candidate);
+          break;
+        } catch (error) {
+          lastDownloadError = error;
+          debugPrint('FLIXORA subtitle language fallback failed: $error');
+        }
+      }
+      if (file == null) {
+        throw StateError(
+          'No usable ${_subtitleLanguageName(code)} subtitle could be downloaded. ${lastDownloadError ?? ''}',
+        );
+      }
+      if (!mounted || _isDisposed) return;
+      final track = SubtitleTrack.uri(
+        Uri.file(file.path).toString(),
+        title: _subtitleLanguageName(code), language: code);
+      _subtitleManuallySelected = true;
+      _automaticSubtitleRequestToken++;
+      await _activateSubtitleTrack(track);
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _selectedSubtitleLanguageCode = code;
+          _subtitleVisibilityEnabled = true;
+          _automaticEnglishTrack = track;
+          _automaticSubtitleMessage = '${_subtitleLanguageName(code)} track active';
+        });
+        Navigator.of(context).maybePop();
+        _startHideTimer();
+      }
+    } catch (error) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not load subtitle: $error')));
+      }
+    }
+  }
+
+  Future<void> _setSubtitleVisibility(bool enabled) async {
+    try {
+      final currentTrack = _player.state.track.subtitle;
+      final selectedTrack = enabled
+          ? (_automaticEnglishTrack ??
+              (currentTrack.id != 'no' ? currentTrack : SubtitleTrack.auto()))
+          : SubtitleTrack.no();
+
+      // Apply visibility through the player track API on every platform,
+      // then mirror it to libmpv on Android so the switch always controls
+      // the active subtitle track as well as native subtitle rendering.
+      await _player.setSubtitleTrack(selectedTrack);
+      final native = _player.platform;
+      if (native is NativePlayer) {
+        await native.setProperty('sub-visibility', enabled ? 'yes' : 'no');
+      }
+
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        if (enabled && selectedTrack.id != 'auto' && selectedTrack.id != 'no') {
+          _automaticEnglishTrack = selectedTrack;
+        }
+        _subtitleVisibilityEnabled = enabled;
+      });
+    } catch (error) {
+      if (mounted && !_isDisposed) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not change subtitle visibility: $error')),
+        );
+      }
+    }
+  }
+
+  String _subtitleTrackDisplayName(SubtitleTrack track) {
+    final language = (track.language ?? '').trim();
+    final title = (track.title ?? '').trim();
+    final generic = RegExp(r'^(subtitle|subtitles?|track)\s*#?\s*\d*$',
+        caseSensitive: false);
+    if (language.isNotEmpty) return _subtitleLanguageName(language);
+    if (title.isNotEmpty && !generic.hasMatch(title)) return title;
+    return 'Other language';
+  }
+
+
+  void _showSubtitleDelaySettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel.withValues(alpha: 0.48),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        side: BorderSide(color: Color(0x66D6AD45)),
+      ),
+      builder: (sheetContext) {
+        var delay = _subtitleDelay;
+        return StatefulBuilder(
+          builder: (context, updateSheet) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 22),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Subtitle Delay',
+                            style: TextStyle(
+                              color: playerGoldLight,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, color: playerWhite),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'Adjust subtitle timing to match the dialogue.',
+                      style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                    ),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Text(
+                        '${delay >= 0 ? '+' : ''}${delay.toStringAsFixed(1)} s',
+                        style: const TextStyle(
+                          color: playerGoldLight,
+                          fontSize: 25,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Slider(
+                      value: delay.clamp(-10.0, 10.0).toDouble(),
+                      min: -10,
+                      max: 10,
+                      divisions: 200,
+                      activeColor: playerGold,
+                      inactiveColor: const Color(0x55FFFFFF),
+                      onChanged: (value) => updateSheet(() => delay = value),
+                    ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: const [
+                        Text('-10s Earlier', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                        Text('10s Later', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: playerGoldLight,
+                              side: const BorderSide(color: playerGold),
+                            ),
+                            onPressed: () => updateSheet(() => delay = 0),
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: playerGold,
+                              foregroundColor: Colors.black,
+                            ),
+                            onPressed: () async {
+                              final applied = await _applySubtitleDelay(delay);
+                              if (!applied || !mounted || _isDisposed) return;
+                              await _saveSubtitlePreferences();
+                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                              _startHideTimer();
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
+  }
+
+  void _showSubtitleTracks() {
+    _cancelHideTimer();
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close subtitles',
+      barrierColor: Colors.black.withValues(alpha: 0.16),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        final landscape = screen.width >= screen.height;
+        final panelWidth = landscape
+            ? (screen.width * 0.44).clamp(340.0, 500.0).toDouble()
+            : screen.width * 0.94;
+        final panelHeight = landscape ? screen.height * 0.94 : screen.height * 0.78;
+        return SafeArea(
+          child: Align(
+            alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
+            child: SizedBox(
+              width: panelWidth,
+              height: panelHeight,
+              child: StatefulBuilder(
+                builder: (sheetContext, updateSheet) {
+                  final embedded = _tracks.subtitle
+                      .where((track) => track.id != 'auto' && track.id != 'no')
+                      .toList(growable: false);
+                  final entries = <String, Map<String, dynamic>>{};
+                  for (final track in embedded) {
+                    final code = (track.language ?? '').trim().toLowerCase();
+                    if (code.isNotEmpty) {
+                      entries.putIfAbsent(code, () => {
+                        'kind': 'embedded', 'language': code, 'track': track,
+                        'releaseName': _subtitleTrackDisplayName(track),
+                      });
+                    }
+                  }
+                  if (!widget.movie.isMovieBox) {
+                    for (final option in _automaticSubtitleOptions) {
+                      final code = (option['language'] ?? '').toString().toLowerCase();
+                      if (code.isNotEmpty) entries.putIfAbsent(code, () => {...option, 'kind': 'automatic'});
+                    }
+                  }
+                  for (final path in _localDownloadedSubtitlePaths) {
+                    final name = File(path).uri.pathSegments.last;
+                    final match = RegExp(
+                      r'(?:subtitle|cached_subtitle)_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?|und)\.',
+                      caseSensitive: false,
+                    ).firstMatch(name);
+                    final code = match?.group(1)?.toLowerCase() ?? 'und';
+                    entries['downloaded:$path'] = {
+                      'kind': 'local',
+                      'language': code,
+                      'filePath': path,
+                      'releaseName': 'Downloaded · ${_subtitleLanguageName(code)}',
+                    };
+                  }
+                  final movieBoxOptions = _movieBoxSubtitleOptions();
+                  for (var index = 0; index < movieBoxOptions.length; index++) {
+                    final option = movieBoxOptions[index];
+                    final code = (option['language'] ?? 'und').toString();
+                    final subtitle = option['movieBoxSubtitle'] as Map<String, dynamic>;
+                    entries['moviebox:' + index.toString() + ':' + code] = {...option, 'kind':'moviebox','language':code,'subtitle':subtitle};
+                  }
+
+                  Future<void> choose(Map<String, dynamic> item) async {
+                    final code = (item['language'] ?? '').toString().toLowerCase();
+                    if (item['kind'] == 'embedded' && item['track'] is SubtitleTrack) {
+                      await _selectSubtitleTrack(item['track'] as SubtitleTrack);
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else if (item['kind'] == 'local') {
+                      final path = (item['filePath'] ?? '').toString();
+                      if (path.isEmpty || !await File(path).exists()) return;
+                      await _selectSubtitleTrack(SubtitleTrack.uri(
+                        Uri.file(path).toString(),
+                        title: _subtitleLanguageName(code),
+                        language: code,
+                      ));
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else if (item['kind'] == 'moviebox' && item['subtitle'] is Map) {
+                      await _selectMovieBoxSubtitle(Map<String, dynamic>.from(item['subtitle'] as Map));
+                      if (!mounted || _isDisposed) return;
+                      setState(() {
+                        _selectedSubtitleLanguageCode = code;
+                        _subtitleVisibilityEnabled = true;
+                      });
+                    } else {
+                      await _selectAutomaticSubtitleLanguage(item);
+                    }
+                    if (sheetContext.mounted) updateSheet(() {});
+                  }
+
+                  Widget row(String title, String code, VoidCallback onTap, {
+                    bool selected = false, String? detail, Widget? trailing,
+                  }) {
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 7),
+                      decoration: BoxDecoration(
+                        color: selected ? playerGold.withValues(alpha: 0.12) : const Color(0x33141414),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: selected ? playerGold : const Color(0x25FFFFFF)),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 1),
+                        title: Text(title, style: TextStyle(
+                          color: selected ? playerGoldLight : playerWhite,
+                          fontSize: 14, fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                        )),
+                        subtitle: detail == null || detail.isEmpty ? null : Text(
+                          detail, maxLines: 1, overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Color(0x88FFFFFF), fontSize: 10),
+                        ),
+                        trailing: trailing ?? (selected
+                          ? const Icon(Icons.check_rounded, color: playerGoldLight)
+                          : const Icon(Icons.circle_outlined, color: Color(0x55FFFFFF))),
+                        onTap: onTap,
+                      ),
+                    );
+                  }
+
+                  return Material(
+                    color: Colors.transparent,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0x66101010),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.48)),
+                          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 28)],
+                        ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(17, 13, 12, 8),
+                              child: Row(
+                                children: [
+                                  const Expanded(child: Text('Subtitle', style: TextStyle(
+                                    color: playerWhite, fontSize: 21, fontWeight: FontWeight.w800,
+                                  ))),
+                                  Switch.adaptive(
+                                    value: _subtitleVisibilityEnabled,
+                                    activeThumbColor: Colors.black,
+                                    activeTrackColor: playerGold,
+                                    inactiveThumbColor: Colors.white70,
+                                    inactiveTrackColor: const Color(0xFF454545),
+                                    onChanged: (value) async {
+                                      await _setSubtitleVisibility(value);
+                                      if (sheetContext.mounted) updateSheet(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(height: 1, color: Color(0x28FFFFFF)),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(15, 12, 15, 10),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    const Text('Choose language', style: TextStyle(
+                                      color: Color(0x99FFFFFF), fontSize: 11,
+                                    )),
+                                    const SizedBox(height: 9),
+                                    if (entries.isEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 18),
+                                        child: Text(
+                                          (_automaticSubtitleLoading && !widget.movie.isMovieBox) ? 'Finding available languages…' :
+                                            (_automaticSubtitleMessage ?? (widget.movie.isMovieBox ? 'No subtitle tracks are available for this episode.' : 'No subtitle tracks are available.')),
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                        ),
+                                      )
+                                    else
+                                      ...entries.entries.map((entry) {
+                                        final item = entry.value;
+                                        final code = entry.key;
+                                        final active = _selectedSubtitleLanguageCode.toLowerCase() == code &&
+                                            _subtitleVisibilityEnabled;
+                                        return row(
+                                          _subtitleLanguageName((item['language'] ?? code).toString()), code,
+                                          () => choose(item),
+                                          selected: active,
+                                          detail: (item['releaseName'] ?? '').toString(),
+                                        );
+                                      }),
+                                    const SizedBox(height: 8),
+                                    row('Import subtitle file', 'import', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _importSubtitleFile();
+                                    }, detail: 'Load a subtitle from your device',
+                                      trailing: const Icon(Icons.file_upload_outlined, color: playerGoldLight)),
+                                    row('Add subtitle URL', 'external', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _addExternalSubtitle();
+                                    }, detail: 'Load a subtitle from a web URL',
+                                      trailing: const Icon(Icons.link_rounded, color: playerGoldLight)),
+                                    row('Download Subtitle', 'download', () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleDownloadPanel();
+                                    }, detail: 'Browse available subtitles',
+                                      trailing: const Icon(Icons.download_rounded, color: playerGoldLight)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const Divider(height: 1, color: Color(0x28FFFFFF)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                              child: Row(
+                                children: [
+                                  Expanded(child: TextButton.icon(
+                                    onPressed: () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleStyleSettings();
+                                    },
+                                    icon: const Icon(Icons.palette_outlined, size: 17),
+                                    label: const Text('Style'),
+                                    style: TextButton.styleFrom(foregroundColor: playerGoldLight),
+                                  )),
+                                  Container(width: 1, height: 23, color: const Color(0x33FFFFFF)),
+                                  Expanded(child: TextButton.icon(
+                                    onPressed: () {
+                                      Navigator.of(sheetContext).pop();
+                                      _showSubtitleDelaySettings();
+                                    },
+                                    icon: const Icon(Icons.sync_alt_rounded, size: 17),
+                                    label: const Text('Delay'),
+                                    style: TextButton.styleFrom(foregroundColor: playerGoldLight),
+                                  )),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slide = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        return FadeTransition(opacity: animation, child: SlideTransition(position: slide, child: child));
+      },
+    ).whenComplete(_startHideTimer);
+    if (_automaticSubtitleOptions.isEmpty && !_automaticSubtitleLoading) {
+      _ensureAutomaticEnglishSubtitle();
+    }
+  }
+
+  void _showSubtitleDownloadPanel() {
+    _cancelHideTimer();
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close subtitle downloads',
+      barrierColor: Colors.black.withValues(alpha: 0.62),
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        final screen = MediaQuery.sizeOf(dialogContext);
+        final landscape = screen.width >= screen.height;
+        final panelWidth = landscape
+            ? (screen.width * 0.46).clamp(360.0, 540.0).toDouble()
+            : screen.width * 0.95;
+        final panelHeight = landscape ? screen.height * 0.94 : screen.height * 0.84;
+        var selectedLanguage = 'all';
+        var downloading = '';
+        var message = _automaticSubtitleMessage ?? '';
+        var subtitleRefreshStarted = false;
+        return SafeArea(
+          child: Align(
+            alignment: landscape ? Alignment.centerRight : Alignment.bottomCenter,
+            child: SizedBox(
+              width: panelWidth,
+              height: panelHeight,
+              child: StatefulBuilder(
+                builder: (sheetContext, updateSheet) {
+                  if (widget.movie.isMovieBox && !subtitleRefreshStarted) {
+                    subtitleRefreshStarted = true;
+                    unawaited(() async {
+                      if (_automaticSubtitleOptions.isEmpty &&
+                          !_automaticSubtitleLoading) {
+                        await _ensureAutomaticEnglishSubtitle();
+                      } else {
+                        for (var attempt = 0;
+                            attempt < 50 && _automaticSubtitleLoading;
+                            attempt++) {
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 100),
+                          );
+                        }
+                      }
+                      if (sheetContext.mounted) updateSheet(() {});
+                    }());
+                  }
+                  final languages = <Map<String, String>>[
+                    {'code': 'all', 'label': 'All'},
+                  ];
+                  final seenLanguages = <String>{'all'};
+                  for (final option in _automaticSubtitleOptions) {
+                    final code = (option['language'] ?? '')
+                        .toString()
+                        .trim()
+                        .toLowerCase();
+                    if (code.isEmpty || !seenLanguages.add(code)) continue;
+                    languages.add({
+                      'code': code,
+                      'label': _subtitleLanguageName(code),
+                    });
+                  }
+                  final results = _automaticSubtitleOptions.where((option) {
+                    final code = (option['language'] ?? '').toString().toLowerCase();
+                    final languageOk = selectedLanguage == 'all' || code == selectedLanguage ||
+                      (selectedLanguage == 'bn' && code == 'ben') ||
+                      (selectedLanguage == 'en' && code == 'eng') ||
+                      (selectedLanguage == 'hi' && code == 'hin');
+                    return languageOk;
+                  }).toList(growable: false);
+
+                  return Material(
+                    color: Colors.transparent,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xF20A0A0A),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.48)),
+                          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 28)],
+                        ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(13, 12, 12, 10),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    onPressed: () => Navigator.of(sheetContext).pop(),
+                                    icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
+                                  ),
+                                  const Expanded(child: Text('Download Subtitle', style: TextStyle(
+                                    color: playerWhite, fontSize: 19, fontWeight: FontWeight.w800,
+                                  ))),
+                                ],
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  widget.movie.isMovieBox ? 'Available subtitles' : 'Available subtitle tracks',
+                                  style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              height: 42,
+                              child: ListView.separated(
+                                padding: const EdgeInsets.symmetric(horizontal: 14),
+                                scrollDirection: Axis.horizontal,
+                                itemCount: languages.length,
+                                separatorBuilder: (_, __) => const SizedBox(width: 7),
+                                itemBuilder: (context, index) {
+                                  final item = languages[index];
+                                  final active = selectedLanguage == item['code'];
+                                  return ChoiceChip(
+                                    label: Text(item['label']!),
+                                    selected: active,
+                                    showCheckmark: false,
+                                    selectedColor: playerGold,
+                                    backgroundColor: const Color(0xFF202020),
+                                    side: BorderSide(color: active ? playerGoldLight : const Color(0x22FFFFFF)),
+                                    labelStyle: TextStyle(
+                                      color: active ? Colors.black : playerWhite,
+                                      fontSize: 11, fontWeight: FontWeight.w700,
+                                    ),
+                                    onSelected: (_) => updateSheet(() => selectedLanguage = item['code']!),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            if (_automaticSubtitleLoading) const LinearProgressIndicator(
+                              minHeight: 2, color: playerGold, backgroundColor: Color(0x22FFFFFF),
+                            ),
+                            Expanded(
+                              child: results.isEmpty
+                                  ? Center(child: Padding(
+                                      padding: const EdgeInsets.all(22),
+                                      child: Text(
+                                        _automaticSubtitleLoading ? 'Loading available subtitles…' :
+                                          (message.isNotEmpty ? message : 'No subtitles are available for this title or episode.'),
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                                      ),
+                                    ))
+                                  : ListView.separated(
+                                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 18),
+                                      itemCount: results.length,
+                                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0x20FFFFFF)),
+                                      itemBuilder: (context, index) {
+                                        final option = results[index];
+                                        final code = (option['language'] ?? '').toString();
+                                        final release = (option['releaseName'] ?? option['fileName'] ?? 'Subtitle release').toString();
+                                        final identity = code + '_' + release;
+                                        final busy = downloading == identity;
+                                        return Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 11),
+                                          child: Row(
+                                            children: [
+                                              Expanded(child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(release, maxLines: 3, overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(color: playerWhite, fontSize: 13, fontWeight: FontWeight.w600)),
+                                                  const SizedBox(height: 4),
+                                                  Text(_subtitleLanguageName(code),
+                                                    style: const TextStyle(color: Color(0x88FFFFFF), fontSize: 10)),
+                                                ],
+                                              )),
+                                              const SizedBox(width: 8),
+                                              IconButton(
+                                                tooltip: 'Download and apply subtitle',
+                                                onPressed: downloading.isNotEmpty ? null : () async {
+                                                  updateSheet(() => downloading = identity);
+                                                  await _selectAutomaticSubtitleLanguage(option);
+                                                  if (mounted && !_isDisposed &&
+                                                      _selectedSubtitleLanguageCode == code &&
+                                                      _subtitleVisibilityEnabled &&
+                                                      (_automaticSubtitleMessage ?? '').contains('track active')) {
+                                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                                      content: Text(_subtitleLanguageName(code) + ' subtitle downloaded and applied.'),
+                                                    ));
+                                                  }
+                                                  if (sheetContext.mounted) updateSheet(() => downloading = '');
+                                                },
+                                                icon: busy ? const SizedBox(
+                                                  width: 19, height: 19,
+                                                  child: CircularProgressIndicator(strokeWidth: 2, color: playerGoldLight),
+                                                ) : const Icon(Icons.file_download_outlined, color: playerGoldLight, size: 24),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slide = Tween<Offset>(begin: const Offset(0.08, 0), end: Offset.zero)
+            .animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        return FadeTransition(opacity: animation, child: SlideTransition(position: slide, child: child));
+      },
+    ).whenComplete(_startHideTimer);
+  }
+
+  Future<void> _loadApplicationBrightness() async {
+    try {
+      final value = await ScreenBrightness.instance.application;
+      if (!mounted || _isDisposed) return;
+      setState(() {
+        _screenBrightness = value.clamp(0.0, 1.0).toDouble();
+      });
+    } catch (e) {
+      debugPrint('Could not read app brightness: $e');
+    }
+  }
+
+  Future<void> _changeApplicationBrightness(double value) async {
+    final brightness = value.clamp(0.0, 1.0).toDouble();
+    if (mounted && !_isDisposed) {
+      setState(() => _screenBrightness = brightness);
+    }
+    try {
+      await ScreenBrightness.instance
+          .setApplicationScreenBrightness(brightness);
+    } catch (e) {
+      debugPrint('Could not change app brightness: $e');
+    }
+  }
+
+  Future<void> _resetApplicationBrightness() async {
+    try {
+      await ScreenBrightness.instance.resetApplicationScreenBrightness();
+    } catch (e) {
+      debugPrint('Could not reset app brightness: $e');
+    }
+  }
+
+  Future<void> _showQualitySelector() async {
+    if (_availableQualities.isEmpty || _loadingQualities) return;
+    _cancelHideTimer();
+
+    final selected = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Select video quality',
+                style: TextStyle(
+                  color: playerWhite,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Changes the encoded resolution of this same movie.',
+                style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _availableQualities.map((item) {
+                  final quality = item['quality']!;
+                  final active = quality == _selectedQuality;
+                  final label = VideoQualityService.displayName(quality);
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: active,
+                    selectedColor: playerGold,
+                    backgroundColor: playerBg,
+                    labelStyle: TextStyle(
+                      color: active ? Colors.black : playerWhite,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    onSelected: (_) => Navigator.pop(sheetContext, item),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted || _isDisposed) return;
+    if (selected != null && selected['quality'] != _selectedQuality) {
+      await _changeVideoQuality(selected);
+    }
+    _startHideTimer();
+  }
+
+  void _showSettings() {
+    _cancelHideTimer();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
+      builder: (context) {
+        const speeds = [
+          0.25,
+          0.5,
+          0.75,
+          1.0,
+          1.25,
+          1.5,
+          1.75,
+          2.0,
+        ];
+
+        // Keep the modal slider state independent for immediate drag feedback.
+        double sheetBrightness =
+            _screenBrightness.clamp(0.0, 1.0).toDouble();
+
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 25),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Playback Settings',
+                      style: TextStyle(
+                        color: playerWhite,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        const Icon(Icons.brightness_6_outlined, color: playerGold, size: 20),
+                        const SizedBox(width: 9),
+                        const Expanded(
+                          child: Text(
+                            'Screen Brightness',
+                            style: TextStyle(color: playerWhite, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: playerBg,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: playerGold.withValues(alpha: 0.45)),
+                          ),
+                          child: Text(
+                            '${(sheetBrightness * 100).round()}%',
+                            style: const TextStyle(
+                              color: playerGoldLight,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    SliderTheme(
+                      data: SliderTheme.of(sheetContext).copyWith(
+                        trackHeight: 4,
+                        activeTrackColor: playerGold,
+                        inactiveTrackColor: Color(0x3DFFFFFF),
+                        thumbColor: playerWhite,
+                        overlayColor: playerGold.withValues(alpha: 0.18),
+                        showValueIndicator: ShowValueIndicator.never,
+                        trackShape: const RoundedRectSliderTrackShape(),
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                      ),
+                      child: Slider(
+                        value: sheetBrightness,
+                        min: 0.0,
+                        max: 1.0,
+                        onChanged: (value) {
+                          final nextBrightness =
+                              value.clamp(0.0, 1.0).toDouble();
+
+                          // Update the thumb, active track, and percentage immediately.
+                          setSheetState(() {
+                            sheetBrightness = nextBrightness;
+                          });
+
+                          // Apply the selected value to the actual app brightness.
+                          _changeApplicationBrightness(nextBrightness);
+                        },
+                      ),
+                    ),
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Dim', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
+                        Text('Bright', style: TextStyle(color: Color(0x8AFFFFFF), fontSize: 11)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Playback Speed',
+                      style: TextStyle(
+                        color: playerGold,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: speeds.map((speed) {
+                        final selected = _speed == speed;
+
+                        return ChoiceChip(
+                          label: Text('${speed}x'),
+                          selected: selected,
+                          selectedColor: playerGold,
+                          backgroundColor: playerBg,
+                          labelStyle: TextStyle(
+                            color: selected ? Colors.black : playerWhite,
+                          ),
+                          onSelected: (_) async {
+                            await _changeSpeed(speed);
+
+                            if (sheetContext.mounted) {
+                              Navigator.pop(sheetContext);
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.audiotrack,
+                        color: playerGold,
+                      ),
+                      title: const Text(
+                        'Audio language',
+                        style: TextStyle(color: playerWhite),
+                      ),
+                      subtitle: Text(
+                        _tracks.audio.isEmpty
+                            ? 'No alternate audio tracks detected'
+                            : _audioTrackLabel(
+                                _tracks.audio[_selectedAudioTrackIndex
+                                    .clamp(0, _tracks.audio.length - 1)
+                                    .toInt()],
+                                _selectedAudioTrackIndex
+                                    .clamp(0, _tracks.audio.length - 1)
+                                    .toInt(),
+                              ),
+                        style: const TextStyle(
+                          color: Color(0x99FFFFFF),
+                          fontSize: 11,
+                        ),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Color(0x8AFFFFFF),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showAudioTracks();
+                      },
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.subtitles,
+                        color: playerGold,
+                      ),
+                      title: const Text(
+                        'Subtitles',
+                        style: TextStyle(color: playerWhite),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Color(0x8AFFFFFF),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showSubtitleTracks();
+                      },
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(
+                        Icons.gesture_rounded,
+                        color: playerGold,
+                      ),
+                      title: const Text(
+                        'Gesture controls',
+                        style: TextStyle(color: playerWhite),
+                      ),
+                      subtitle: const Text(
+                        'Swipe sensitivity and double-tap skip',
+                        style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+                      ),
+                      trailing: const Icon(
+                        Icons.chevron_right,
+                        color: Color(0x8AFFFFFF),
+                      ),
+                      onTap: () {
+                        Navigator.pop(sheetContext);
+                        _showGestureSettings();
+                      },
+                    ),
+                  ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    ).whenComplete(_startHideTimer);
+  }
+
+  void _showGestureSettings() {
+    _cancelHideTimer();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: playerPanel,
+      isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.90,
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          Future<void> persist() => _saveGesturePreferences();
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Gesture Controls',
+                    style: TextStyle(
+                      color: playerWhite,
+                      fontSize: 19,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Customize touch gestures while watching videos.',
+                    style: TextStyle(color: Color(0x99FFFFFF), fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Right-side volume swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the right side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _volumeGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _volumeGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Left-side brightness swipe', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Swipe up or down on the left side', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _brightnessGestureEnabled,
+                    onChanged: (value) {
+                      setState(() => _brightnessGestureEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: playerGold,
+                    title: const Text('Double-tap to skip', style: TextStyle(color: playerWhite)),
+                    subtitle: const Text('Double-tap left or right to seek', style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+                    value: _doubleTapSkipEnabled,
+                    onChanged: (value) {
+                      setState(() => _doubleTapSkipEnabled = value);
+                      updateSheet(() {});
+                      persist();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Swipe sensitivity', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                      ),
+                      Text('${_gestureSensitivity.toStringAsFixed(2)}x', style: const TextStyle(color: playerGoldLight, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                  Slider(
+                    value: _gestureSensitivity,
+                    min: 0.5,
+                    max: 2.0,
+                    divisions: 6,
+                    activeColor: playerGold,
+                    inactiveColor: const Color(0x3DFFFFFF),
+                    onChanged: (value) {
+                      setState(() => _gestureSensitivity = value);
+                      updateSheet(() {});
+                    },
+                    onChangeEnd: (_) => persist(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Double-tap skip duration', style: TextStyle(color: playerWhite, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [5, 10, 15, 20, 30].map((seconds) {
+                      final selected = _doubleTapSkipSeconds == seconds;
+                      return ChoiceChip(
+                        label: Text('${seconds}s'),
+                        selected: selected,
+                        selectedColor: playerGold,
+                        backgroundColor: playerBg,
+                        labelStyle: TextStyle(color: selected ? Colors.black : playerWhite),
+                        onSelected: (_) {
+                          setState(() => _doubleTapSkipSeconds = seconds);
+                          updateSheet(() {});
+                          persist();
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Your gesture preferences are saved on this device.',
+                    style: TextStyle(color: Color(0x80FFFFFF), fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).whenComplete(_startHideTimer);
+  }
+
+  Widget _centerControls() {
+    // Keep the large center controls only in landscape/fullscreen.
+    // Portrait uses double-tap for 10-second seeking and has no center buttons.
+    if (!_isFullscreen) return const SizedBox.shrink();
+
+    Widget skipControl({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onPressed,
+    }) {
+      return Container(
+        width: 46,
+        height: 46,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.48),
+          shape: BoxShape.circle,
+          border: Border.all(color: const Color(0x55FFFFFF)),
+        ),
+        child: IconButton(
+          tooltip: tooltip,
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          onPressed: onPressed,
+          icon: Icon(icon, color: playerWhite, size: 25),
+        ),
+      );
+    }
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        skipControl(
+          icon: Icons.replay_10_rounded,
+          tooltip: 'Back 10 seconds',
+          onPressed: () => _seekBy(-10),
+        ),
+        const SizedBox(width: 22),
+        Container(
+          width: 58,
+          height: 58,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [playerGoldLight, playerGold],
+            ),
+            border: Border.all(color: const Color(0xCCFFFFFF), width: 1.1),
+            boxShadow: [
+              BoxShadow(
+                color: playerGold.withValues(alpha: 0.28),
+                blurRadius: 18,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: IconButton(
+            tooltip: _isPlaying ? 'Pause' : 'Play',
+            onPressed: _togglePlay,
+            iconSize: 34,
+            color: playerWhite,
+            icon: Icon(
+              _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            ),
+          ),
+        ),
+        const SizedBox(width: 22),
+        skipControl(
+          icon: Icons.forward_10_rounded,
+          tooltip: 'Forward 10 seconds',
+          onPressed: () => _seekBy(10),
+        ),
+      ],
+    );
+  }
+
+  Widget _bottomControls() {
+    final max = _duration.inMilliseconds.toDouble();
+    final compact = !_isFullscreen;
+
+    Widget compactAction({
+      required String tooltip,
+      required IconData icon,
+      required VoidCallback onPressed,
+      bool enabled = true,
+      Color color = playerWhite,
+    }) {
+      return IconButton(
+        tooltip: tooltip,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 42, height: 38),
+        padding: EdgeInsets.zero,
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(
+          icon,
+          color: enabled ? color : color.withValues(alpha: 0.32),
+          size: 24,
+        ),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        compact ? 10 : 18,
+        0,
+        compact ? 10 : 66,
+        compact ? 6 : 18,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.transparent,
+          gradient: null,
+          borderRadius: BorderRadius.circular(compact ? 12 : 18),
+          border: Border.all(color: const Color(0x2EFFFFFF)),
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            compact ? 8 : 12,
+            compact ? 1 : 7,
+            compact ? 8 : 12,
+            compact ? 1 : 5,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValueListenableBuilder<Duration>(
+                valueListenable: _positionNotifier,
+                builder: (context, position, _) {
+                  final displayPosition =
+                      _isSeeking && _seekPreviewPosition != null
+                          ? _seekPreviewPosition!
+                          : position;
+                  final current = displayPosition.inMilliseconds
+                      .toDouble()
+                      .clamp(0.0, max > 0 ? max : 1.0)
+                      .toDouble();
+
+                  return Row(
+                    children: [
+                      Text(
+                        _formatDuration(displayPosition),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: compact ? 1.8 : 3,
+                            activeTrackColor: playerGold,
+                            inactiveTrackColor: const Color(0x55FFFFFF),
+                            thumbColor: playerWhite,
+                            overlayColor: playerGold.withValues(alpha: 0.14),
+                            thumbShape: RoundSliderThumbShape(
+                              enabledThumbRadius: compact ? 4 : 5.5,
+                            ),
+                            overlayShape: RoundSliderOverlayShape(
+                              overlayRadius: compact ? 8 : 10,
+                            ),
+                          ),
+                          child: Slider(
+                            value: current,
+                            min: 0,
+                            max: max > 0 ? max : 1,
+                            onChangeStart: max > 0
+                                ? (value) {
+                                    _isSeeking = true;
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
+                                : null,
+                            onChanged: max > 0
+                                ? (value) {
+                                    _seekPreviewPosition =
+                                        Duration(milliseconds: value.round());
+                                    _positionNotifier.value =
+                                        _seekPreviewPosition!;
+                                  }
+                                : null,
+                            onChangeEnd: max > 0 ? _seekTo : null,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        _formatDuration(_duration),
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              Row(
+                children: [
+                  compactAction(
+                    tooltip: _isPlaying ? 'Pause' : 'Play',
+                    icon: _isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    onPressed: _togglePlay,
+                  ),
+                  if (_hasEpisodeNavigation) ...[
+                    compactAction(
+                      tooltip: 'Previous episode',
+                      icon: Icons.skip_previous_rounded,
+                      enabled: _canChangeEpisode(-1),
+                      onPressed: () => _changeEpisodeBy(-1),
+                    ),
+                    compactAction(
+                      tooltip: 'Next episode',
+                      icon: Icons.skip_next_rounded,
+                      enabled: _canChangeEpisode(1),
+                      onPressed: () => _changeEpisodeBy(1),
+                    ),
+                  ],
+                  const Spacer(),
+                  if (compact)
+                    compactAction(
+                      tooltip: 'Picture-in-picture',
+                      icon: Icons.picture_in_picture_alt_rounded,
+                      color: playerGoldLight,
+                      onPressed: _toggleMiniPlayer,
+                    ),
+                  if (!compact) ...[
+                    compactAction(
+                      tooltip: 'Video fit: ${_videoFitMode == 0 ? 'Crop' : _videoFitMode == 1 ? 'Full 100%' : 'Normal'}',
+                      icon: Icons.aspect_ratio_rounded,
+                      color: _videoFitMode == 2 ? playerWhite : playerGoldLight,
+                      onPressed: () {
+                        setState(() {
+                          _videoFitMode = (_videoFitMode + 1) % 3;
+                          _videoZoom = 1.0;
+                        });
+                        _startHideTimer();
+                      },
+                    ),
+                    Tooltip(
+                      message: 'Subtitles',
+                      child: OutlinedButton(
+                        onPressed: _showSubtitleTracks,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: playerGoldLight,
+                          backgroundColor: Colors.black.withValues(alpha: 0.38),
+                          side: BorderSide(
+                            color: playerGold.withValues(alpha: 0.68),
+                          ),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(54, 38),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.closed_caption_rounded,
+                              color: playerGoldLight,
+                              size: 18,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'CC',
+                              style: TextStyle(
+                                color: playerGoldLight,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  compactAction(
+                    tooltip: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                    icon: _isFullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: _toggleFullscreen,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _topControls() {
+    final audioIndex = _tracks.audio.isEmpty
+        ? -1
+        : _selectedAudioTrackIndex.clamp(0, _tracks.audio.length - 1).toInt();
+    final audioLabel = audioIndex >= 0
+        ? _audioTrackLabel(_tracks.audio[audioIndex], audioIndex)
+        : 'Audio';
+    final showEpisodeIndicator = _isFullscreen &&
+        (widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Row(
+        children: [
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Back',
+              visualDensity: VisualDensity.compact,
+              onPressed: () {
+                if (_isFullscreen) {
+                  _toggleFullscreen();
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+              icon: const Icon(Icons.arrow_back_rounded, color: playerWhite),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                    if (showEpisodeIndicator) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: playerGold.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: playerGold.withValues(alpha: 0.58),
+                          ),
+                        ),
+                        child: Text(
+                          'S${_selectedSeasonNumber.toString().padLeft(2, '0')} · E${_selectedEpisodeNumber.toString().padLeft(2, '0')}',
+                          maxLines: 1,
+                          style: const TextStyle(
+                            color: playerGoldLight,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  'FLIXORA CINEMA',
+                  style: TextStyle(
+                    color: playerGoldLight,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.7,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: playerGoldLight,
+              padding: const EdgeInsets.symmetric(horizontal: 5),
+              minimumSize: const Size(38, 34),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            onPressed: _showSettings,
+            child: Text(
+              '${_speed}x',
+              style: const TextStyle(
+                color: playerGoldLight,
+                fontWeight: FontWeight.w800,
+                fontSize: 11,
+              ),
+            ),
+          ),
+          if (widget.localFilePath == null) ...[
+            const SizedBox(width: 2),
+            _playerTopAction(
+              icon: Icons.high_quality_rounded,
+              label: _loadingQualities
+                  ? '...'
+                  : _selectedQuality == null
+                      ? 'Quality'
+                      : VideoQualityService.displayName(_selectedQuality!),
+              tooltip: 'Video quality',
+              enabled: _availableQualities.isNotEmpty,
+              onPressed: _showQualitySelector,
+            ),
+          ],
+          if (_tracks.audio.isNotEmpty) ...[
+            const SizedBox(width: 2),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: 'Audio language: $audioLabel',
+                visualDensity: VisualDensity.compact,
+                onPressed: _showAudioTracks,
+                icon: const Icon(
+                  Icons.audiotrack_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
+              ),
+            ),
+          ],
+          if (_isFullscreen) ...[
+            const SizedBox(width: 2),
+            Material(
+              color: Colors.black.withValues(alpha: 0.48),
+              shape: const CircleBorder(),
+              child: IconButton(
+                tooltip: _isMiniPlayer ? 'Expand player' : 'Mini player',
+                visualDensity: VisualDensity.compact,
+                onPressed: _toggleMiniPlayer,
+                icon: Icon(
+                  _isMiniPlayer
+                      ? Icons.open_in_full_rounded
+                      : Icons.picture_in_picture_alt_rounded,
+                  color: playerGoldLight,
+                  size: 20,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 2),
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Playback settings',
+              visualDensity: VisualDensity.compact,
+              onPressed: _showSettings,
+              icon: const Icon(Icons.tune_rounded, color: playerWhite, size: 21),
+            ),
+          ),
+          Material(
+            color: Colors.black.withValues(alpha: 0.48),
+            shape: const CircleBorder(),
+            child: IconButton(
+              tooltip: 'Lock controls',
+              visualDensity: VisualDensity.compact,
+              onPressed: () {
+                setState(() {
+                  _isLocked = true;
+                  _showControls = false;
+                });
+                _cancelHideTimer();
+              },
+              icon: const Icon(Icons.lock_outline_rounded, color: playerWhite, size: 20),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _playerTopAction({
+    required IconData icon,
+    required String label,
+    required String tooltip,
+    required bool enabled,
+    required VoidCallback onPressed,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: OutlinedButton(
+        onPressed: enabled ? onPressed : null,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: playerWhite,
+          disabledForegroundColor: const Color(0x66FFFFFF),
+          backgroundColor: Colors.black.withValues(alpha: 0.42),
+          side: BorderSide(
+            color: enabled
+                ? playerGold.withValues(alpha: 0.68)
+                : const Color(0x3DFFFFFF),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? playerGoldLight : playerWhite,
+            ),
+            const SizedBox(width: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 64),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _playerError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(25),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.error_outline,
+              color: playerGold,
+              size: 55,
+            ),
+            const SizedBox(height: 15),
+            Text(
+              _errorMessage ?? 'Playback error',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: playerWhite),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: playerGold,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: widget.movie.isMovieBox
+                  ? _prepareAndInitializePlayer
+                  : _initializePlayer,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _playerBody() {
+    if (widget.movie.isMovieBox && _loadingQualities && !_initialized) {
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: CircularProgressIndicator(
+                  color: playerGold,
+                  strokeWidth: 2.4,
+                ),
+              ),
+              SizedBox(height: 12),
+              // Keep the lightweight progress indicator without a blocking
+              // "Preparing stream..." label while the source is resolving.
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (widget.movie.isMovieBox && _errorMessage != null) {
+      return Container(color: Colors.black, child: _playerError());
+    }
+
+    if (widget.localFilePath == null && !_validVideoUrl) {
+      return Container(
+        color: Colors.black,
+        padding: const EdgeInsets.all(22),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.play_circle_outline_rounded,
+                  color: playerGold, size: 48),
+              SizedBox(height: 10),
+              Text('No playable stream is available',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: playerWhite,
+                      fontSize: 15, fontWeight: FontWeight.w800)),
+              SizedBox(height: 5),
+              Text('This title needs a valid video source to play.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      alignment: Alignment.center,
+      children: [
+        if (!_initialized && widget.movie.backdropUrl.isNotEmpty)
+          Positioned.fill(
+            child: FlixoraCachedImage(
+              imageUrl: widget.movie.backdropUrl,
+              isOnline: _playerIsOnline,
+              fit: BoxFit.cover,
+            ),
+          ),
+        if (!_initialized)
+          const Positioned.fill(
+            child: ColoredBox(color: Color(0x55000000)),
+          ),
+        Positioned.fill(
+          child: ClipRect(
+            child: Transform.scale(
+              alignment: Alignment.center,
+              scale: _videoZoom,
+              child: Video(
+                controller: _videoController,
+                // Normal is the default in portrait and fullscreen landscape.
+                // Crop and Full 100% are explicit user-selected modes only.
+                fit: switch (_videoFitMode) {
+                  0 => BoxFit.cover,
+                  1 => BoxFit.fill,
+                  _ => BoxFit.contain,
+                },
+                controls: NoVideoControls,
+                subtitleViewConfiguration: _subtitleViewConfiguration(),
+              ),
+            ),
+          ),
+        ),
+        if ((_isBuffering || !_initialized) && _errorMessage == null)
+          IgnorePointer(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 25,
+                    height: 25,
+                    child: CircularProgressIndicator(
+                      color: playerGold,
+                      strokeWidth: 2.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _initialized ? 'Buffering...' : 'Starting playback...',
+                    style: const TextStyle(
+                      color: Color(0xD9FFFFFF),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (_errorMessage != null)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black87,
+              child: _playerError(),
+            ),
+          ),
+        if (_isLocked)
+          Positioned(
+            left: 15,
+            top: 15,
+            child: IconButton(
+              onPressed: () {
+                setState(() {
+                  _isLocked = false;
+                  _showControls = true;
+                });
+                _startHideTimer();
+              },
+              icon: const Icon(
+                Icons.lock,
+                color: playerGold,
+                size: 28,
+              ),
+            ),
+          ),
+        if (!_isLocked)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onScaleStart: _handlePlayerGestureStart,
+              onScaleUpdate: _handlePlayerGestureUpdate,
+              onScaleEnd: _handlePlayerGestureEnd,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
+              onDoubleTapDown: (details) {
+                if (!_doubleTapSkipEnabled) return;
+                final width = MediaQuery.of(context).size.width;
+                final seconds = _doubleTapSkipSeconds;
+                if (details.localPosition.dx < width / 2) {
+                  _seekBy(-seconds);
+                } else {
+                  _seekBy(seconds);
+                }
+              },
+              onDoubleTap: () {},
+              child: const SizedBox.expand(),
+            ),
+          ),
+        if (_showControls && !_isLocked && _errorMessage == null)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _isMiniPlayer ? _expandMiniPlayer : _toggleControls,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.7),
+                      Colors.transparent,
+                      Colors.transparent,
+                      Colors.transparent,
+                    ],
+                    stops: [0, 0.28, 0.62, 1],
+                  ),
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Positioned(top: 0, left: 0, right: 0, child: _topControls()),
+                    Center(child: _centerControls()),
+                    Positioned(left: 0, right: 0, bottom: 0, child: _bottomControls()),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        if (_gestureMode != null && _gestureFeedback.isNotEmpty && !_isLocked)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 13,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: playerGold.withValues(alpha: 0.45)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _gestureMode == 'brightness'
+                            ? Icons.brightness_6
+                            : _gestureMode == 'volume'
+                                ? Icons.volume_up
+                                : _gestureMode == 'zoom'
+                                    ? Icons.zoom_in
+                                    : (_gestureFeedback.startsWith('-')
+                                        ? Icons.fast_rewind
+                                        : Icons.fast_forward),
+                        color: playerGold,
+                        size: 25,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        _gestureMode == 'seek' &&
+                                _gesturePreviewPosition != null
+                            ? '${_formatDuration(_gesturePreviewPosition!)}  ($_gestureFeedback)'
+                            : _gestureMode == 'brightness'
+                                ? 'Brightness  $_gestureFeedback'
+                                : _gestureMode == 'volume'
+                                    ? 'Volume  $_gestureFeedback'
+                                    : 'Zoom  $_gestureFeedback',
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isDisposed) return;
+
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      if (!_isBackgrounded) {
+        _isBackgrounded = true;
+        _wasPlayingBeforeBackground = _isPlaying;
+        final nativePosition = _player.state.position;
+        _backgroundResumePosition = _pendingSeekPosition ??
+            (nativePosition > Duration.zero ? nativePosition : _position);
+        // Flush the latest native timestamp before Android can reclaim memory.
+        unawaited(_persistResumePositionNow());
+      }
+      _cancelHideTimer();
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      _isBackgrounded = false;
+      if (_wasPlayingBeforeBackground) {
+        _lastBackgroundResumeAt = DateTime.now();
+        unawaited(_recoverPlaybackAfterBackground());
+      }
+    }
+  }
+
+  Future<void> _persistResumePositionNow() async {
+    if (_isDisposed) return;
+    try {
+      final state = _player.state;
+      if (state.duration > _duration) _duration = state.duration;
+      final nativePosition = state.position;
+      final latestPosition = _pendingSeekPosition ??
+          (nativePosition > Duration.zero ? nativePosition : _position);
+      if (latestPosition > Duration.zero) _updatePosition(latestPosition);
+      await _saveResumePosition(latestPosition);
+      await _resumeSaveQueue;
+    } catch (error) {
+      debugPrint('FLIXORA background resume save failed: $error');
+    }
+  }
+
+  Future<void> _recoverPlaybackAfterBackground() async {
+    if (!mounted || _isDisposed || _recoveringFromBackground) return;
+    _recoveringFromBackground = true;
+
+    try {
+      await Future.delayed(const Duration(milliseconds: 450));
+      if (!mounted || _isDisposed) return;
+
+      final savedPosition = _backgroundResumePosition;
+      if (!_isPlaying) {
+        await _player.play();
+        await Future.delayed(const Duration(milliseconds: 650));
+      }
+
+      if (!mounted || _isDisposed) return;
+
+      // Reopen only the exact Media already held by the player, preserving
+      // its existing request headers; never resolve a new MovieBox stream.
+      if (!_isPlaying) {
+        final playlist = _player.state.playlist;
+        final medias = playlist.medias;
+        final index = playlist.index;
+        if (index >= 0 && index < medias.length) {
+          await _player.open(medias[index], play: false);
+          if (savedPosition > Duration.zero) {
+            await _player.seek(savedPosition);
+          }
+          await _player.play();
+        }
+      } else if (savedPosition > Duration.zero &&
+          _position + const Duration(seconds: 2) < savedPosition) {
+        await _player.seek(savedPosition);
+      }
+
+      if (!mounted || _isDisposed) return;
+      if (_isPlaying) {
+        setState(() => _errorMessage = null);
+        _startHideTimer();
+      }
+    } catch (error) {
+      debugPrint('Background playback recovery attempt failed: $error');
+    } finally {
+      _recoveringFromBackground = false;
+      _wasPlayingBeforeBackground = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Capture MPV's freshest timestamp before disposing the native player.
+    final finalNativePosition = _player.state.position;
+    if (_player.state.duration > _duration) _duration = _player.state.duration;
+    final finalPosition = _pendingSeekPosition ??
+        (finalNativePosition > Duration.zero ? finalNativePosition : _position);
+    unawaited(_saveResumePosition(finalPosition));
+    _isDisposed = true;
+    if (identical(_activeMiniPlayerState.value, this)) {
+      _activeMiniPlayerState.value = null;
+    }
+    _miniPlayerOverlayRevision.dispose();
+    unawaited(PictureInPictureService.setEnabled(false));
+    _gestureFeedbackTimer?.cancel();
+    _seekSyncTimer?.cancel();
+    _playerPointerCount = 0;
+    _playerConnectionTimer?.cancel();
+    _playbackErrorTimer?.cancel();
+    unawaited(_resetApplicationBrightness());
+    _cancelHideTimer();
+
+    _positionSubscription?.cancel();
+    _durationSubscription?.cancel();
+    _playingSubscription?.cancel();
+    _bufferingSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _tracksSubscription?.cancel();
+    _activeTrackSubscription?.cancel();
+    _audioDevicesSubscription?.cancel();
+    _completedSubscription?.cancel();
+    _positionNotifier.dispose();
+
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+
+    SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.edgeToEdge,
+    );
+
+    unawaited(_player.dispose());
+
+    super.dispose();
+  }
+
+  List<Movie> get _relatedMovies {
+    final candidates = widget.recommendedMovies
+        .where((item) =>
+            item.id != widget.movie.id &&
+            item.genres.any(widget.movie.genres.contains))
+        .toList();
+    candidates.sort((a, b) {
+      final aMatches = a.genres.where(widget.movie.genres.contains).length;
+      final bMatches = b.genres.where(widget.movie.genres.contains).length;
+      return bMatches.compareTo(aMatches);
+    });
+    return candidates.take(20).toList();
+  }
+
+  List<Movie> get _otherMovies => widget.recommendedMovies
+      .where((item) => item.id != widget.movie.id)
+      .toList();
+
+  List<Movie> get _recommendedMovies {
+    final relatedIds = _relatedMovies.map((movie) => movie.id).toSet();
+    return _otherMovies
+        .where((item) => !relatedIds.contains(item.id))
+        .take(20)
+        .toList();
+  }
+
+  List<Movie> _sortedMovies(Iterable<Movie> movies, int Function(Movie, Movie) compare) {
+    final result = movies.toList();
+    result.sort(compare);
+    return result;
+  }
+
+  Widget _movieRail(String title, List<Movie> movies) {
+    if (movies.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: playerWhite,
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 188,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: movies.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 11),
+              itemBuilder: (context, index) {
+                final item = movies[index];
+                return GestureDetector(
+                  onTap: widget.onMovieSelected == null
+                      ? null
+                      : () => widget.onMovieSelected!(item),
+                  child: SizedBox(
+                    width: 112,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(9),
+                          child: SizedBox(
+                            width: 112,
+                            height: 148,
+                            child: item.posterUrl.isNotEmpty
+                                ? FlixoraCachedImage(
+                                    isOnline: _playerIsOnline,
+                                    imageUrl: item.posterUrl,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Container(
+                                    color: playerPanel,
+                                    child: const Icon(
+                                      Icons.movie,
+                                      color: playerGold,
+                                      size: 35,
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: playerWhite,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  Widget _detailAction(IconData icon, String label, VoidCallback? onPressed) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: playerWhite,
+        side: const BorderSide(color: Color(0x3DFFFFFF)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      icon: Icon(icon, color: playerGold, size: 18),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+
+  String _audioTrackLabel(AudioTrack track, int index) {
+    final title = track.title?.trim() ?? '';
+    final language = track.language?.trim() ?? '';
+
+    const languageNames = <String, String>{
+      'en': 'English',
+      'eng': 'English',
+      'english': 'English',
+      'hi': 'Hindi',
+      'hin': 'Hindi',
+      'hindi': 'Hindi',
+      'bn': 'বাংলা',
+      'ben': 'বাংলা',
+      'bengali': 'বাংলা',
+      'bangla': 'বাংলা',
+      'ta': 'Tamil',
+      'tam': 'Tamil',
+      'tamil': 'Tamil',
+      'te': 'Telugu',
+      'tel': 'Telugu',
+      'telugu': 'Telugu',
+      'kn': 'Kannada',
+      'kan': 'Kannada',
+      'kannada': 'Kannada',
+      'ml': 'Malayalam',
+      'mal': 'Malayalam',
+      'malayalam': 'Malayalam',
+      'ja': 'Japanese',
+      'jpn': 'Japanese',
+      'japanese': 'Japanese',
+      'ko': 'Korean',
+      'kor': 'Korean',
+      'korean': 'Korean',
+      'zh': 'Chinese',
+      'zho': 'Chinese',
+      'chinese': 'Chinese',
+      'es': 'Spanish',
+      'spa': 'Spanish',
+      'spanish': 'Spanish',
+      'fr': 'French',
+      'fra': 'French',
+      'french': 'French',
+      'ar': 'Arabic',
+      'ara': 'Arabic',
+      'arabic': 'Arabic',
+      'ur': 'Urdu',
+      'urd': 'Urdu',
+      'urdu': 'Urdu',
+    };
+
+    String? displayLanguage(String value) {
+      final normalized = value.trim().toLowerCase().replaceAll('_', '-');
+      if (normalized.isEmpty) return null;
+      final firstPart = normalized.split(RegExp(r'[-\s(/]')).first;
+      return languageNames[firstPart] ?? languageNames[normalized];
+    }
+
+    // Prefer actual language metadata. This handles BCP-47 values such as
+    // hi-IN, bn-BD and en-US instead of showing generic "Audio 1" titles.
+    final metadataLanguage = displayLanguage(language);
+    if (metadataLanguage != null) return metadataLanguage;
+
+    // Some streams put the language in the track title instead.
+    final titleLanguage = displayLanguage(title);
+    if (titleLanguage != null) return titleLanguage;
+
+    final genericTitle = RegExp(
+      r'^(audio|track)(\s*#?\s*\d*)?$',
+      caseSensitive: false,
+    );
+    if (title.isNotEmpty && !genericTitle.hasMatch(title)) return title;
+
+    final normalizedLanguage = language.toLowerCase();
+    if (language.isNotEmpty &&
+        !{'und', 'unknown', 'unk', 'zxx', 'null'}.contains(normalizedLanguage)) {
+      return language;
+    }
+
+    return index == 0 ? 'Original / Auto' : 'Audio ${index + 1}';
+  }
+
+  Widget _playerResources() {
+    final selectedIndex = _tracks.audio.isEmpty
+        ? 0
+        : _selectedAudioTrackIndex.clamp(0, _tracks.audio.length - 1).toInt();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: playerPanel,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0x3DFFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.language_rounded, color: playerGoldLight, size: 18),
+              SizedBox(width: 7),
+              Text(
+                'Resources',
+                style: TextStyle(
+                  color: playerWhite,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Select audio language',
+            style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+          ),
+          const SizedBox(height: 10),
+          if (_tracks.audio.isNotEmpty)
+            Wrap(
+              spacing: 7,
+              runSpacing: 7,
+              children: _tracks.audio.asMap().entries.map((entry) {
+                final selected = entry.key == selectedIndex;
+                return ChoiceChip(
+                  label: Text(_audioTrackLabel(entry.value, entry.key)),
+                  selected: selected,
+                  showCheckmark: false,
+                  onSelected: (_) => _selectAudioTrack(
+                    entry.value,
+                    closeSheet: false,
+                  ),
+                  selectedColor: playerGold.withValues(alpha: 0.22),
+                  backgroundColor: playerBg,
+                  side: BorderSide(
+                    color: selected ? playerGold : const Color(0x3DFFFFFF),
+                  ),
+                  labelStyle: TextStyle(
+                    color: selected ? playerGoldLight : playerWhite,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                );
+              }).toList(),
+            )
+          else
+            const Text(
+              'No alternate audio languages are available.',
+              style: TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showMovieInfo() async {
+    _cancelHideTimer();
+    final mediaType = widget.movie.mediaType == 'tv' ? 'tv' : 'movie';
+    final castFuture = TmdbService.getCast(
+      widget.movie.tmdbId,
+      mediaType: mediaType,
+    );
+    final detailsFuture = _movieDetailsFuture;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: playerPanel,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.76,
+        minChildSize: 0.42,
+        maxChildSize: 0.94,
+        builder: (context, scrollController) => Stack(
+          children: [
+            SingleChildScrollView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(17, 46, 17, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(11),
+                        child: SizedBox(
+                          width: 100,
+                          height: 148,
+                          child: widget.movie.posterUrl.isEmpty
+                              ? Container(
+                                  color: playerBg,
+                                  child: const Icon(
+                                    Icons.movie,
+                                    color: playerGoldLight,
+                                    size: 36,
+                                  ),
+                                )
+                              : FlixoraCachedImage(
+                                  imageUrl: widget.movie.posterUrl,
+                                  isOnline: _playerIsOnline,
+                                  fit: BoxFit.cover,
+                                ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              widget.movie.title,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: playerWhite,
+                                fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Text(
+                              [
+                                widget.movie.mediaType == 'tv' ? 'TV SERIES' : 'MOVIE',
+                                if (widget.movie.year.isNotEmpty) widget.movie.year,
+                              ].join('  •  '),
+                              style: const TextStyle(
+                                color: playerGoldLight,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            FutureBuilder<Map<String, dynamic>>(
+                              future: detailsFuture,
+                              builder: (context, snapshot) {
+                                final data = snapshot.data;
+                                if (data == null) return const SizedBox.shrink();
+                                final countries = <String>[];
+                                final rawCountries = data['production_countries'];
+                                if (rawCountries is List) {
+                                  for (final item in rawCountries.whereType<Map>()) {
+                                    final name = (item['name'] ?? item['iso_3166_1'] ?? '').toString().trim();
+                                    if (name.isNotEmpty && !countries.contains(name)) {
+                                      countries.add(name);
+                                    }
+                                  }
+                                }
+                                if (countries.isEmpty && data['origin_country'] is List) {
+                                  countries.addAll(
+                                    (data['origin_country'] as List)
+                                        .map((item) => item.toString())
+                                        .where((item) => item.isNotEmpty),
+                                  );
+                                }
+                                final episodeRuntimes = data['episode_run_time'];
+                                final rawRuntime = data['runtime'] ??
+                                    (episodeRuntimes is List && episodeRuntimes.isNotEmpty
+                                        ? episodeRuntimes.first
+                                        : 0);
+                                final runtime = _toInt(rawRuntime);
+                                final info = <String>[
+                                  if (countries.isNotEmpty) 'Country: ${countries.join(', ')}',
+                                  if (runtime > 0) '${runtime} min',
+                                ];
+                                if (info.isEmpty) return const SizedBox.shrink();
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    info.join('  •  '),
+                                    style: const TextStyle(
+                                      color: Color(0xB3FFFFFF),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                            if (widget.movie.rating > 0) ...[
+                              const SizedBox(height: 9),
+                              Row(
+                                children: [
+                                  const Icon(Icons.star_rounded, color: playerGoldLight, size: 19),
+                                  const SizedBox(width: 5),
+                                  Text(
+                                    '${widget.movie.rating.toStringAsFixed(1)}/10',
+                                    style: const TextStyle(
+                                      color: playerWhite,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  const Text(
+                                    'TMDB Rating',
+                                    style: TextStyle(
+                                      color: Color(0xB3FFFFFF),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (widget.movie.originCountry.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                'Country: ${widget.movie.originCountry}',
+                                style: const TextStyle(
+                                  color: Color(0xB3FFFFFF),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                            if (widget.movie.originalLanguage.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                'Original language: ${widget.movie.originalLanguage.toUpperCase()}',
+                                style: const TextStyle(
+                                  color: Color(0xB3FFFFFF),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                            if (widget.movie.runtime != null && widget.movie.runtime! > 0) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                '${widget.movie.runtime!.round()} min',
+                                style: const TextStyle(
+                                  color: Color(0xB3FFFFFF),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (widget.movie.genres.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 7,
+                      runSpacing: 7,
+                      children: widget.movie.genres.map((genre) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: playerBg,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: playerGold.withValues(alpha: 0.35)),
+                        ),
+                        child: Text(
+                          genre,
+                          style: const TextStyle(
+                            color: playerGoldLight,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      )).toList(),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Movie Info',
+                    style: TextStyle(
+                      color: playerWhite,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    widget.movie.overview.isEmpty
+                        ? 'No description available.'
+                        : widget.movie.overview,
+                    style: const TextStyle(
+                      color: Color(0xB3FFFFFF),
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                  if (widget.movie.audioLanguages.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Available Audio: ${widget.movie.audioLanguages.join(', ')}',
+                      style: const TextStyle(
+                        color: playerWhite,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Cast',
+                    style: TextStyle(
+                      color: playerWhite,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 11),
+                  FutureBuilder<List<Map<String, dynamic>>>(
+                    future: castFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SizedBox(
+                          height: 112,
+                          child: Center(
+                            child: CircularProgressIndicator(color: playerGoldLight),
+                          ),
+                        );
+                      }
+                      final cast = snapshot.data ?? const <Map<String, dynamic>>[];
+                      if (cast.isEmpty) {
+                        return const Text(
+                          'Cast photos are not available for this title.',
+                          style: TextStyle(
+                            color: Color(0xB3FFFFFF),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        );
+                      }
+                      return SizedBox(
+                        height: 142,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: cast.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 11),
+                          itemBuilder: (context, index) {
+                            final person = cast[index];
+                            final profile = (person['profile_path'] ?? '').toString();
+                            final name = (person['name'] ?? 'Cast member').toString();
+                            final character = (person['character'] ?? '').toString();
+                            return SizedBox(
+                              width: 78,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: SizedBox(
+                                      width: 72,
+                                      height: 88,
+                                      child: profile.isEmpty
+                                          ? Container(
+                                              color: playerBg,
+                                              child: const Icon(
+                                                Icons.person,
+                                                color: playerGoldLight,
+                                                size: 34,
+                                              ),
+                                            )
+                                          : FlixoraCachedImage(
+                                              imageUrl: '${imageBase}w185$profile',
+                                              isOnline: _playerIsOnline,
+                                              fit: BoxFit.cover,
+                                            ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: playerWhite,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (character.isNotEmpty)
+                                    Text(
+                                      character,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: Color(0xB3FFFFFF),
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 5,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: playerBg,
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  tooltip: 'Close movie information',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => Navigator.of(sheetContext).pop(),
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: playerWhite,
+                    size: 19,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    _startHideTimer();
+  }
+
+  void _handlePlayerPointerDown(PointerDownEvent event) {
+    if (_isDisposed) return;
+    _playerPointerCount++;
+    if (mounted) setState(() {});
+  }
+
+  void _handlePlayerPointerEnd(PointerEvent event) {
+    if (_playerPointerCount > 0) _playerPointerCount--;
+    if (mounted) setState(() {});
+  }
+
+  Widget _playerPageContent() {
+    final related = _relatedMovies;
+    final recommended = _recommendedMovies;
+    final allSuggestions = _otherMovies;
+    final topRated = _sortedMovies(
+      allSuggestions.where((movie) => movie.rating > 0),
+      (a, b) => b.rating.compareTo(a.rating),
+    ).take(20).toList();
+    final latest = _sortedMovies(
+      allSuggestions.where((movie) => movie.year != 'N/A'),
+      (a, b) => b.year.compareTo(a.year),
+    ).take(20).toList();
+    final actionMovies = allSuggestions
+        .where((movie) => movie.genres.any((genre) =>
+            genre.toLowerCase().contains('action') ||
+            genre.toLowerCase().contains('adventure')))
+        .take(20).toList();
+    final screenSize = MediaQuery.sizeOf(context);
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final miniWidth = (screenSize.width * 0.56)
+        .clamp(180.0, 280.0)
+        .toDouble();
+    final miniHeight = miniWidth * 9 / 16 + 30;
+    final maxMiniRight = screenSize.width - miniWidth - 8;
+    final maxMiniBottom = screenSize.height - viewPadding.top -
+        viewPadding.bottom - miniHeight - 8;
+    final miniRight = (_miniPlayerOffset?.dx ?? 14.0)
+        .clamp(8.0, maxMiniRight < 8 ? 8.0 : maxMiniRight)
+        .toDouble();
+    final miniBottom = (_miniPlayerOffset?.dy ?? 18.0)
+        .clamp(8.0, maxMiniBottom < 8 ? 8.0 : maxMiniBottom)
+        .toDouble();
+
+    return Stack(
+      children: [
+        CustomScrollView(
+          // A touch that starts inside the Player belongs to the Player's
+          // swipe/seek/pinch controls, not the surrounding portrait page.
+          physics: _playerPointerCount > 0
+              ? const NeverScrollableScrollPhysics()
+              : null,
+          slivers: [
+            SliverToBoxAdapter(
+              child: _isMiniPlayer
+                  ? const SizedBox(height: 8)
+                  : Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: _handlePlayerPointerDown,
+                      onPointerUp: _handlePlayerPointerEnd,
+                      onPointerCancel: _handlePlayerPointerEnd,
+                      child: AspectRatio(
+                        aspectRatio: 16 / 9,
+                        child: _playerBody(),
+                      ),
+                    ),
+            ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 13, 12, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: playerWhite,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Movie information',
+                      onPressed: _showMovieInfo,
+                      icon: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.info_outline_rounded, color: playerGoldLight, size: 17),
+                          Icon(Icons.keyboard_arrow_down_rounded, color: playerGoldLight, size: 21),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                _playerMetadata(),
+                const SizedBox(height: 16),
+                const SizedBox(height: 13),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _detailAction(Icons.playlist_add, 'Add to list', widget.onSave),
+                    _detailAction(
+                      Icons.share_outlined,
+                      'Share',
+                      () => Share.share(
+                        '${widget.movie.title} (${widget.movie.year}) on FLIXORA',
+                      ),
+                    ),
+                    _detailAction(
+                      Icons.download_outlined,
+                      'Download',
+                      widget.movie.isMovieBox && widget.movie.movieBoxIsSeries
+                          ? () => widget.onDownloadEpisode?.call(
+                                _selectedSeasonNumber,
+                                _selectedEpisodeNumber,
+                              )
+                          : widget.onDownload,
+                    ),
+                    _detailAction(
+                      Icons.video_library_outlined,
+                      'View downloads',
+                      widget.onViewDownloads,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                _playerResources(),
+                _movieBoxLanguageSelector(),
+                _tvEpisodeSelector(),
+                const SizedBox(height: 16),
+                const Text(
+                  'For You',
+                  style: TextStyle(
+                    color: playerWhite,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: _movieRail('Related Movies', related)),
+        SliverToBoxAdapter(child: _movieRail('Recommended for You', recommended)),
+        SliverToBoxAdapter(child: _movieRail('Top Rated Movies', topRated)),
+        SliverToBoxAdapter(child: _movieRail('Recently Added', latest)),
+        SliverToBoxAdapter(child: _movieRail('Action & Adventure', actionMovies)),
+        const SliverToBoxAdapter(child: SizedBox(height: 48)),
+      ],
+    ),
+        if (_isMiniPlayer)
+          Positioned(
+            right: miniRight,
+            bottom: miniBottom,
+            child: Material(
+              color: Colors.black,
+              elevation: 18,
+              borderRadius: BorderRadius.circular(13),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: miniWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      height: 30,
+                      color: const Color(0xFF171717),
+                      padding: const EdgeInsets.only(left: 7, right: 3),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleMiniPlayer,
+                              onPanUpdate: (details) => _moveMiniPlayer(
+                                details,
+                                maxRight: maxMiniRight,
+                                maxBottom: maxMiniBottom,
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.drag_indicator_rounded,
+                                    color: playerGold,
+                                    size: 19,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  const Text(
+                                    'MINI PLAYER',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: _isPlaying ? 'Pause' : 'Play',
+                              onPressed: _togglePlay,
+                              icon: Icon(
+                                _isPlaying
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 18,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 30,
+                                height: 30,
+                              ),
+                              padding: EdgeInsets.zero,
+                              tooltip: 'Expand player',
+                              onPressed: _toggleMiniPlayer,
+                              icon: const Icon(
+                                Icons.open_in_full_rounded,
+                                color: Colors.white,
+                                size: 16,
+                              ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: _playerBody(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: !_isFullscreen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _isFullscreen) {
+          _toggleFullscreen();
+        }
+      },
+      child: _isMiniPlayer
+          ? const IgnorePointer(child: SizedBox.expand())
+          : Scaffold(
+              backgroundColor: playerBg,
+              body: _isFullscreen
+                  ? SafeArea(
+                      top: false,
+                      bottom: false,
+                      left: false,
+                      right: false,
+                      child: _playerBody(),
+                    )
+                  : SafeArea(
+                      top: true,
+                      bottom: true,
+                      child: _playerPageContent(),
+                    ),
+            ),
+    );
+  }
+}).hasMatch(lines[i].trim())) {
           nextSectionIndex = i;
           break;
         }
