@@ -1657,7 +1657,7 @@ class TmdbService {
 
   static String _tmdbLocaleForLanguage(String language) {
     const locales = <String, String>{
-      'bn': 'bn-BD', 'hi': 'hi-IN', 'ur': 'ur-PK', 'ja': 'ja-JP',
+      'en': 'en-US', 'bn': 'bn-BD', 'hi': 'hi-IN', 'ur': 'ur-PK', 'ja': 'ja-JP',
       'ko': 'ko-KR', 'zh': 'zh-CN', 'ar': 'ar-SA', 'fr': 'fr-FR',
       'de': 'de-DE', 'es': 'es-ES', 'pt': 'pt-BR', 'ru': 'ru-RU',
       'tr': 'tr-TR', 'it': 'it-IT',
