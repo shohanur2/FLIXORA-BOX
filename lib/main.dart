@@ -5682,7 +5682,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       videoUrl: videoUrl,
       mediaType: 'movie',
     );
-    unawaited(_openMovie(movie));
+    _openMovie(movie);
   }
 
   Future<bool> _refreshFromOfflineScreen() async {
