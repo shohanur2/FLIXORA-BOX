@@ -38,55 +38,230 @@ import 'services/catalog_visibility_service.dart';
 
 SupabaseClient? supabaseClient;
 
-List<Map<String,dynamic>> _extractDownloadSubtitleOptions(Map<String,dynamic> response) {
-  const keys=<String>{'subtitles','subtitle','subTitleList','subtitleList','subtitle_list','subtitle_list_data','captions','captionList','caption_list','externalSubtitles','external_subtitles'};
-  const urlKeys=<String>['url','downloadUrl','download_url','subtitleUrl','subtitle_url','fileUrl','file_url','captionUrl','caption_url','srtUrl','vttUrl','src','link','path'];
-  List<Map<String,dynamic>>? find(dynamic value,int depth){
-    if(depth>5||value is! Map)return null;final map=Map<String,dynamic>.from(value);
-    for(final entry in map.entries){if(!keys.contains(entry.key.toString()))continue;if(entry.value is List){final items=(entry.value as List).whereType<Map>().map((e)=>Map<String,dynamic>.from(e)).toList();if(items.isNotEmpty)return items;}final nested=find(entry.value,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}
-    for(final child in map.values){if(child is Map){final nested=find(child,depth+1);if(nested!=null&&nested.isNotEmpty)return nested;}}return null;
+List<Map<String, dynamic>> _extractDownloadSubtitleOptions(
+  Map<String, dynamic> response,
+) {
+  const keys = <String>{
+    'subtitles', 'subtitle', 'subTitleList', 'subtitleList',
+    'subtitle_list', 'subtitle_list_data', 'captions', 'captionList',
+    'caption_list', 'externalSubtitles', 'external_subtitles',
+  };
+  const urlKeys = <String>[
+    'url', 'downloadUrl', 'download_url', 'subtitleUrl', 'subtitle_url',
+    'fileUrl', 'file_url', 'captionUrl', 'caption_url', 'srtUrl',
+    'vttUrl', 'src', 'link', 'path',
+  ];
+
+  List<Map<String, dynamic>>? find(dynamic value, int depth) {
+    if (depth > 5 || value is! Map) return null;
+    final map = Map<String, dynamic>.from(value);
+    for (final entry in map.entries) {
+      if (!keys.contains(entry.key.toString())) continue;
+      if (entry.value is List) {
+        final items = (entry.value as List)
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        if (items.isNotEmpty) return items;
+      }
+      final nested = find(entry.value, depth + 1);
+      if (nested != null && nested.isNotEmpty) return nested;
+    }
+    for (final child in map.values) {
+      if (child is Map) {
+        final nested = find(child, depth + 1);
+        if (nested != null && nested.isNotEmpty) return nested;
+      }
+    }
+    return null;
   }
-  final output=<Map<String,dynamic>>[];
-  for(final item in find(response,0)??const <Map<String,dynamic>>[]){var url='';for(final key in urlKeys){final raw=item[key];final candidate=raw is Map?(raw['url']??raw['uri']??raw['link']??'').toString().trim():(raw??'').toString().trim();final uri=Uri.tryParse(candidate);if(uri!=null&&(uri.scheme=='http'||uri.scheme=='https')&&uri.host.isNotEmpty&&uri.userInfo.isEmpty){url=candidate;break;}}if(url.isEmpty)continue;final uri=Uri.parse(url);final name=(item['fileName']??item['filename']??item['file_name']??item['title']??(uri.pathSegments.isNotEmpty?uri.pathSegments.last:'')).toString();output.add({'url':url,'language':(item['language']??item['lang']??item['lan']??item['languageCode']??item['langCode']??'und').toString().toLowerCase(),'fileName':name,'format':(item['format']??(name.contains('.')?name.split('.').last:'srt')).toString().toLowerCase()});}
+
+  final output = <Map<String, dynamic>>[];
+  for (final item in find(response, 0) ?? const <Map<String, dynamic>>[]) {
+    var url = '';
+    for (final key in urlKeys) {
+      final raw = item[key];
+      final candidate = raw is Map
+          ? (raw['url'] ?? raw['uri'] ?? raw['link'] ?? '').toString().trim()
+          : (raw ?? '').toString().trim();
+      final uri = Uri.tryParse(candidate);
+      if (uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty &&
+          uri.userInfo.isEmpty) {
+        url = candidate;
+        break;
+      }
+    }
+    if (url.isEmpty) continue;
+
+    final uri = Uri.parse(url);
+    final name = (item['fileName'] ??
+            item['filename'] ??
+            item['file_name'] ??
+            item['title'] ??
+            (uri.pathSegments.isNotEmpty ? uri.pathSegments.last : ''))
+        .toString();
+    final rawHeaders = item['headers'] ??
+        item['requestHeaders'] ??
+        item['request_headers'];
+    final headers = rawHeaders is Map
+        ? Map<String, String>.from(rawHeaders.map(
+            (key, value) => MapEntry(key.toString(), value.toString()),
+          ))
+        : <String, String>{};
+    output.add({
+      'url': url,
+      'language': (item['language'] ??
+              item['lang'] ??
+              item['lan'] ??
+              item['languageCode'] ??
+              item['langCode'] ??
+              'und')
+          .toString()
+          .toLowerCase(),
+      'fileName': name,
+      'format': (item['format'] ??
+              (name.contains('.') ? name.split('.').last : 'srt'))
+          .toString()
+          .toLowerCase(),
+      'headers': headers,
+    });
+  }
   return output;
 }
-Future<List<String>> _saveDownloadedSubtitleFiles(DownloadTask task,String videoPath) async {
-  final saved=<String>[];final seen=<String>{};final parent=File(videoPath).parent.path;final name=File(videoPath).uri.pathSegments.last;final base=name.contains('.')?name.substring(0,name.lastIndexOf('.')):name;
-  final options=task.subtitleOptions.toList()..sort((a,b){int rank(Map<String,dynamic> x){final l=(x['language']??'').toString();return l=='bn'?0:(l=='bn+en'?1:(l=='en'?2:3));}return rank(a).compareTo(rank(b));});
-  for(final option in options){final url=(option['url']??'').toString();final uri=Uri.tryParse(url);if(uri==null||!{'http','https'}.contains(uri.scheme)||uri.host.isEmpty||!seen.add(url))continue;try{final response=await http.get(uri,headers:const {'Accept':'text/plain, text/vtt, application/octet-stream, */*','User-Agent':'FLIXORA Subtitle Client/1.0'}).timeout(const Duration(seconds:25));final bytes=response.bodyBytes;final type=(response.headers['content-type']??'').toLowerCase();if(response.statusCode!=200||bytes.length<16||bytes.length>10*1024*1024||(bytes.length>=2&&bytes[0]==0x50&&bytes[1]==0x4b)||type.contains('text/html')||type.contains('application/json'))continue;var ext=(option['format']??'').toString().toLowerCase().replaceFirst('.','');if(!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(ext)){ext=RegExp(r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',caseSensitive:false).firstMatch(uri.path)?.group(1)?.toLowerCase()??'srt';}final lang=(option['language']??'und').toString().replaceAll(RegExp(r'[^a-z0-9+_-]'),'_');final file=File('$parent/$base.subtitle_${saved.length+1}_$lang.$ext');await file.writeAsBytes(bytes,flush:true);saved.add(file.path);}catch(error){debugPrint('Offline subtitle download skipped: $error');}}
-  // Also preserve subtitle releases already downloaded by the online Subtitle
-  // system. This keeps its provider and cache logic untouched while making
-  // those same files available beside the offline video.
+
+Future<List<String>> _saveDownloadedSubtitleFiles(
+  DownloadTask task,
+  String videoPath,
+) async {
+  final saved = <String>[];
+  final seenUrls = <String>{};
+  final seenFiles = <String>{};
+  final parent = File(videoPath).parent.path;
+  final videoName = File(videoPath).uri.pathSegments.last;
+  final base = videoName.contains('.')
+      ? videoName.substring(0, videoName.lastIndexOf('.'))
+      : videoName;
+
+  final options = task.subtitleOptions.toList()
+    ..sort((a, b) {
+      int rank(Map<String, dynamic> item) {
+        final language = (item['language'] ?? '').toString().toLowerCase();
+        if (language == 'bn') return 0;
+        if (language == 'bn+en') return 1;
+        if (language == 'en') return 2;
+        return 3;
+      }
+      return rank(a).compareTo(rank(b));
+    });
+
+  for (final option in options) {
+    final url = (option['url'] ?? '').toString().trim();
+    final uri = Uri.tryParse(url);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty ||
+        !seenUrls.add(url)) {
+      continue;
+    }
+    try {
+      final rawHeaders = option['headers'];
+      final headers = rawHeaders is Map
+          ? Map<String, String>.from(rawHeaders.map(
+              (key, value) => MapEntry(key.toString(), value.toString()),
+            ))
+          : <String, String>{};
+      headers.putIfAbsent('Accept', () =>
+          'text/plain, text/vtt, application/octet-stream, */*');
+      headers.putIfAbsent('User-Agent', () => 'FLIXORA Subtitle Client/1.0');
+      final response = await http.get(uri, headers: headers)
+          .timeout(const Duration(seconds: 25));
+      final bytes = response.bodyBytes;
+      final type = (response.headers['content-type'] ?? '').toLowerCase();
+      if (response.statusCode != 200 ||
+          bytes.length < 16 ||
+          bytes.length > 10 * 1024 * 1024 ||
+          (bytes.length >= 2 && bytes[0] == 0x50 && bytes[1] == 0x4b) ||
+          type.contains('text/html') ||
+          type.contains('application/json')) {
+        continue;
+      }
+
+      var extension = (option['format'] ?? '').toString()
+          .toLowerCase().replaceFirst('.', '');
+      if (!{'srt', 'ass', 'ssa', 'vtt', 'smi', 'ttml', 'sup'}
+          .contains(extension)) {
+        extension = RegExp(
+          r'\.(srt|ass|ssa|vtt|smi|ttml|sup)$',
+          caseSensitive: false,
+        ).firstMatch(uri.path)?.group(1)?.toLowerCase() ?? 'srt';
+      }
+      final language = (option['language'] ?? 'und')
+          .toString()
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
+      final output = File(
+        '$parent/$base.subtitle_${saved.length + 1}_$language.$extension',
+      );
+      await output.writeAsBytes(bytes, flush: true);
+      saved.add(output.path);
+    } catch (error) {
+      debugPrint('Offline subtitle download skipped: $error');
+    }
+  }
+
+  // Preserve both downloaded provider subtitles and imported subtitle files.
+  // The existing Subtitle cache and import workflow remain unchanged.
   try {
     final support = await getApplicationSupportDirectory();
-    final cacheDir = Directory('${support.path}/flixora_subtitles');
+    final subtitleRoot = Directory('${support.path}/flixora_subtitles');
     final mediaId = task.tmdbId > 0 ? task.tmdbId : task.movieId;
     final isSeries = task.mediaType == 'tv' || task.movieBoxIsSeries;
-    final episodeKey = isSeries && task.seasonNumber != null && task.episodeNumber != null
+    final episodeKey = isSeries &&
+            task.seasonNumber != null &&
+            task.episodeNumber != null
         ? '_s${task.seasonNumber}_e${task.episodeNumber}'
         : '';
     final cacheMarker = '_${task.mediaType}_${mediaId}${episodeKey}_';
-    if (await cacheDir.exists()) {
-      await for (final entity in cacheDir.list()) {
-        if (entity is! File) continue;
+    final sourceDirectories = <Directory>[
+      subtitleRoot,
+      Directory('${subtitleRoot.path}/imported'),
+    ];
+
+    for (final directory in sourceDirectories) {
+      if (!await directory.exists()) continue;
+      await for (final entity in directory.list()) {
+        if (entity is! File || !seenFiles.add(entity.path)) continue;
         final cacheName = entity.uri.pathSegments.last;
         final markerIndex = cacheName.indexOf(cacheMarker);
         if (markerIndex <= 0) continue;
         final extension = cacheName.contains('.')
             ? cacheName.split('.').last.toLowerCase()
             : '';
-        if (!{'srt','ass','ssa','vtt','smi','ttml','sup'}.contains(extension)) continue;
+        if (!{'srt', 'ass', 'ssa', 'vtt', 'smi', 'ttml', 'sup'}
+            .contains(extension)) {
+          continue;
+        }
         if (await entity.length() < 16) continue;
-        final language = cacheName.substring(0, markerIndex)
-            .replaceAll(RegExp(r'[^a-z0-9+_-]'), '_');
-        final target = File('$parent/$base.cached_subtitle_${saved.length+1}_$language.$extension');
+
+        final prefix = cacheName.substring(0, markerIndex);
+        final languageMatch = RegExp(
+          r'(?:^|_)([a-z]{2,3}(?:\+[a-z]{2,3})?)$',
+          caseSensitive: false,
+        ).firstMatch(prefix);
+        final language = languageMatch?.group(1)?.toLowerCase() ?? 'und';
+        final target = File(
+          '$parent/$base.cached_subtitle_${saved.length + 1}_$language.$extension',
+        );
         await entity.copy(target.path);
         saved.add(target.path);
       }
     }
   } catch (error) {
-    debugPrint('Could not copy cached online subtitles for offline use: $error');
+    debugPrint('Could not copy cached/imported subtitles for offline use: $error');
   }
+
   return saved;
 }
 
@@ -15343,33 +15518,65 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       }
       return;
     }
+
+    final localTracks = <({SubtitleTrack track, String language})>[];
+    final uniquePaths = <String>{};
     for (final path in paths) {
       if (_isDisposed) return;
       try {
+        if (!uniquePaths.add(path)) continue;
         final file = File(path);
         if (!await file.exists() || await file.length() < 8) continue;
         final name = file.uri.pathSegments.last;
-        final match = RegExp(r'subtitle_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?)\.', caseSensitive: false).firstMatch(name);
+        final match = RegExp(
+          r'(?:subtitle|cached_subtitle)_\d+_([a-z]{2,3}(?:\+[a-z]{2,3})?|und)\.',
+          caseSensitive: false,
+        ).firstMatch(name);
         final language = match?.group(1)?.toLowerCase() ?? 'und';
         final track = SubtitleTrack.uri(
           Uri.file(path).toString(),
           title: _subtitleLanguageName(language),
           language: language,
         );
-        await _activateSubtitleTrack(track);
-        _subtitleManuallySelected = true;
-        if (mounted && !_isDisposed) {
-          setState(() {
-            _automaticEnglishTrack = track;
-            _selectedSubtitleLanguageCode = language;
-            _subtitleVisibilityEnabled = true;
-            _automaticSubtitleMessage = 'Offline subtitle active';
-          });
-        }
-        return;
+
+        // Register every downloaded track in the existing subtitle selector.
+        // No video, audio, seek or buffering behavior is changed here.
+        await _player.setSubtitleTrack(track);
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        localTracks.add((track: track, language: language));
       } catch (error) {
-        debugPrint('Offline subtitle activation skipped: $error');
+        debugPrint('Offline subtitle track skipped: $error');
       }
+    }
+
+    if (localTracks.isEmpty || _isDisposed) {
+      if (mounted && !_isDisposed) {
+        setState(() => _automaticSubtitleMessage = null);
+      }
+      return;
+    }
+
+    int rank(String language) {
+      if (language == 'bn') return 0;
+      if (language == 'bn+en') return 1;
+      if (language == 'en') return 2;
+      return 3;
+    }
+    localTracks.sort((a, b) => rank(a.language).compareTo(rank(b.language)));
+    final preferred = localTracks.first;
+    try {
+      await _activateSubtitleTrack(preferred.track);
+      _subtitleManuallySelected = true;
+      if (mounted && !_isDisposed) {
+        setState(() {
+          _automaticEnglishTrack = preferred.track;
+          _selectedSubtitleLanguageCode = preferred.language;
+          _subtitleVisibilityEnabled = true;
+          _automaticSubtitleMessage = 'Offline subtitle active';
+        });
+      }
+    } catch (error) {
+      debugPrint('Could not select the preferred offline subtitle: $error');
     }
   }
 
@@ -15812,14 +16019,20 @@ class _MoviePlayerScreenState extends State<MoviePlayerScreen> with WidgetsBindi
       final baseName = safeName.contains('.')
           ? safeName.substring(0, safeName.lastIndexOf('.'))
           : safeName;
-      final storedFile = File(
-        '${importDir.path}/${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
-      );
-      await storedFile.writeAsBytes(normalizedBytes, flush: true);
-
       final match = RegExp(r'(?:^|[._ -])(en|bn|hi|ur|ar|es|fr|de|pt|ru|ja|ko|zh|tr|it|nl|pl|th|id|ms|fa)(?:[._ -]|$)',
           caseSensitive: false).firstMatch(picked.name);
-      final language = match?.group(1)?.toLowerCase() ?? 'external';
+      final language = match?.group(1)?.toLowerCase() ?? 'und';
+      final isSeries = widget.movie.mediaType == 'tv' || widget.movie.movieBoxIsSeries;
+      final episodePart = isSeries &&
+              _selectedSeasonNumber > 0 &&
+              _selectedEpisodeNumber > 0
+          ? '_s${_selectedSeasonNumber}_e${_selectedEpisodeNumber}'
+          : '';
+      final mediaMarker = '${widget.movie.mediaType}_${_automaticSubtitleMediaId()}${episodePart}';
+      final storedFile = File(
+        '${importDir.path}/imported_${language}_${mediaMarker}_${DateTime.now().microsecondsSinceEpoch}_${baseName}.$detectedExtension',
+      );
+      await storedFile.writeAsBytes(normalizedBytes, flush: true);
       final track = SubtitleTrack.uri(Uri.file(storedFile.path).toString(),
           title: picked.name, language: language);
       await _activateSubtitleTrack(track);
